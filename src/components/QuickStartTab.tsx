@@ -1,4 +1,6 @@
-import React from 'react'
+import React, { useState, useEffect } from 'react'
+import { getReadme } from '@/services/github'
+import { generateQuickStart } from '@/services/analysis'
 
 interface QuickStartTabProps {
   repo: { owner: string; name: string }
@@ -6,39 +8,128 @@ interface QuickStartTabProps {
 }
 
 function QuickStartTab({ repo, language }: QuickStartTabProps) {
-  const content = {
+  const [data, setData] = useState<any>(null)
+  const [loading, setLoading] = useState(true)
+  const [expandedIssue, setExpandedIssue] = useState<number | null>(null)
+
+  useEffect(() => {
+    const loadData = async () => {
+      try {
+        const readme = await getReadme(repo.owner, repo.name)
+        const quickStart = generateQuickStart(readme, language)
+        setData(quickStart)
+      } catch (err) {
+        console.error('Failed to load quick start data:', err)
+      } finally {
+        setLoading(false)
+      }
+    }
+    loadData()
+  }, [repo, language])
+
+  if (loading) {
+    return <div className="text-center text-gray-500 py-4">{language === 'zh' ? '加载中...' : 'Loading...'}</div>
+  }
+
+  if (!data) {
+    return <div className="text-center text-gray-500 py-4">{language === 'zh' ? '无法加载数据' : 'Failed to load data'}</div>
+  }
+
+  const labels = {
     zh: {
-      title: '快速上手指南',
       prerequisites: '前置知识',
       installation: '安装步骤',
       example: '第一个示例',
       commonIssues: '常见坑位',
-      nextSteps: '下一步',
-      coming: '功能开发中，敬请期待...',
+      step: '步骤',
     },
     en: {
-      title: 'Quick Start Guide',
       prerequisites: 'Prerequisites',
-      installation: 'Installation',
+      installation: 'Installation Steps',
       example: 'First Example',
       commonIssues: 'Common Issues',
-      nextSteps: 'Next Steps',
-      coming: 'Feature under development, stay tuned...',
+      step: 'Step',
     },
   }
 
-  const texts = content[language]
+  const texts = labels[language]
 
   return (
     <div className="space-y-4">
-      <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 text-center text-sm text-gray-600">
-        {texts.coming}
+      {/* Prerequisites */}
+      <div>
+        <p className="text-xs font-semibold text-gray-600 mb-2">✓ {texts.prerequisites}</p>
+        <div className="space-y-1">
+          {data.prerequisites.map((prereq: string, i: number) => (
+            <p key={i} className="text-xs text-gray-700 bg-gray-50 rounded px-2 py-1">
+              • {prereq}
+            </p>
+          ))}
+        </div>
       </div>
-      <p className="text-xs text-gray-500 text-center">
-        {language === 'zh' 
-          ? '本功能基于项目文档实时分析，为您生成最短从 0 到 1 的路径。'
-          : 'This feature analyzes project documentation in real-time to generate the shortest path from 0 to 1.'}
-      </p>
+
+      {/* Installation Steps */}
+      <div className="border-t border-gray-200 pt-3">
+        <p className="text-xs font-semibold text-gray-600 mb-2">📦 {texts.installation}</p>
+        <div className="space-y-2">
+          {data.installSteps.map((step: string, i: number) => (
+            <div key={i} className="bg-gray-900 rounded p-2">
+              <p className="text-xs text-gray-400 mb-1">
+                {texts.step} {i + 1}:
+              </p>
+              <code className="text-xs text-green-400 whitespace-pre-wrap break-words">
+                {step}
+              </code>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Basic Example */}
+      <div className="border-t border-gray-200 pt-3">
+        <p className="text-xs font-semibold text-gray-600 mb-2">💡 {texts.example}</p>
+        <div className="bg-gray-900 rounded p-2">
+          <code className="text-xs text-green-400 whitespace-pre-wrap break-words">
+            {data.basicExample}
+          </code>
+        </div>
+      </div>
+
+      {/* Common Issues */}
+      <div className="border-t border-gray-200 pt-3">
+        <p className="text-xs font-semibold text-gray-600 mb-2">⚠️ {texts.commonIssues}</p>
+        <div className="space-y-2">
+          {data.commonIssues.map((issue: any, i: number) => (
+            <div key={i} className="border border-orange-200 rounded p-2">
+              <button
+                onClick={() => setExpandedIssue(expandedIssue === i ? null : i)}
+                className="w-full text-left flex items-center justify-between hover:bg-orange-50 p-1 rounded transition"
+              >
+                <p className="text-xs font-medium text-orange-900">
+                  {issue.error}
+                </p>
+                <span className="text-xs text-orange-700">
+                  {expandedIssue === i ? '−' : '+'}
+                </span>
+              </button>
+              {expandedIssue === i && (
+                <p className="text-xs text-gray-700 mt-2 bg-orange-50 p-1 rounded">
+                  ✓ {issue.solution}
+                </p>
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Tip */}
+      <div className="bg-blue-50 border border-blue-200 rounded p-2 text-center">
+        <p className="text-xs text-blue-900">
+          {language === 'zh'
+            ? '💡 提示：详细文档请查看项目官方文档'
+            : '💡 Tip: Check project documentation for more details'}
+        </p>
+      </div>
     </div>
   )
 }
