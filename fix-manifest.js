@@ -43,3 +43,14 @@ if (fs.existsSync(contentScriptSrc) && !fs.existsSync(contentScriptDst)) {
   fs.writeFileSync(contentScriptDst, content);
   console.log('✓ content-script.js 已复制');
 }
+
+// 3. 修复 popup HTML 中的脚本路径
+const popupHtmlPath = path.join(__dirname, 'dist', 'src', 'popup', 'index.html');
+if (fs.existsSync(popupHtmlPath)) {
+  let htmlContent = fs.readFileSync(popupHtmlPath, 'utf8');
+  // 修复脚本和样式表的路径（从 /popup.js 改为 ../../popup.js）
+  htmlContent = htmlContent.replace(/src="\/popup\.js"/g, 'src="../../popup.js"');
+  htmlContent = htmlContent.replace(/href="\/index\.css"/g, 'href="../../index.css"');
+  fs.writeFileSync(popupHtmlPath, htmlContent);
+  console.log('✓ popup index.html 路径已修复');
+}
