@@ -1,0 +1,14 @@
+node_modules/
+dist/
+.DS_Store
+*.log
+.env
+.env.local
+.vscode/
+.idea/
+*.swp
+*.swo
+build/
+out/
+.turbo/
+.pnpm-debug.log*
