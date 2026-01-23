@@ -13,6 +13,7 @@ export default {
     rollupOptions: {
       input: {
         popup: path.resolve('./src/popup/index.html'),
+        'content-script': path.resolve('./src/content/content-script.ts'),
       },
       output: {
         entryFileNames: '[name].js',
