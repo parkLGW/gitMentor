@@ -1,5 +1,161 @@
 // Content script for injecting GitMentor floating widget on GitHub pages
 
+interface FileInfo {
+  owner: string
+  repo: string
+  branch: string
+  path: string
+}
+
+function parseFileUrl(): FileInfo | null {
+  // Match: /owner/repo/blob/branch/path/to/file.ext
+  const match = window.location.pathname.match(/^\/([^\/]+)\/([^\/]+)\/blob\/([^\/]+)\/(.+)$/)
+  if (!match) return null
+  
+  const [, owner, repo, branch, path] = match
+  return { owner, repo, branch, path }
+}
+
+function injectFileSidebar() {
+  const fileInfo = parseFileUrl()
+  if (!fileInfo) return
+  
+  console.log('[GitMentor] Detected code file:', fileInfo.path)
+  
+  // Check if sidebar already exists
+  if (document.getElementById('gitmentor-file-sidebar')) {
+    console.log('[GitMentor] File sidebar already exists')
+    return
+  }
+  
+  // Create sidebar container
+  const sidebar = document.createElement('div')
+  sidebar.id = 'gitmentor-file-sidebar'
+  sidebar.style.cssText = `
+    position: fixed;
+    right: 0;
+    top: 0;
+    width: 380px;
+    height: 100vh;
+    background: white;
+    border-left: 1px solid #e1e4e8;
+    z-index: 5000;
+    overflow-y: auto;
+    box-shadow: -2px 0 8px rgba(0, 0, 0, 0.1);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+  `
+  
+  // Header
+  const header = document.createElement('div')
+  header.style.cssText = `
+    padding: 16px;
+    border-bottom: 1px solid #e1e4e8;
+    position: sticky;
+    top: 0;
+    background: #f6f8fa;
+    z-index: 100;
+  `
+  header.innerHTML = `
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+      <div style="font-size: 14px; font-weight: 600;">📚 GitMentor</div>
+      <button id="gitmentor-sidebar-close" style="
+        background: none;
+        border: none;
+        font-size: 20px;
+        cursor: pointer;
+        color: #666;
+        padding: 0;
+      ">×</button>
+    </div>
+    <div style="font-size: 12px; color: #666; margin-top: 8px; word-break: break-all;">
+      ${fileInfo.path}
+    </div>
+    <div id="gitmentor-loading" style="
+      margin-top: 12px;
+      padding: 8px;
+      background: #f0f2f5;
+      border-radius: 4px;
+      text-align: center;
+      font-size: 12px;
+      color: #666;
+    ">
+      Analyzing file...
+    </div>
+  `
+  
+  // Content area
+  const content = document.createElement('div')
+  content.id = 'gitmentor-file-content'
+  content.style.cssText = `
+    padding: 16px;
+    font-size: 13px;
+    color: #24292e;
+  `
+  
+  sidebar.appendChild(header)
+  sidebar.appendChild(content)
+  document.body.appendChild(sidebar)
+  
+  // Close button
+  const closeBtn = header.querySelector('#gitmentor-sidebar-close')
+  closeBtn?.addEventListener('click', () => {
+    sidebar.remove()
+  })
+  
+  // Fetch and analyze file
+  fetchAndAnalyzeFile(fileInfo, content)
+}
+
+async function fetchAndAnalyzeFile(fileInfo: FileInfo, contentDiv: HTMLElement) {
+  try {
+    // Fetch file content from GitHub API
+    const response = await fetch(
+      `https://api.github.com/repos/${fileInfo.owner}/${fileInfo.repo}/contents/${fileInfo.path}?ref=${fileInfo.branch}`,
+      {
+        headers: {
+          'Accept': 'application/vnd.github.v3.raw',
+        },
+      }
+    )
+    
+    if (!response.ok) {
+      throw new Error(`GitHub API error: ${response.status}`)
+    }
+    
+    const fileContent = await response.text()
+    
+    // Limit file size for API
+    const maxSize = 20000 // 20KB limit
+    const truncatedContent = fileContent.length > maxSize 
+      ? fileContent.substring(0, maxSize) + '\n... (file truncated)'
+      : fileContent
+    
+    // Send to background script for AI analysis
+    chrome.runtime.sendMessage({
+      action: 'analyzeFile',
+      fileName: fileInfo.path,
+      fileContent: truncatedContent,
+    }, (response: any) => {
+      const loadingDiv = document.getElementById('gitmentor-loading')
+      if (loadingDiv) {
+        loadingDiv.remove()
+      }
+      
+      if (response?.error) {
+        contentDiv.innerHTML = `<div style="color: #d73a49; padding: 12px; background: #ffeef0; border-radius: 4px; font-size: 12px;">${response.error}</div>`
+      } else if (response?.html) {
+        contentDiv.innerHTML = response.html
+      }
+    })
+  } catch (error) {
+    const loadingDiv = document.getElementById('gitmentor-loading')
+    if (loadingDiv) {
+      loadingDiv.remove()
+    }
+    contentDiv.innerHTML = `<div style="color: #d73a49; padding: 12px; background: #ffeef0; border-radius: 4px; font-size: 12px;">Failed to fetch file: ${error instanceof Error ? error.message : 'Unknown error'}</div>`
+  }
+}
+
 function injectWidget() {
   // Only run on GitHub repo pages
   const pathMatch = window.location.pathname.match(/^\/([^\/]+)\/([^\/]+)(\/.*)?$/)
@@ -324,15 +480,22 @@ function showNotification(message: string) {
 
 // Initialize when DOM is ready
 if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', injectWidget)
+  document.addEventListener('DOMContentLoaded', () => {
+    injectWidget()
+    injectFileSidebar()
+  })
 } else {
   injectWidget()
+  injectFileSidebar()
 }
 
 // Reinject if page changes (for SPAs)
 const observer = new MutationObserver(() => {
   if (!document.getElementById('gitmentor-widget')) {
     injectWidget()
+  }
+  if (!document.getElementById('gitmentor-file-sidebar')) {
+    injectFileSidebar()
   }
 })
 
