@@ -316,6 +316,95 @@ JSON：
   ]
 }
 `,
+
+  fileAnalysis: (fileName: string, fileContent: string, language: 'zh' | 'en' = 'en') => `
+You are a code expert. Analyze THIS ACTUAL file and provide detailed understanding.
+
+FILE: ${fileName}
+
+CONTENT:
+${fileContent}
+
+Provide concise, actionable analysis:
+- One-liner overview of what this file does
+- List all functions/classes/exports with descriptions
+- Identify imports/dependencies
+- Rate complexity for each function
+- Suggest difficulty level for understanding
+- Give key takeaway for learning
+
+JSON:
+{
+  "fileOverview": "One sentence: what this file does",
+  "functions": [
+    {
+      "name": "functionName or ClassName",
+      "type": "function|class|export|constant",
+      "description": "What it does in one sentence",
+      "complexity": "simple|moderate|complex",
+      "parameters": ["param1", "param2"],
+      "returns": "return type or description"
+    }
+  ],
+  "dependencies": ["./other-file", "external-lib"],
+  "exports": ["exported1", "exported2"],
+  "difficulty": "beginner|intermediate|advanced",
+  "keyTakeaway": "The most important thing to understand about this file"
+}
+`,
+
+  fileAnalysisCN: (fileName: string, fileContent: string) => `
+你是代码专家。分析这个真实的文件并提供详细理解。
+
+文件：${fileName}
+
+内容：
+${fileContent}
+
+提供简洁、可操作的分析：
+- 一句话：这个文件做什么
+- 列出所有函数/类/导出及说明
+- 识别导入/依赖
+- 评估每个函数的复杂度
+- 建议理解难度
+- 给出学习要点
+
+JSON：
+{
+  "fileOverview": "一句话：这个文件做什么",
+  "functions": [
+    {
+      "name": "函数名或类名",
+      "type": "function|class|export|constant",
+      "description": "它做什么（一句话）",
+      "complexity": "simple|moderate|complex",
+      "parameters": ["参数1", "参数2"],
+      "returns": "返回类型或描述"
+    }
+  ],
+  "dependencies": ["./其他文件", "外部库"],
+  "exports": ["导出1", "导出2"],
+  "difficulty": "beginner|intermediate|advanced",
+  "keyTakeaway": "关于这个文件最重要的理解"
+}
+`,
+}
+
+export interface FileAnalysis {
+  fileOverview: string
+  functions: Array<{
+    name: string
+    type: 'function' | 'class' | 'export' | 'constant'
+    lineNumber?: number
+    description: string
+    complexity: 'simple' | 'moderate' | 'complex'
+    parameters?: string[]
+    returns?: string
+  }>
+  dependencies: string[]
+  exports: string[]
+  difficulty: 'beginner' | 'intermediate' | 'advanced'
+  keyTakeaway: string
 }
 
 export class AIAnalysisService {
@@ -378,6 +467,27 @@ export class AIAnalysisService {
       language === 'zh'
         ? PROMPTS.sourceMapCN(projectInfo, fileTree, keyFiles)
         : PROMPTS.sourceMap(projectInfo, fileTree, keyFiles)
+
+    const response = await provider.complete(prompt)
+    const jsonText = extractJSON(response.content)
+    return JSON.parse(jsonText)
+  }
+
+  /**
+   * Analyze a single source code file
+   */
+  static async analyzeFile(
+    fileName: string,
+    fileContent: string,
+    language: 'zh' | 'en' = 'en'
+  ): Promise<FileAnalysis> {
+    const provider = llmManager.getCurrentProvider()
+    if (!provider) throw new Error('No LLM provider configured')
+
+    const prompt =
+      language === 'zh'
+        ? PROMPTS.fileAnalysisCN(fileName, fileContent)
+        : PROMPTS.fileAnalysis(fileName, fileContent, language)
 
     const response = await provider.complete(prompt)
     const jsonText = extractJSON(response.content)
