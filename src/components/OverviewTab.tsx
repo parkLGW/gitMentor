@@ -145,22 +145,22 @@ function OverviewTab({ repo, language }: OverviewTabProps) {
     <div className="space-y-4">
       {/* AI Analysis Button */}
       {!aiAnalysis && (
-        <div className="bg-gradient-to-r from-purple-50 to-pink-50 border border-purple-200 rounded-lg p-3 transition">
+        <div className="bg-white border border-gray-300 rounded-lg p-3 transition">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-xs font-semibold text-purple-900">
-                {language === 'zh' ? '✨ 深度项目分析' : '✨ Deep Project Analysis'}
+              <p className="text-xs font-semibold text-gray-900">
+                {language === 'zh' ? 'AI 项目分析' : 'AI Analysis'}
               </p>
               {!isConfigured() && (
-                <p className="text-xs text-purple-700 mt-1">
-                  {language === 'zh' ? '需要在设置中配置AI提供商' : 'Configure AI provider in Settings'}
+                <p className="text-xs text-gray-600 mt-1">
+                  {language === 'zh' ? '设置中配置 AI 提供商' : 'Configure AI provider in Settings'}
                 </p>
               )}
             </div>
             <button
               onClick={handleAIAnalysis}
               disabled={aiLoading || !isConfigured()}
-              className="px-3 py-1.5 bg-purple-500 hover:bg-purple-600 disabled:bg-gray-400 text-white rounded text-xs font-medium transition flex items-center gap-1 whitespace-nowrap"
+              className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 text-white rounded text-xs font-medium transition flex items-center gap-1 whitespace-nowrap"
             >
               {aiLoading ? (
                 <>
@@ -168,7 +168,7 @@ function OverviewTab({ repo, language }: OverviewTabProps) {
                   {language === 'zh' ? '分析中' : 'Analyzing'}
                 </>
               ) : (
-                <>✨ AI</>
+                language === 'zh' ? '生成分析' : 'Generate'
               )}
             </button>
           </div>
@@ -184,14 +184,14 @@ function OverviewTab({ repo, language }: OverviewTabProps) {
 
       {/* AI Analysis Results */}
       {aiAnalysis && (
-        <div className="bg-gradient-to-r from-purple-50 to-pink-50 border border-purple-200 rounded-lg p-3 space-y-3 animate-fade-in">
-          <div className="flex items-center justify-between">
-            <p className="text-xs font-semibold text-purple-900">
-              {language === 'zh' ? '✨ AI分析结果' : '✨ AI Analysis'}
+        <div className="bg-white border border-gray-300 rounded-lg p-3 space-y-3 animate-fade-in">
+          <div className="flex items-center justify-between border-b border-gray-200 pb-2">
+            <p className="text-xs font-semibold text-gray-900">
+              {language === 'zh' ? '项目分析' : 'Analysis'}
             </p>
             <button
               onClick={() => setAiAnalysis(null)}
-              className="text-xs text-purple-600 hover:text-purple-900 underline transition"
+              className="text-xs text-blue-600 hover:text-blue-800 underline transition"
             >
               {language === 'zh' ? '重新分析' : 'Reanalyze'}
             </button>
@@ -199,38 +199,38 @@ function OverviewTab({ repo, language }: OverviewTabProps) {
 
           {/* Core Value */}
           <div className="space-y-1">
-            <p className="text-xs font-semibold text-purple-800">{language === 'zh' ? '核心价值' : 'Core Value'}</p>
+            <p className="text-xs font-semibold text-gray-900">{language === 'zh' ? '核心价值' : 'Core Value'}</p>
             <p className="text-xs text-gray-700 leading-relaxed">{aiAnalysis.coreValue}</p>
           </div>
 
           {/* Difficulty & Audience */}
-          <div className="grid grid-cols-2 gap-2">
+          <div className="grid grid-cols-2 gap-2 border-t border-gray-200 pt-2">
             <div>
-              <p className="text-xs font-semibold text-purple-800">{language === 'zh' ? '学习难度' : 'Difficulty'}</p>
+              <p className="text-xs font-semibold text-gray-900">{language === 'zh' ? '难度' : 'Difficulty'}</p>
               <p className="text-xs text-gray-700 mt-0.5">
                 {aiAnalysis.difficulty === 'beginner'
                   ? language === 'zh'
-                    ? '🟢 初级'
-                    : '🟢 Beginner'
+                    ? '初级'
+                    : 'Beginner'
                   : aiAnalysis.difficulty === 'intermediate'
                     ? language === 'zh'
-                      ? '🟡 中级'
-                      : '🟡 Intermediate'
+                      ? '中级'
+                      : 'Intermediate'
                     : language === 'zh'
-                      ? '🔴 高级'
-                      : '🔴 Advanced'}
+                      ? '高级'
+                      : 'Advanced'}
               </p>
             </div>
             <div>
-              <p className="text-xs font-semibold text-purple-800">{language === 'zh' ? '适合人群' : 'Audience'}</p>
+              <p className="text-xs font-semibold text-gray-900">{language === 'zh' ? '面向群体' : 'For'}</p>
               <p className="text-xs text-gray-700 mt-0.5">{aiAnalysis.targetAudience}</p>
             </div>
           </div>
 
           {/* Problems */}
           {aiAnalysis.problems.length > 0 && (
-            <div>
-              <p className="text-xs font-semibold text-purple-800 mb-1">{language === 'zh' ? '解决的问题' : 'Problems Solved'}</p>
+            <div className="border-t border-gray-200 pt-2">
+              <p className="text-xs font-semibold text-gray-900 mb-1">{language === 'zh' ? '解决问题' : 'Problems'}</p>
               <ul className="text-xs text-gray-700 space-y-0.5 ml-4">
                 {aiAnalysis.problems.map((p: string, i: number) => (
                   <li key={i} className="list-disc">
@@ -243,8 +243,8 @@ function OverviewTab({ repo, language }: OverviewTabProps) {
 
           {/* Use Cases */}
           {aiAnalysis.useCases.length > 0 && (
-            <div>
-              <p className="text-xs font-semibold text-purple-800 mb-1">{language === 'zh' ? '适用场景' : 'Use Cases'}</p>
+            <div className="border-t border-gray-200 pt-2">
+              <p className="text-xs font-semibold text-gray-900 mb-1">{language === 'zh' ? '应用场景' : 'Use Cases'}</p>
               <ul className="text-xs text-gray-700 space-y-0.5 ml-4">
                 {aiAnalysis.useCases.map((u: string, i: number) => (
                   <li key={i} className="list-disc">
@@ -257,11 +257,11 @@ function OverviewTab({ repo, language }: OverviewTabProps) {
 
           {/* Key Features */}
           {aiAnalysis.keyFeatures.length > 0 && (
-            <div>
-              <p className="text-xs font-semibold text-purple-800 mb-1">{language === 'zh' ? '关键特性' : 'Key Features'}</p>
+            <div className="border-t border-gray-200 pt-2">
+              <p className="text-xs font-semibold text-gray-900 mb-1">{language === 'zh' ? '主要功能' : 'Features'}</p>
               <div className="flex flex-wrap gap-1">
                 {aiAnalysis.keyFeatures.map((f, i) => (
-                  <span key={i} className="bg-purple-200 text-purple-800 text-xs px-2 py-0.5 rounded">
+                  <span key={i} className="bg-gray-200 text-gray-900 text-xs px-2 py-0.5 rounded">
                     {f}
                   </span>
                 ))}

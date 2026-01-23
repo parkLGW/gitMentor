@@ -104,7 +104,7 @@ function QuickStartTab({ repo, language }: QuickStartTabProps) {
 
   if (loading || aiLoading) {
     return <div className="text-center text-gray-500 py-4 space-y-2">
-      <div>{language === 'zh' ? '✨ 生成快速上手指南中...' : '✨ Generating Quick Start Guide...'}</div>
+      <div>{language === 'zh' ? '生成快速上手指南中...' : 'Generating Quick Start Guide...'}</div>
       <div className="text-xs text-gray-400">{language === 'zh' ? '这可能需要几秒钟' : 'This may take a few seconds'}</div>
     </div>
   }
@@ -136,22 +136,22 @@ function QuickStartTab({ repo, language }: QuickStartTabProps) {
     <div className="space-y-4">
       {/* AI Analysis Button */}
       {!aiData && (
-        <div className="bg-gradient-to-r from-purple-50 to-pink-50 border border-purple-200 rounded-lg p-3 transition">
+        <div className="bg-white border border-gray-300 rounded-lg p-3 transition">
           <div className="flex items-center justify-between">
             <div>
-              <p className="text-xs font-semibold text-purple-900">
-                {language === 'zh' ? '✨ AI生成快速上手' : '✨ AI Quick Start'}
+              <p className="text-xs font-semibold text-gray-900">
+                {language === 'zh' ? '快速上手指南' : 'Quick Start'}
               </p>
               {!isConfigured() && (
-                <p className="text-xs text-purple-700 mt-1">
-                  {language === 'zh' ? '需要在设置中配置AI提供商' : 'Configure AI provider in Settings'}
+                <p className="text-xs text-gray-600 mt-1">
+                  {language === 'zh' ? '设置中配置 AI 提供商' : 'Configure AI provider in Settings'}
                 </p>
               )}
             </div>
             <button
               onClick={handleAIAnalysis}
               disabled={aiLoading || !isConfigured()}
-              className="px-3 py-1.5 bg-purple-500 hover:bg-purple-600 disabled:bg-gray-400 text-white rounded text-xs font-medium transition flex items-center gap-1 whitespace-nowrap"
+              className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 text-white rounded text-xs font-medium transition flex items-center gap-1 whitespace-nowrap"
             >
               {aiLoading ? (
                 <>
@@ -159,7 +159,7 @@ function QuickStartTab({ repo, language }: QuickStartTabProps) {
                   {language === 'zh' ? '生成中' : 'Generating'}
                 </>
               ) : (
-                <>✨ AI</>
+                language === 'zh' ? '生成' : 'Generate'
               )}
             </button>
           </div>
@@ -175,14 +175,14 @@ function QuickStartTab({ repo, language }: QuickStartTabProps) {
 
       {/* AI Analysis Results */}
       {aiData && (
-        <div className="bg-gradient-to-r from-purple-50 to-pink-50 border border-purple-200 rounded-lg p-3 space-y-3 animate-fade-in">
-          <div className="flex items-center justify-between">
-            <p className="text-xs font-semibold text-purple-900">
-              {language === 'zh' ? '✨ 快速上手指南' : '✨ Quick Start Guide'}
+        <div className="bg-white border border-gray-300 rounded-lg p-3 space-y-3 animate-fade-in">
+          <div className="flex items-center justify-between border-b border-gray-200 pb-2">
+            <p className="text-xs font-semibold text-gray-900">
+              {language === 'zh' ? '快速上手' : 'Getting Started'}
             </p>
             <button
               onClick={() => setAiData(null)}
-              className="text-xs text-purple-600 hover:text-purple-900 underline transition"
+              className="text-xs text-blue-600 hover:text-blue-800 underline transition"
             >
               {language === 'zh' ? '重新生成' : 'Regenerate'}
             </button>
@@ -191,7 +191,7 @@ function QuickStartTab({ repo, language }: QuickStartTabProps) {
           {/* Prerequisites */}
           {aiData.prerequisites && aiData.prerequisites.length > 0 && (
             <div>
-              <p className="text-xs font-semibold text-purple-800 mb-1">
+              <p className="text-xs font-semibold text-gray-900 mb-1">
                 {language === 'zh' ? '前置条件' : 'Prerequisites'}
               </p>
               <ul className="text-xs text-gray-700 space-y-0.5 ml-4">
@@ -206,24 +206,24 @@ function QuickStartTab({ repo, language }: QuickStartTabProps) {
 
           {/* Steps */}
           {aiData.steps && aiData.steps.length > 0 && (
-            <div>
-              <p className="text-xs font-semibold text-purple-800 mb-2">
-                {language === 'zh' ? '安装步骤' : 'Installation Steps'}
+            <div className="border-t border-gray-200 pt-2">
+              <p className="text-xs font-semibold text-gray-900 mb-2">
+                {language === 'zh' ? '安装' : 'Installation'}
               </p>
               <div className="space-y-2">
                 {aiData.steps.map((step, i) => (
-                  <div key={i} className="border border-purple-200 rounded overflow-hidden bg-white">
+                  <div key={i} className="border border-gray-300 rounded overflow-hidden bg-white">
                     <button
                       onClick={() => setExpandedStep(expandedStep === i ? null : i)}
-                      className="w-full text-left p-2 hover:bg-purple-50 flex justify-between items-center transition"
+                      className="w-full text-left p-2 hover:bg-gray-50 flex justify-between items-center transition"
                     >
                       <div>
-                        <p className="text-xs font-medium text-purple-900">{i + 1}. {step.title}</p>
+                        <p className="text-xs font-medium text-gray-900">{i + 1}. {step.title}</p>
                       </div>
-                      <span className="text-purple-600">{expandedStep === i ? '−' : '+'}</span>
+                      <span className="text-gray-600">{expandedStep === i ? '−' : '+'}</span>
                     </button>
                     {expandedStep === i && (
-                      <div className="px-3 pb-2 bg-purple-50 border-t border-purple-200 space-y-2">
+                      <div className="px-3 pb-2 bg-gray-50 border-t border-gray-200 space-y-2">
                         <p className="text-xs text-gray-700">{step.description}</p>
                         {step.commands && step.commands.length > 0 && (
                           <div className="bg-gray-900 text-green-400 p-2 rounded text-xs font-mono space-y-1 overflow-x-auto">
@@ -244,12 +244,12 @@ function QuickStartTab({ repo, language }: QuickStartTabProps) {
 
           {/* First Example */}
           {aiData.firstExample && (
-            <div>
-              <p className="text-xs font-semibold text-purple-800 mb-1">
-                {language === 'zh' ? '第一个示例' : 'First Example'}
+            <div className="border-t border-gray-200 pt-2">
+              <p className="text-xs font-semibold text-gray-900 mb-1">
+                {language === 'zh' ? '示例' : 'Example'}
               </p>
-              <div className="bg-white border border-purple-200 rounded p-2 space-y-2">
-                <p className="text-xs font-medium text-purple-900">{aiData.firstExample.title}</p>
+              <div className="bg-white border border-gray-300 rounded p-2 space-y-2">
+                <p className="text-xs font-medium text-gray-900">{aiData.firstExample.title}</p>
                 <div className="bg-gray-900 text-green-400 p-2 rounded text-xs font-mono overflow-x-auto">
                   {aiData.firstExample.code}
                 </div>
