@@ -101,15 +101,12 @@ function makeDraggable(element: HTMLElement) {
 }
 
 function openPanel(owner: string, repo: string) {
-  // Open GitMentor in a new tab
-  const url = chrome.runtime.getURL(
-    `src/popup/index.html?owner=${encodeURIComponent(owner)}&repo=${encodeURIComponent(repo)}`
-  )
-  
+  // Send message to service worker to open new tab
   chrome.runtime.sendMessage(
     {
       type: 'openTab',
-      url,
+      owner,
+      repo,
     },
     (response) => {
       if (response?.success) {
