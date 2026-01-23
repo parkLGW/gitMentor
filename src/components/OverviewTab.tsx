@@ -3,6 +3,8 @@ import { getRepoInfo, getReadme } from '@/services/github'
 import { analyzeReadme } from '@/services/analysis'
 import { AIAnalysisService, ProjectAnalysis } from '@/services/ai-analysis'
 import { useLLM } from '@/hooks/useLLM'
+import { LoadingSpinner } from './LoadingSpinner'
+import { MarkdownDisplay } from './MarkdownDisplay'
 
 interface OverviewTabProps {
   repo: { owner: string; name: string }
@@ -114,24 +116,33 @@ function OverviewTab({ repo, language }: OverviewTabProps) {
     <div className="space-y-4">
       {/* AI Analysis Button */}
       {!aiAnalysis && (
-        <div className="bg-gradient-to-r from-purple-50 to-pink-50 border border-purple-200 rounded-lg p-3">
+        <div className="bg-gradient-to-r from-purple-50 to-pink-50 border border-purple-200 rounded-lg p-3 transition">
           <div className="flex items-center justify-between">
-            <p className="text-xs font-semibold text-purple-900">
-              {language === 'zh' ? '✨ 用AI更深度分析此项目' : '✨ Get AI-Powered Insights'}
-            </p>
+            <div>
+              <p className="text-xs font-semibold text-purple-900">
+                {language === 'zh' ? '✨ 深度项目分析' : '✨ Deep Project Analysis'}
+              </p>
+              {!isConfigured() && (
+                <p className="text-xs text-purple-700 mt-1">
+                  {language === 'zh' ? '需要在设置中配置AI提供商' : 'Configure AI provider in Settings'}
+                </p>
+              )}
+            </div>
             <button
               onClick={handleAIAnalysis}
               disabled={aiLoading || !isConfigured()}
-              className="px-2 py-1 bg-purple-500 hover:bg-purple-600 disabled:bg-gray-400 text-white rounded text-xs font-medium transition"
+              className="px-3 py-1.5 bg-purple-500 hover:bg-purple-600 disabled:bg-gray-400 text-white rounded text-xs font-medium transition flex items-center gap-1 whitespace-nowrap"
             >
-              {aiLoading ? (language === 'zh' ? '分析中...' : 'Analyzing...') : 'AI'}
+              {aiLoading ? (
+                <>
+                  <LoadingSpinner size="sm" />
+                  {language === 'zh' ? '分析中' : 'Analyzing'}
+                </>
+              ) : (
+                <>✨ AI</>
+              )}
             </button>
           </div>
-          {!isConfigured() && (
-            <p className="text-xs text-purple-700 mt-1">
-              {language === 'zh' ? '需要在设置中配置AI提供商' : 'Configure AI provider in Settings'}
-            </p>
-          )}
         </div>
       )}
 
@@ -144,26 +155,90 @@ function OverviewTab({ repo, language }: OverviewTabProps) {
 
       {/* AI Analysis Results */}
       {aiAnalysis && (
-        <div className="bg-gradient-to-r from-purple-50 to-pink-50 border border-purple-200 rounded-lg p-3">
-          <div className="flex items-center justify-between mb-2">
+        <div className="bg-gradient-to-r from-purple-50 to-pink-50 border border-purple-200 rounded-lg p-3 space-y-3 animate-fade-in">
+          <div className="flex items-center justify-between">
             <p className="text-xs font-semibold text-purple-900">
               {language === 'zh' ? '✨ AI分析结果' : '✨ AI Analysis'}
             </p>
             <button
               onClick={() => setAiAnalysis(null)}
-              className="text-xs text-purple-600 hover:text-purple-900 underline"
+              className="text-xs text-purple-600 hover:text-purple-900 underline transition"
             >
-              {language === 'zh' ? '重新分析' : 'Re-analyze'}
+              {language === 'zh' ? '重新分析' : 'Reanalyze'}
             </button>
           </div>
-          <div className="text-xs text-purple-900 space-y-2">
-            <p><strong>{language === 'zh' ? '核心价值：' : 'Core: '}</strong>{aiAnalysis.coreValue}</p>
-            <p><strong>{language === 'zh' ? '难度：' : 'Difficulty: '}</strong>{aiAnalysis.difficulty}</p>
-            <p><strong>{language === 'zh' ? '适合人群：' : 'For: '}</strong>{aiAnalysis.targetAudience}</p>
-            {aiAnalysis.keyFeatures.length > 0 && (
-              <p><strong>{language === 'zh' ? '关键特性：' : 'Features: '}</strong>{aiAnalysis.keyFeatures.join(', ')}</p>
-            )}
+
+          {/* Core Value */}
+          <div className="space-y-1">
+            <p className="text-xs font-semibold text-purple-800">{language === 'zh' ? '核心价值' : 'Core Value'}</p>
+            <p className="text-xs text-gray-700 leading-relaxed">{aiAnalysis.coreValue}</p>
           </div>
+
+          {/* Difficulty & Audience */}
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <p className="text-xs font-semibold text-purple-800">{language === 'zh' ? '学习难度' : 'Difficulty'}</p>
+              <p className="text-xs text-gray-700 mt-0.5">
+                {aiAnalysis.difficulty === 'beginner'
+                  ? language === 'zh'
+                    ? '🟢 初级'
+                    : '🟢 Beginner'
+                  : aiAnalysis.difficulty === 'intermediate'
+                    ? language === 'zh'
+                      ? '🟡 中级'
+                      : '🟡 Intermediate'
+                    : language === 'zh'
+                      ? '🔴 高级'
+                      : '🔴 Advanced'}
+              </p>
+            </div>
+            <div>
+              <p className="text-xs font-semibold text-purple-800">{language === 'zh' ? '适合人群' : 'Audience'}</p>
+              <p className="text-xs text-gray-700 mt-0.5">{aiAnalysis.targetAudience}</p>
+            </div>
+          </div>
+
+          {/* Problems */}
+          {aiAnalysis.problems.length > 0 && (
+            <div>
+              <p className="text-xs font-semibold text-purple-800 mb-1">{language === 'zh' ? '解决的问题' : 'Problems Solved'}</p>
+              <ul className="text-xs text-gray-700 space-y-0.5 ml-4">
+                {aiAnalysis.problems.map((p, i) => (
+                  <li key={i} className="list-disc">
+                    {p}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {/* Use Cases */}
+          {aiAnalysis.useCases.length > 0 && (
+            <div>
+              <p className="text-xs font-semibold text-purple-800 mb-1">{language === 'zh' ? '适用场景' : 'Use Cases'}</p>
+              <ul className="text-xs text-gray-700 space-y-0.5 ml-4">
+                {aiAnalysis.useCases.map((u, i) => (
+                  <li key={i} className="list-disc">
+                    {u}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {/* Key Features */}
+          {aiAnalysis.keyFeatures.length > 0 && (
+            <div>
+              <p className="text-xs font-semibold text-purple-800 mb-1">{language === 'zh' ? '关键特性' : 'Key Features'}</p>
+              <div className="flex flex-wrap gap-1">
+                {aiAnalysis.keyFeatures.map((f, i) => (
+                  <span key={i} className="bg-purple-200 text-purple-800 text-xs px-2 py-0.5 rounded">
+                    {f}
+                  </span>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       )}
 

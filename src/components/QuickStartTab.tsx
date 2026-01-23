@@ -3,6 +3,7 @@ import { getReadme, getRepoTree } from '@/services/github'
 import { generateQuickStart } from '@/services/analysis'
 import { AIAnalysisService, QuickStartGuide } from '@/services/ai-analysis'
 import { useLLM } from '@/hooks/useLLM'
+import { LoadingSpinner } from './LoadingSpinner'
 
 interface QuickStartTabProps {
   repo: { owner: string; name: string }
@@ -102,24 +103,33 @@ function QuickStartTab({ repo, language }: QuickStartTabProps) {
     <div className="space-y-4">
       {/* AI Analysis Button */}
       {!aiData && (
-        <div className="bg-gradient-to-r from-purple-50 to-pink-50 border border-purple-200 rounded-lg p-3">
+        <div className="bg-gradient-to-r from-purple-50 to-pink-50 border border-purple-200 rounded-lg p-3 transition">
           <div className="flex items-center justify-between">
-            <p className="text-xs font-semibold text-purple-900">
-              {language === 'zh' ? '✨ 用AI生成最优快速上手指南' : '✨ AI-Powered Quick Start'}
-            </p>
+            <div>
+              <p className="text-xs font-semibold text-purple-900">
+                {language === 'zh' ? '✨ AI生成快速上手' : '✨ AI Quick Start'}
+              </p>
+              {!isConfigured() && (
+                <p className="text-xs text-purple-700 mt-1">
+                  {language === 'zh' ? '需要在设置中配置AI提供商' : 'Configure AI provider in Settings'}
+                </p>
+              )}
+            </div>
             <button
               onClick={handleAIAnalysis}
               disabled={aiLoading || !isConfigured()}
-              className="px-2 py-1 bg-purple-500 hover:bg-purple-600 disabled:bg-gray-400 text-white rounded text-xs font-medium transition"
+              className="px-3 py-1.5 bg-purple-500 hover:bg-purple-600 disabled:bg-gray-400 text-white rounded text-xs font-medium transition flex items-center gap-1 whitespace-nowrap"
             >
-              {aiLoading ? (language === 'zh' ? '生成中...' : 'Generating...') : 'AI'}
+              {aiLoading ? (
+                <>
+                  <LoadingSpinner size="sm" />
+                  {language === 'zh' ? '生成中' : 'Generating'}
+                </>
+              ) : (
+                <>✨ AI</>
+              )}
             </button>
           </div>
-          {!isConfigured() && (
-            <p className="text-xs text-purple-700 mt-1">
-              {language === 'zh' ? '需要在设置中配置AI提供商' : 'Configure AI provider in Settings'}
-            </p>
-          )}
         </div>
       )}
 
@@ -132,42 +142,86 @@ function QuickStartTab({ repo, language }: QuickStartTabProps) {
 
       {/* AI Analysis Results */}
       {aiData && (
-        <div className="bg-gradient-to-r from-purple-50 to-pink-50 border border-purple-200 rounded-lg p-3">
-          <div className="flex items-center justify-between mb-2">
+        <div className="bg-gradient-to-r from-purple-50 to-pink-50 border border-purple-200 rounded-lg p-3 space-y-3 animate-fade-in">
+          <div className="flex items-center justify-between">
             <p className="text-xs font-semibold text-purple-900">
-              {language === 'zh' ? '✨ AI生成的快速上手指南' : '✨ AI Quick Start Guide'}
+              {language === 'zh' ? '✨ 快速上手指南' : '✨ Quick Start Guide'}
             </p>
             <button
               onClick={() => setAiData(null)}
-              className="text-xs text-purple-600 hover:text-purple-900 underline"
+              className="text-xs text-purple-600 hover:text-purple-900 underline transition"
             >
               {language === 'zh' ? '重新生成' : 'Regenerate'}
             </button>
           </div>
 
+          {/* Prerequisites */}
+          {aiData.prerequisites && aiData.prerequisites.length > 0 && (
+            <div>
+              <p className="text-xs font-semibold text-purple-800 mb-1">
+                {language === 'zh' ? '前置条件' : 'Prerequisites'}
+              </p>
+              <ul className="text-xs text-gray-700 space-y-0.5 ml-4">
+                {aiData.prerequisites.map((pre, i) => (
+                  <li key={i} className="list-disc">
+                    {pre}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {/* Steps */}
           {aiData.steps && aiData.steps.length > 0 && (
-            <div className="space-y-2 mb-3">
-              {aiData.steps.map((step, i) => (
-                <div key={i} className="border border-purple-200 rounded">
-                  <button
-                    onClick={() => setExpandedStep(expandedStep === i ? null : i)}
-                    className="w-full text-left p-2 hover:bg-purple-100 flex justify-between items-center"
-                  >
-                    <p className="text-xs font-medium text-purple-900">{step.title}</p>
-                    <span className="text-xs">{expandedStep === i ? '−' : '+'}</span>
-                  </button>
-                  {expandedStep === i && (
-                    <div className="px-2 pb-2 bg-purple-50 border-t border-purple-200">
-                      <p className="text-xs text-gray-700 mb-1">{step.description}</p>
-                      {step.commands && (
-                        <div className="bg-gray-900 text-green-400 p-1 rounded text-xs font-mono">
-                          {step.commands.map((cmd, j) => <div key={j}>{cmd}</div>)}
-                        </div>
-                      )}
-                    </div>
-                  )}
+            <div>
+              <p className="text-xs font-semibold text-purple-800 mb-2">
+                {language === 'zh' ? '安装步骤' : 'Installation Steps'}
+              </p>
+              <div className="space-y-2">
+                {aiData.steps.map((step, i) => (
+                  <div key={i} className="border border-purple-200 rounded overflow-hidden bg-white">
+                    <button
+                      onClick={() => setExpandedStep(expandedStep === i ? null : i)}
+                      className="w-full text-left p-2 hover:bg-purple-50 flex justify-between items-center transition"
+                    >
+                      <div>
+                        <p className="text-xs font-medium text-purple-900">{i + 1}. {step.title}</p>
+                      </div>
+                      <span className="text-purple-600">{expandedStep === i ? '−' : '+'}</span>
+                    </button>
+                    {expandedStep === i && (
+                      <div className="px-3 pb-2 bg-purple-50 border-t border-purple-200 space-y-2">
+                        <p className="text-xs text-gray-700">{step.description}</p>
+                        {step.commands && step.commands.length > 0 && (
+                          <div className="bg-gray-900 text-green-400 p-2 rounded text-xs font-mono space-y-1 overflow-x-auto">
+                            {step.commands.map((cmd, j) => (
+                              <div key={j} className="select-all">
+                                $ {cmd}
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* First Example */}
+          {aiData.firstExample && (
+            <div>
+              <p className="text-xs font-semibold text-purple-800 mb-1">
+                {language === 'zh' ? '第一个示例' : 'First Example'}
+              </p>
+              <div className="bg-white border border-purple-200 rounded p-2 space-y-2">
+                <p className="text-xs font-medium text-purple-900">{aiData.firstExample.title}</p>
+                <div className="bg-gray-900 text-green-400 p-2 rounded text-xs font-mono overflow-x-auto">
+                  {aiData.firstExample.code}
                 </div>
-              ))}
+                <p className="text-xs text-gray-700">{aiData.firstExample.explanation}</p>
+              </div>
             </div>
           )}
         </div>

@@ -2,6 +2,7 @@ import React, { useState } from 'react'
 import { generateSourceMap } from '@/services/analysis'
 import { AIAnalysisService, SourceCodeMap } from '@/services/ai-analysis'
 import { useLLM } from '@/hooks/useLLM'
+import { LoadingSpinner } from './LoadingSpinner'
 
 interface SourceMapTabProps {
   repo: { owner: string; name: string }
@@ -80,24 +81,33 @@ function SourceMapTab({ repo, language }: SourceMapTabProps) {
     <div className="space-y-4">
       {/* AI Analysis Button */}
       {!aiData && (
-        <div className="bg-gradient-to-r from-purple-50 to-pink-50 border border-purple-200 rounded-lg p-3">
+        <div className="bg-gradient-to-r from-purple-50 to-pink-50 border border-purple-200 rounded-lg p-3 transition">
           <div className="flex items-center justify-between">
-            <p className="text-xs font-semibold text-purple-900">
-              {language === 'zh' ? '✨ 用AI生成源码学习路线' : '✨ AI Source Code Map'}
-            </p>
+            <div>
+              <p className="text-xs font-semibold text-purple-900">
+                {language === 'zh' ? '✨ AI生成学习路线' : '✨ AI Learning Path'}
+              </p>
+              {!isConfigured() && (
+                <p className="text-xs text-purple-700 mt-1">
+                  {language === 'zh' ? '需要在设置中配置AI提供商' : 'Configure AI provider in Settings'}
+                </p>
+              )}
+            </div>
             <button
               onClick={handleAIAnalysis}
               disabled={aiLoading || !isConfigured()}
-              className="px-2 py-1 bg-purple-500 hover:bg-purple-600 disabled:bg-gray-400 text-white rounded text-xs font-medium transition"
+              className="px-3 py-1.5 bg-purple-500 hover:bg-purple-600 disabled:bg-gray-400 text-white rounded text-xs font-medium transition flex items-center gap-1 whitespace-nowrap"
             >
-              {aiLoading ? (language === 'zh' ? '生成中...' : 'Generating...') : 'AI'}
+              {aiLoading ? (
+                <>
+                  <LoadingSpinner size="sm" />
+                  {language === 'zh' ? '生成中' : 'Generating'}
+                </>
+              ) : (
+                <>✨ AI</>
+              )}
             </button>
           </div>
-          {!isConfigured() && (
-            <p className="text-xs text-purple-700 mt-1">
-              {language === 'zh' ? '需要在设置中配置AI提供商' : 'Configure AI provider in Settings'}
-            </p>
-          )}
         </div>
       )}
 
@@ -110,19 +120,69 @@ function SourceMapTab({ repo, language }: SourceMapTabProps) {
 
       {/* AI Analysis Results */}
       {aiData && (
-        <div className="bg-gradient-to-r from-purple-50 to-pink-50 border border-purple-200 rounded-lg p-3">
-          <div className="flex items-center justify-between mb-2">
+        <div className="bg-gradient-to-r from-purple-50 to-pink-50 border border-purple-200 rounded-lg p-3 space-y-3 animate-fade-in">
+          <div className="flex items-center justify-between">
             <p className="text-xs font-semibold text-purple-900">
-              {language === 'zh' ? '✨ AI生成的学习路线' : '✨ AI Learning Path'}
+              {language === 'zh' ? '✨ 学习路线' : '✨ Learning Path'}
             </p>
             <button
               onClick={() => setAiData(null)}
-              className="text-xs text-purple-600 hover:text-purple-900 underline"
+              className="text-xs text-purple-600 hover:text-purple-900 underline transition"
             >
               {language === 'zh' ? '重新生成' : 'Regenerate'}
             </button>
           </div>
-          <p className="text-xs text-purple-900"><strong>{language === 'zh' ? '架构：' : 'Architecture: '}</strong>{aiData.architecture}</p>
+
+          {/* Architecture */}
+          <div>
+            <p className="text-xs font-semibold text-purple-800 mb-1">
+              {language === 'zh' ? '架构概览' : 'Architecture'}
+            </p>
+            <p className="text-xs text-gray-700 leading-relaxed">{aiData.architecture}</p>
+          </div>
+
+          {/* Key Concepts */}
+          {aiData.keyConcepts && aiData.keyConcepts.length > 0 && (
+            <div>
+              <p className="text-xs font-semibold text-purple-800 mb-1">
+                {language === 'zh' ? '关键概念' : 'Key Concepts'}
+              </p>
+              <div className="space-y-1">
+                {aiData.keyConcepts.slice(0, 3).map((concept, i) => (
+                  <div key={i} className="bg-white rounded p-1.5 border border-purple-200">
+                    <p className="text-xs font-medium text-purple-900">{concept.term}</p>
+                    <p className="text-xs text-gray-700">{concept.explanation}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Files Map */}
+          {aiData.files && aiData.files.length > 0 && (
+            <div>
+              <p className="text-xs font-semibold text-purple-800 mb-1">
+                {language === 'zh' ? '文件优先级' : 'File Priority'}
+              </p>
+              <div className="space-y-1">
+                {aiData.files.slice(0, 3).map((file, i) => (
+                  <div
+                    key={i}
+                    className={`border-l-2 ${
+                      file.priority === 'critical'
+                        ? 'border-red-500 bg-red-50'
+                        : file.priority === 'important'
+                          ? 'border-yellow-500 bg-yellow-50'
+                          : 'border-blue-500 bg-blue-50'
+                    } rounded p-1.5`}
+                  >
+                    <p className="text-xs font-medium text-gray-900">{file.path}</p>
+                    <p className="text-xs text-gray-600">{file.description}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       )}
 
