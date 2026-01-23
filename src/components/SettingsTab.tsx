@@ -141,10 +141,15 @@ function SettingsTab({ language }: SettingsTabProps) {
         baseUrl: baseUrl || undefined,
       }
 
+      console.log('[SettingsTab] Saving config:', { provider: selectedProvider, model, hasApiKey: !!apiKey })
+      
       await llmManager.setCurrentProvider(selectedProvider, config)
+      
+      console.log('[SettingsTab] Config saved successfully')
       setSaved(true)
       setTimeout(() => setSaved(false), 3000)
     } catch (error) {
+      console.error('[SettingsTab] Save failed:', error)
       alert(`${language === 'zh' ? '保存失败' : 'Save failed'}: ${error}`)
     }
   }

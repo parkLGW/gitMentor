@@ -66,8 +66,13 @@ export class LLMManager {
         baseUrl: config.baseUrl,
         apiKey: config.apiKey, // Store API key securely in chrome.storage
       }
-      chrome.storage.local.set({ [this.configKey]: configToSave }, () => {
-        console.log('[LLMManager] Config saved to chrome.storage:', type)
+      
+      // Use promise-based wrapper to ensure config is saved before returning
+      return new Promise<void>((resolve) => {
+        chrome.storage.local.set({ [this.configKey]: configToSave }, () => {
+          console.log('[LLMManager] Config saved to chrome.storage:', type, configToSave)
+          resolve()
+        })
       })
     }
   }

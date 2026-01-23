@@ -384,6 +384,8 @@ function extractJSON(text) {
 }
 
 function generateBasicAnalysis(fileName, fileContent, language) {
+  console.log('[GitMentor] Using basic analysis mode for:', fileName)
+  
   // Extract functions/classes from content using regex
   const functions = []
   const seen = new Set()
@@ -416,30 +418,30 @@ function generateBasicAnalysis(fileName, fileContent, language) {
     functions: '函数和类',
     difficulty: '难度',
     noFunctions: '未检测到函数',
-    basicMode: 'ℹ️ 基础分析模式（AI 未配置）',
+    quickAnalysis: '⚡ 快速分析',
   } : {
     overview: 'File Overview',
     functions: 'Functions & Classes',
     difficulty: 'Difficulty',
     noFunctions: 'No functions detected',
-    basicMode: 'ℹ️ Basic analysis mode (AI not configured)',
+    quickAnalysis: '⚡ Quick Analysis',
   }
   
-  let html = `<div style="padding: 12px; background: #f0f2f5; border-radius: 4px; margin-bottom: 12px;"><p style="margin: 0; font-size: 11px; color: #666; margin-bottom: 4px;">📄 ${labels.overview}</p><code style="font-size: 11px; color: #24292e; word-break: break-all;">${escapeHtml(fileName)}</code></div>`
+  let html = `<div style="padding: 8px; background: #f0f2f5; border-radius: 4px; margin-bottom: 12px;"><p style="margin: 0; font-size: 10px; color: #666; font-weight: 600;">${labels.quickAnalysis}</p></div>`
+  
+  html += `<div style="padding: 8px; background: #f6f8fa; border-radius: 4px; margin-bottom: 12px;"><p style="margin: 0; font-size: 11px; color: #666; word-break: break-word;">📄 ${escapeHtml(fileName)}</p></div>`
   
   if (functions.length === 0) {
-    html += `<p style="color: #666; font-size: 12px;">${labels.noFunctions}</p>`
+    html += `<p style="color: #999; font-size: 11px;">${labels.noFunctions}</p>`
   } else {
-    html += `<div style="margin-bottom: 12px;"><p style="font-size: 12px; font-weight: 600; margin: 0 0 8px 0;">${labels.functions}</p><div>`
+    html += `<div style="margin-bottom: 12px;"><p style="font-size: 12px; font-weight: 600; margin: 0 0 8px 0; color: #24292e;">${labels.functions} (${functions.length})</p><div style="space-y: 4px;">`
     
     for (const func of functions.slice(0, 15)) {
-      html += `<div style="padding: 8px; background: #f6f8fa; border-radius: 4px; margin-bottom: 4px; border-left: 2px solid #0366d6;"><code style="font-size: 11px; color: #0366d6; font-weight: 500;">${escapeHtml(func.name)}</code><div style="font-size: 11px; color: #666; margin-top: 2px;">${escapeHtml(func.description)}</div></div>`
+      html += `<div style="padding: 6px; background: #f6f8fa; border-radius: 3px; margin-bottom: 4px; border-left: 2px solid #0366d6;"><code style="font-size: 11px; color: #0366d6; font-weight: 500;">${escapeHtml(func.name)}</code></div>`
     }
     
     html += `</div></div>`
   }
-  
-  html += `<div style="padding: 8px; background: #fff3cd; border-radius: 4px; border-left: 2px solid #ffc107;"><p style="margin: 0; font-size: 11px; color: #856404;">${labels.basicMode}</p></div>`
   
   return html
 }
