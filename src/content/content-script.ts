@@ -111,41 +111,24 @@ function makeDraggable(element: HTMLElement) {
 function openPanel(owner: string, repo: string) {
   console.log(`[GitMentor] openPanel called with ${owner}/${repo}`)
   
-  sendMessageWithRetry({ type: 'openTab', owner, repo }, (response) => {
-    console.log('[GitMentor] Got response:', response)
-    if (response?.success) {
-      showNotification(`✓ GitMentor opened for ${owner}/${repo}`)
-    } else {
-      showNotification(`Failed to open GitMentor`)
-    }
-  })
-}
-
-function sendMessageWithRetry(message: any, callback: (response: any) => void, retries: number = 3) {
-  try {
-    console.log('[GitMentor] Sending message (attempt):', message)
-    chrome.runtime.sendMessage(message, (response) => {
-      if (chrome.runtime.lastError) {
-        console.error('[GitMentor] Chrome error:', chrome.runtime.lastError)
-        if (retries > 0) {
-          console.log(`[GitMentor] Retrying... (${retries} attempts left)`)
-          setTimeout(() => sendMessageWithRetry(message, callback, retries - 1), 100)
-        } else {
-          callback({ success: false, error: chrome.runtime.lastError?.message })
-        }
-      } else {
-        callback(response)
-      }
-    })
-  } catch (error) {
-    console.error('[GitMentor] Exception:', error)
-    if (retries > 0) {
-      console.log(`[GitMentor] Retrying after exception... (${retries} attempts left)`)
-      setTimeout(() => sendMessageWithRetry(message, callback, retries - 1), 100)
-    } else {
-      callback({ success: false, error: String(error) })
-    }
-  }
+  // Get the extension ID from the URL
+  const extensionId = chrome.runtime.id
+  console.log('[GitMentor] Extension ID:', extensionId)
+  
+  // Build the full URL
+  const popupUrl = `chrome-extension://${extensionId}/src/popup/index.html?owner=${encodeURIComponent(owner)}&repo=${encodeURIComponent(repo)}`
+  console.log('[GitMentor] Opening URL:', popupUrl)
+  
+  // Open in new tab using a hidden link trick
+  const link = document.createElement('a')
+  link.href = popupUrl
+  link.target = '_blank'
+  link.style.display = 'none'
+  document.body.appendChild(link)
+  link.click()
+  document.body.removeChild(link)
+  
+  showNotification(`✓ GitMentor opened for ${owner}/${repo}`)
 }
 
 function showNotification(message: string) {
