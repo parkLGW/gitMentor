@@ -18,6 +18,12 @@
   "background": {
     "service_worker": "service-worker.js"
   },
+  "web_accessible_resources": [
+    {
+      "resources": ["src/popup/index.html"],
+      "matches": ["https://github.com/*"]
+    }
+  ],
   "content_scripts": [
     {
       "matches": ["https://github.com/*"],

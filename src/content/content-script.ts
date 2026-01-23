@@ -111,24 +111,138 @@ function makeDraggable(element: HTMLElement) {
 function openPanel(owner: string, repo: string) {
   console.log(`[GitMentor] openPanel called with ${owner}/${repo}`)
   
-  // Get the extension ID from the URL
+  // Check if panel already exists
+  const existing = document.getElementById('gitmentor-panel')
+  if (existing) {
+    existing.remove()
+    return
+  }
+  
+  // Get the extension ID
   const extensionId = chrome.runtime.id
-  console.log('[GitMentor] Extension ID:', extensionId)
-  
-  // Build the full URL
   const popupUrl = `chrome-extension://${extensionId}/src/popup/index.html?owner=${encodeURIComponent(owner)}&repo=${encodeURIComponent(repo)}`
-  console.log('[GitMentor] Opening URL:', popupUrl)
   
-  // Open in new tab using a hidden link trick
-  const link = document.createElement('a')
-  link.href = popupUrl
-  link.target = '_blank'
-  link.style.display = 'none'
-  document.body.appendChild(link)
-  link.click()
-  document.body.removeChild(link)
+  // Create floating panel
+  const panel = document.createElement('div')
+  panel.id = 'gitmentor-panel'
+  panel.style.cssText = `
+    position: fixed;
+    right: 20px;
+    top: 20px;
+    width: 500px;
+    height: 700px;
+    z-index: 9999;
+    background: white;
+    border-radius: 12px;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+    display: flex;
+    flex-direction: column;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    overflow: hidden;
+  `
+  
+  // Header
+  const header = document.createElement('div')
+  header.style.cssText = `
+    padding: 16px;
+    border-bottom: 1px solid #e1e4e8;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    background: #f6f8fa;
+    cursor: move;
+    flex-shrink: 0;
+  `
+  header.innerHTML = `
+    <div style="display: flex; align-items: center; gap: 8px;">
+      <span style="font-size: 20px;">📚</span>
+      <div>
+        <span style="font-weight: 600; font-size: 14px; color: #24292e;">GitMentor</span>
+        <div style="font-size: 11px; color: #666; margin-top: 2px;">${owner}/${repo}</div>
+      </div>
+    </div>
+    <button id="gitmentor-close" style="
+      background: none;
+      border: none;
+      font-size: 20px;
+      cursor: pointer;
+      color: #666;
+      padding: 0;
+      width: 24px;
+      height: 24px;
+    ">×</button>
+  `
+  
+  // Iframe
+  const iframe = document.createElement('iframe')
+  iframe.style.cssText = `
+    flex: 1;
+    border: none;
+    background: white;
+    width: 100%;
+  `
+  iframe.src = popupUrl
+  
+  panel.appendChild(header)
+  panel.appendChild(iframe)
+  document.body.appendChild(panel)
+  
+  // Close button
+  const closeBtn = header.querySelector('#gitmentor-close') as HTMLElement
+  closeBtn?.addEventListener('click', () => {
+    panel.remove()
+  })
+  
+  // Escape to close
+  const escapeHandler = (e: KeyboardEvent) => {
+    if (e.key === 'Escape') {
+      panel.remove()
+      document.removeEventListener('keydown', escapeHandler)
+    }
+  }
+  document.addEventListener('keydown', escapeHandler)
+  
+  // Draggable
+  makeDraggablePanel(header, panel)
   
   showNotification(`✓ GitMentor opened for ${owner}/${repo}`)
+}
+
+function makeDraggablePanel(header: HTMLElement, panel: HTMLElement) {
+  let pos1 = 0, pos2 = 0, pos3 = 0, pos4 = 0
+  header.onmousedown = dragMouseDown
+
+  function dragMouseDown(e: MouseEvent) {
+    e.preventDefault()
+    pos3 = e.clientX
+    pos4 = e.clientY
+    document.onmouseup = closeDragElement
+
+    function closeDragElement() {
+      document.onmouseup = null
+      document.onmousemove = null
+    }
+
+    document.onmousemove = elementDrag
+
+    function elementDrag(e: MouseEvent) {
+      e.preventDefault()
+      pos1 = pos3 - e.clientX
+      pos2 = pos4 - e.clientY
+      pos3 = e.clientX
+      pos4 = e.clientY
+
+      const newTop = Math.max(0, panel.offsetTop - pos2)
+      const newLeft = Math.max(0, panel.offsetLeft - pos1)
+      
+      if (newTop + panel.offsetHeight <= window.innerHeight) {
+        panel.style.top = newTop + 'px'
+      }
+      if (newLeft + panel.offsetWidth <= window.innerWidth) {
+        panel.style.left = newLeft + 'px'
+      }
+    }
+  }
 }
 
 function showNotification(message: string) {
