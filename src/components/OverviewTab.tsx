@@ -31,16 +31,46 @@ function OverviewTab({ repo, language }: OverviewTabProps) {
         const cacheKey = `gitmentor_ai_analysis_${repo.owner}/${repo.name}`
         const cached = localStorage.getItem(cacheKey)
         if (cached) {
-          setAiAnalysis(JSON.parse(cached))
+          try {
+            setAiAnalysis(JSON.parse(cached))
+            setLoading(false)
+            return // Use cached AI analysis
+          } catch (e) {
+            console.warn('Failed to parse cached analysis')
+          }
         }
         
-        // Fetch and analyze README
+        // Fetch README
+        let readme = ''
         try {
-          const readme = await getReadme(repo.owner, repo.name)
+          readme = await getReadme(repo.owner, repo.name)
           const analysis = analyzeReadme(readme)
           setOverview(analysis)
         } catch (readmeErr) {
           console.warn('Failed to fetch README, using basic info only', readmeErr)
+        }
+        
+        // Auto-trigger AI analysis if provider is configured
+        if (isConfigured()) {
+          try {
+            console.log('[GitMentor] Auto-running AI analysis...')
+            setAiLoading(true)
+            const projectInfo = `${info.name} (${info.language})`
+            const analysis = await AIAnalysisService.analyzeProject(
+              projectInfo,
+              readme,
+              language
+            )
+            setAiAnalysis(analysis)
+            
+            // Cache the result
+            localStorage.setItem(cacheKey, JSON.stringify(analysis))
+          } catch (aiErr) {
+            console.warn('[GitMentor] AI analysis failed, using basic analysis:', aiErr)
+            setAiError(aiErr instanceof Error ? aiErr.message : 'AI analysis failed')
+          } finally {
+            setAiLoading(false)
+          }
         }
       } catch (err) {
         console.error('Failed to load overview data:', err)
@@ -50,7 +80,7 @@ function OverviewTab({ repo, language }: OverviewTabProps) {
       }
     }
     loadData()
-  }, [repo])
+  }, [repo, language, isConfigured])
 
   const handleAIAnalysis = async () => {
     if (!isConfigured()) {
