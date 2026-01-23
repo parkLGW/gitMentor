@@ -65,11 +65,26 @@ function SettingsTab({ language }: SettingsTabProps) {
     { value: 'ollama', label: t.ollama, defaultModel: 'mistral', cost: '免费' },
   ]
 
+  // Load saved configuration on component mount
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem('gitmentor_llm_config')
+      if (saved) {
+        const config = JSON.parse(saved)
+        setSelectedProvider(config.provider || 'claude')
+        setModel(config.model || '')
+        setBaseUrl(config.baseUrl || '')
+      }
+    } catch (error) {
+      console.warn('Failed to load saved LLM config:', error)
+    }
+  }, [])
+
   useEffect(() => {
     // Reset form when provider changes
     const option = providerOptions.find(o => o.value === selectedProvider)
     setModel(option?.defaultModel || '')
-    setBaseUrl(selectedProvider === 'ollama' ? 'http://localhost:11434' : '')
+    setBaseUrl(selectedProvider === 'ollama' ? 'http://localhost:11434' : selectedProvider === 'lmstudio' ? 'http://localhost:1234' : '')
     setSaved(false)
     setTestResult(null)
   }, [selectedProvider])
@@ -167,7 +182,9 @@ function SettingsTab({ language }: SettingsTabProps) {
             className="w-full px-2 py-2 border border-gray-300 rounded text-sm"
           />
           <p className="text-xs text-gray-500 mt-1">
-            {language === 'zh' ? '你的API密钥不会被上传到服务器' : 'Your API key is not sent to any server'}
+            {language === 'zh' 
+              ? '⚠️ API密钥仅在本次会话中保存（每次打开需重新输入，这是为了安全考虑）' 
+              : '⚠️ API key is only saved for this session (you need to enter it again next time for security)'}
           </p>
         </div>
       )}
