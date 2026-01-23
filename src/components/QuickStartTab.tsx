@@ -260,80 +260,85 @@ function QuickStartTab({ repo, language }: QuickStartTabProps) {
         </div>
       )}
 
-      {/* Prerequisites */}
-      <div>
-        <p className="text-xs font-semibold text-gray-600 mb-2">✓ {texts.prerequisites}</p>
-        <div className="space-y-1">
-          {data.prerequisites.map((prereq: string, i: number) => (
-            <p key={i} className="text-xs text-gray-700 bg-gray-50 rounded px-2 py-1">
-              • {prereq}
-            </p>
-          ))}
-        </div>
-      </div>
+      {/* Only show fallback content if no AI data */}
+      {!aiData && (
+        <>
+          {/* Prerequisites */}
+          <div>
+            <p className="text-xs font-semibold text-gray-600 mb-2">✓ {texts.prerequisites}</p>
+            <div className="space-y-1">
+              {data.prerequisites.map((prereq: string, i: number) => (
+                <p key={i} className="text-xs text-gray-700 bg-gray-50 rounded px-2 py-1">
+                  • {prereq}
+                </p>
+              ))}
+            </div>
+          </div>
 
-      {/* Installation Steps */}
-      <div className="border-t border-gray-200 pt-3">
-        <p className="text-xs font-semibold text-gray-600 mb-2">📦 {texts.installation}</p>
-        <div className="space-y-2">
-          {data.installSteps.map((step: string, i: number) => (
-            <div key={i} className="bg-gray-900 rounded p-2">
-              <p className="text-xs text-gray-400 mb-1">
-                {texts.step} {i + 1}:
-              </p>
+          {/* Installation Steps */}
+          <div className="border-t border-gray-200 pt-3">
+            <p className="text-xs font-semibold text-gray-600 mb-2">📦 {texts.installation}</p>
+            <div className="space-y-2">
+              {data.installSteps.map((step: string, i: number) => (
+                <div key={i} className="bg-gray-900 rounded p-2">
+                  <p className="text-xs text-gray-400 mb-1">
+                    {texts.step} {i + 1}:
+                  </p>
+                  <code className="text-xs text-green-400 whitespace-pre-wrap break-words">
+                    {step}
+                  </code>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Basic Example */}
+          <div className="border-t border-gray-200 pt-3">
+            <p className="text-xs font-semibold text-gray-600 mb-2">💡 {texts.example}</p>
+            <div className="bg-gray-900 rounded p-2">
               <code className="text-xs text-green-400 whitespace-pre-wrap break-words">
-                {step}
+                {data.basicExample}
               </code>
             </div>
-          ))}
-        </div>
-      </div>
+          </div>
 
-      {/* Basic Example */}
-      <div className="border-t border-gray-200 pt-3">
-        <p className="text-xs font-semibold text-gray-600 mb-2">💡 {texts.example}</p>
-        <div className="bg-gray-900 rounded p-2">
-          <code className="text-xs text-green-400 whitespace-pre-wrap break-words">
-            {data.basicExample}
-          </code>
-        </div>
-      </div>
-
-      {/* Common Issues */}
-      <div className="border-t border-gray-200 pt-3">
-        <p className="text-xs font-semibold text-gray-600 mb-2">⚠️ {texts.commonIssues}</p>
-        <div className="space-y-2">
-          {data.commonIssues.map((issue: any, i: number) => (
-            <div key={i} className="border border-orange-200 rounded p-2">
-              <button
-                onClick={() => setExpandedIssue(expandedIssue === i ? null : i)}
-                className="w-full text-left flex items-center justify-between hover:bg-orange-50 p-1 rounded transition"
-              >
-                <p className="text-xs font-medium text-orange-900">
-                  {issue.error}
-                </p>
-                <span className="text-xs text-orange-700">
-                  {expandedIssue === i ? '−' : '+'}
-                </span>
-              </button>
-              {expandedIssue === i && (
-                <p className="text-xs text-gray-700 mt-2 bg-orange-50 p-1 rounded">
-                  ✓ {issue.solution}
-                </p>
-              )}
+          {/* Common Issues */}
+          <div className="border-t border-gray-200 pt-3">
+            <p className="text-xs font-semibold text-gray-600 mb-2">⚠️ {texts.commonIssues}</p>
+            <div className="space-y-2">
+              {data.commonIssues.map((issue: any, i: number) => (
+                <div key={i} className="border border-orange-200 rounded p-2">
+                  <button
+                    onClick={() => setExpandedIssue(expandedIssue === i ? null : i)}
+                    className="w-full text-left flex items-center justify-between hover:bg-orange-50 p-1 rounded transition"
+                  >
+                    <p className="text-xs font-medium text-orange-900">
+                      {issue.error}
+                    </p>
+                    <span className="text-xs text-orange-700">
+                      {expandedIssue === i ? '−' : '+'}
+                    </span>
+                  </button>
+                  {expandedIssue === i && (
+                    <p className="text-xs text-gray-700 mt-2 bg-orange-50 p-1 rounded">
+                      ✓ {issue.solution}
+                    </p>
+                  )}
+                </div>
+              ))}
             </div>
-          ))}
-        </div>
-      </div>
+          </div>
 
-      {/* Tip */}
-      <div className="bg-blue-50 border border-blue-200 rounded p-2 text-center">
-        <p className="text-xs text-blue-900">
-          {language === 'zh'
-            ? '💡 提示：详细文档请查看项目官方文档'
-            : '💡 Tip: Check project documentation for more details'}
-        </p>
-      </div>
+          {/* Tip */}
+          <div className="bg-blue-50 border border-blue-200 rounded p-2 text-center">
+            <p className="text-xs text-blue-900">
+              {language === 'zh'
+                ? '💡 提示：详细文档请查看项目官方文档'
+                : '💡 Tip: Check project documentation for more details'}
+            </p>
+          </div>
+        </>
+      )}
     </div>
   )
 }
