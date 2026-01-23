@@ -119,6 +119,10 @@ export async function getRepoTree(
   repo: string,
   path: string = ''
 ): Promise<any> {
+  const cacheKey = getCacheKey(owner, repo, `tree_${path || 'root'}`)
+  const cached = getFromCache<any>(cacheKey)
+  if (cached) return cached
+
   try {
     const response = await fetch(
       `https://api.github.com/repos/${owner}/${repo}/contents/${path}`
@@ -128,9 +132,90 @@ export async function getRepoTree(
       throw new Error(`API error: ${response.status}`)
     }
 
-    return await response.json()
+    const data = await response.json()
+    setCache(cacheKey, data)
+    return data
   } catch (error) {
     console.error('Failed to fetch repo tree:', error)
     throw error
+  }
+}
+
+export async function getPackageJson(owner: string, repo: string): Promise<any> {
+  const cacheKey = getCacheKey(owner, repo, 'package.json')
+  const cached = getFromCache<any>(cacheKey)
+  if (cached) return cached
+
+  try {
+    const response = await fetch(
+      `https://api.github.com/repos/${owner}/${repo}/contents/package.json`,
+      {
+        headers: {
+          'Accept': 'application/vnd.github.v3.raw',
+        },
+      }
+    )
+
+    if (!response.ok) {
+      return null
+    }
+
+    const content = await response.text()
+    const json = JSON.parse(content)
+    setCache(cacheKey, json)
+    return json
+  } catch (error) {
+    console.debug('Failed to fetch package.json:', error)
+    return null
+  }
+}
+
+export async function getLanguages(owner: string, repo: string): Promise<Record<string, number>> {
+  const cacheKey = getCacheKey(owner, repo, 'languages')
+  const cached = getFromCache<Record<string, number>>(cacheKey)
+  if (cached) return cached
+
+  try {
+    const response = await fetch(
+      `https://api.github.com/repos/${owner}/${repo}/languages`
+    )
+
+    if (!response.ok) {
+      return {}
+    }
+
+    const data = await response.json()
+    setCache(cacheKey, data)
+    return data
+  } catch (error) {
+    console.debug('Failed to fetch languages:', error)
+    return {}
+  }
+}
+
+export async function getProjectStructure(owner: string, repo: string, maxDepth: number = 2): Promise<string> {
+  try {
+    const contents = await getRepoTree(owner, repo, '')
+    
+    if (!Array.isArray(contents)) {
+      return ''
+    }
+
+    const structure = contents
+      .filter((item: any) => {
+        // Skip common non-essential directories
+        const name = item.name
+        return !['node_modules', '.git', 'dist', 'build', '.next', 'coverage'].includes(name)
+      })
+      .map((item: any) => {
+        const prefix = item.type === 'dir' ? '📁' : '📄'
+        return `${prefix} ${item.name}`
+      })
+      .join('\n')
+
+    return structure
+  } catch (error) {
+    console.debug('Failed to get project structure:', error)
+    return ''
   }
 }

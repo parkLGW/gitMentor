@@ -65,53 +65,61 @@ export interface SourceCodeMap {
 // Prompt Templates
 const PROMPTS = {
   projectAnalysis: (projectInfo: string, readme: string) => `
-You are an expert software engineer and technical writer. Analyze this GitHub project and provide structured insights.
+You are an expert software engineer. Analyze this ACTUAL GitHub project (not a template) and provide SPECIFIC, REAL insights.
 
-PROJECT INFORMATION:
+PROJECT DETAILS:
 ${projectInfo}
 
-README CONTENT:
+README:
 ${readme}
 
-Please analyze this project and provide a JSON response with the following structure:
-{
-  "coreValue": "A one-sentence description of what this project does and its main value",
-  "problems": ["Problem 1", "Problem 2", "Problem 3"],
-  "useCases": ["Use case 1", "Use case 2", "Use case 3"],
-  "difficulty": "beginner|intermediate|advanced (justify your choice)",
-  "targetAudience": "Who should learn this (frontend dev, backend dev, full-stack, etc.)",
-  "keyFeatures": ["Feature 1", "Feature 2", "Feature 3", "Feature 4", "Feature 5"]
-}
+IMPORTANT: Generate REAL analysis for THIS project, not generic placeholders.
+- Look at what the project ACTUALLY does based on the README
+- Identify REAL problems it solves
+- Describe REAL use cases from the context
+- Assess REAL difficulty based on the code/documentation
 
-Be concise and practical. Focus on what developers actually need to know.
+Return JSON:
+{
+  "coreValue": "Concise one-liner about what THIS project actually does",
+  "problems": ["Real problem 1", "Real problem 2", "Real problem 3"],
+  "useCases": ["Actual use case 1", "Actual use case 2", "Actual use case 3"],
+  "difficulty": "beginner|intermediate|advanced with reason",
+  "targetAudience": "Specific developer roles",
+  "keyFeatures": ["Real feature 1", "Real feature 2", "Real feature 3"]
+}
 `,
 
   projectAnalysisCN: (projectInfo: string, readme: string) => `
-你是一名资深软件工程师和技术文档专家。分析这个GitHub项目并提供结构化的见解。
+你是一名资深软件工程师。分析这个真实的GitHub项目（不是模板），提供具体、真实的见解。
 
-项目信息：
+项目详情：
 ${projectInfo}
 
-README 内容：
+README：
 ${readme}
 
-请分析这个项目，并以JSON格式返回以下结构：
-{
-  "coreValue": "用一句话描述这个项目做什么、有什么价值",
-  "problems": ["解决的问题1", "解决的问题2", "解决的问题3"],
-  "useCases": ["适用场景1", "适用场景2", "适用场景3"],
-  "difficulty": "beginner|intermediate|advanced (说明理由)",
-  "targetAudience": "适合什么人学习 (前端开发、后端开发、全栈、etc)",
-  "keyFeatures": ["关键特性1", "关键特性2", "关键特性3", "关键特性4", "关键特性5"]
-}
+重要：为这个项目生成真实分析，不是通用占位符。
+- 根据README看这个项目真正做什么
+- 找出它真正解决的问题
+- 描述实际应用场景
+- 根据代码/文档评估真实难度
 
-请保持简洁、实用。关注开发者真正需要了解的内容。
+返回JSON：
+{
+  "coreValue": "这个项目真正做什么，一句话总结",
+  "problems": ["真实问题1", "真实问题2", "真实问题3"],
+  "useCases": ["实际场景1", "实际场景2", "实际场景3"],
+  "difficulty": "beginner|intermediate|advanced 加上理由",
+  "targetAudience": "具体的开发者角色",
+  "keyFeatures": ["真实特性1", "真实特性2", "真实特性3"]
+}
 `,
 
   quickStart: (projectInfo: string, readme: string, packageJson?: string) => `
-You are a technical teacher. Create a "getting started" guide for this project that goes from 0 to 1.
+You are a technical teacher. Create a REAL "getting started" guide for THIS specific project (not generic).
 
-PROJECT INFO:
+PROJECT:
 ${projectInfo}
 
 README:
@@ -119,36 +127,36 @@ ${readme}
 
 ${packageJson ? `PACKAGE.JSON:\n${packageJson}` : ''}
 
-Create a JSON response with this structure:
+Create REAL setup steps based on the ACTUAL project:
+- What dependencies are ACTUALLY needed
+- Real installation commands for THIS project
+- Real configuration THIS project requires
+- Real working example with THIS project's API
+- Real common mistakes people make with THIS project
+
+JSON response:
 {
-  "prerequisites": ["Requirement 1", "Requirement 2", "..."],
+  "prerequisites": ["Node.js", "git", "...actual dependencies"],
   "steps": [
     {
-      "title": "Step 1: Install",
-      "description": "Clear explanation of what to do",
-      "commands": ["npm install xxx", "yarn add xxx"]
-    },
-    {
-      "title": "Step 2: Setup",
-      "description": "Configuration needed",
-      "commands": ["configuration commands if any"]
+      "title": "Step 1: Clone and Install",
+      "description": "Real steps for this project",
+      "commands": ["git clone...", "npm install", "...]
     }
   ],
   "firstExample": {
-    "title": "Your first working code",
-    "code": "const example = require('xxx');\\nexample.doSomething();",
-    "explanation": "Explain what this code does and why it works"
+    "title": "First working example",
+    "code": "Real code for THIS project, not placeholder",
+    "explanation": "Why this works with this project"
   },
   "commonMistakes": [
     {
-      "issue": "Common error message or problem",
-      "solution": "How to fix it"
+      "issue": "Real mistakes people make",
+      "solution": "How to fix for this project"
     }
   ],
-  "nextSteps": "What to learn next after getting it working"
+  "nextSteps": "Real next steps after setup"
 }
-
-Make it practical and actionable. Include actual commands users can copy-paste.
 `,
 
   quickStartCN: (projectInfo: string, readme: string, packageJson?: string) => `
@@ -190,9 +198,9 @@ ${packageJson ? `PACKAGE.JSON:\n${packageJson}` : ''}
 `,
 
   sourceMap: (projectInfo: string, fileTree: string, keyFiles?: string) => `
-You are a code architect. Analyze the project structure and create a learning roadmap.
+You are a code architect. Analyze THIS project's ACTUAL structure and create a REAL learning roadmap.
 
-PROJECT INFO:
+PROJECT:
 ${projectInfo}
 
 FILE STRUCTURE:
@@ -200,41 +208,45 @@ ${fileTree}
 
 ${keyFiles ? `KEY FILES:\n${keyFiles}` : ''}
 
-Return JSON with this structure:
+Create REAL learning path for THIS project (not generic):
+- Analyze ACTUAL file structure
+- Identify REAL entry points and key files
+- Create REAL learning phases based on THIS project's complexity
+- Explain REAL design patterns used
+
+JSON:
 {
-  "architecture": "One paragraph explaining the overall architecture and design patterns",
+  "architecture": "Real architecture explanation for THIS project",
   "files": [
     {
-      "path": "src/core/engine.js",
+      "path": "real/file/path.js",
       "priority": "critical|important|optional",
-      "description": "What this file does and why it matters"
+      "description": "What THIS file actually does"
     }
   ],
   "learningPhases": [
     {
       "phase": 1,
-      "title": "Understanding the Core",
-      "description": "What you'll learn in this phase",
-      "files": ["src/index.js", "src/core/engine.js"],
-      "objectives": ["Understand how initialization works", "Learn the main concepts"]
+      "title": "Start here - real entry point",
+      "description": "Real setup for this project",
+      "files": ["actual files for this project"],
+      "objectives": ["Real objectives for this project"]
     }
   ],
   "keyConcepts": [
     {
-      "term": "Event Loop",
-      "explanation": "Brief explanation of this concept in the context of this project"
+      "term": "Real concept from this project",
+      "explanation": "Real explanation in context"
     }
   ],
-  "architectureMermaid": "graph TD; A[Entry] --> B[Core]; B --> C[Utils];"
+  "architectureMermaid": "Real diagram for this architecture"
 }
-
-Focus on learning efficiency. Make it clear why you recommend reading files in a certain order.
 `,
 
   sourceMapCN: (projectInfo: string, fileTree: string, keyFiles?: string) => `
-你是代码架构师。分析项目结构并创建学习路线图。
+你是代码架构师。分析这个项目的真实结构，创建真实的学习路线。
 
-项目信息：
+项目：
 ${projectInfo}
 
 文件结构：
@@ -242,35 +254,39 @@ ${fileTree}
 
 ${keyFiles ? `关键文件：\n${keyFiles}` : ''}
 
-返回JSON格式：
+为这个项目创建真实学习路径（不是通用的）：
+- 分析真实的文件结构
+- 找出真实的入口点和关键文件
+- 根据这个项目的复杂度创建真实的学习阶段
+- 解释这个项目用的真实设计模式
+
+JSON：
 {
-  "architecture": "一段解释总体架构和设计模式的文字",
+  "architecture": "这个项目真实的架构说明",
   "files": [
     {
-      "path": "src/core/engine.js",
+      "path": "真实/文件/路径.js",
       "priority": "critical|important|optional",
-      "description": "这个文件做什么、为什么重要"
+      "description": "这个文件真正做什么"
     }
   ],
   "learningPhases": [
     {
       "phase": 1,
-      "title": "理解核心",
-      "description": "这个阶段你会学到什么",
-      "files": ["src/index.js", "src/core/engine.js"],
-      "objectives": ["理解初始化如何工作", "学习主要概念"]
+      "title": "从这里开始 - 真实入口点",
+      "description": "这个项目的真实配置",
+      "files": ["这个项目的真实文件"],
+      "objectives": ["这个项目的真实学习目标"]
     }
   ],
   "keyConcepts": [
     {
-      "term": "事件循环",
-      "explanation": "这个概念在这个项目中的简要说明"
+      "term": "这个项目的真实概念",
+      "explanation": "在项目背景下的真实解释"
     }
   ],
-  "architectureMermaid": "graph TD; A[入口] --> B[核心]; B --> C[工具];"
+  "architectureMermaid": "这个架构的真实图表"
 }
-
-专注于学习效率。说清楚为什么按这个顺序读文件。
 `,
 }
 
