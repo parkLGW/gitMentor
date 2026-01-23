@@ -1,4 +1,5 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
+import { getProjectStructure } from '@/services/github'
 import { generateSourceMap } from '@/services/analysis'
 import { AIAnalysisService, SourceCodeMap } from '@/services/ai-analysis'
 import { useLLM } from '@/hooks/useLLM'
@@ -14,8 +15,64 @@ function SourceMapTab({ repo, language }: SourceMapTabProps) {
   const [aiData, setAiData] = useState<SourceCodeMap | null>(null)
   const [aiLoading, setAiLoading] = useState(false)
   const [aiError, setAiError] = useState<string | null>(null)
+  const [loading, setLoading] = useState(true)
   const { isConfigured } = useLLM()
   const sourceMap = generateSourceMap(language)
+
+  useEffect(() => {
+    const loadData = async () => {
+      try {
+        // Try to load cached AI data first
+        const cacheKey = `gitmentor_sourcemap_${repo.owner}/${repo.name}`
+        const cached = localStorage.getItem(cacheKey)
+        if (cached) {
+          try {
+            setAiData(JSON.parse(cached))
+            setLoading(false)
+            return // Use cached AI analysis
+          } catch (e) {
+            console.warn('Failed to parse cached analysis')
+          }
+        }
+
+        // Get project structure for AI analysis
+        let fileTree = ''
+        try {
+          fileTree = await getProjectStructure(repo.owner, repo.name)
+          console.log('[GitMentor] Project structure loaded:', fileTree?.substring(0, 100))
+        } catch (err) {
+          console.warn('Failed to get project structure:', err)
+        }
+
+        // Auto-trigger AI analysis if provider is configured
+        if (isConfigured()) {
+          try {
+            console.log('[GitMentor] Auto-running Source Map AI analysis...')
+            setAiLoading(true)
+            const projectInfo = `${repo.name} project`
+            const guide = await AIAnalysisService.generateSourceMap(
+              projectInfo,
+              fileTree || 'placeholder',
+              undefined,
+              language
+            )
+            setAiData(guide)
+
+            // Cache the result
+            localStorage.setItem(cacheKey, JSON.stringify(guide))
+          } catch (aiErr) {
+            console.warn('[GitMentor] Source Map AI analysis failed:', aiErr)
+            setAiError(aiErr instanceof Error ? aiErr.message : 'AI analysis failed')
+          } finally {
+            setAiLoading(false)
+          }
+        }
+      } finally {
+        setLoading(false)
+      }
+    }
+    loadData()
+  }, [repo, language, isConfigured])
 
   const handleAIAnalysis = async () => {
     if (!isConfigured()) {
@@ -27,10 +84,17 @@ function SourceMapTab({ repo, language }: SourceMapTabProps) {
     setAiError(null)
 
     try {
+      let fileTree = ''
+      try {
+        fileTree = await getProjectStructure(repo.owner, repo.name)
+      } catch (err) {
+        console.warn('Failed to get project structure for manual analysis:', err)
+      }
+
       const projectInfo = `${repo.name} project`
       const guide = await AIAnalysisService.generateSourceMap(
         projectInfo,
-        'placeholder',
+        fileTree || 'placeholder',
         undefined,
         language
       )

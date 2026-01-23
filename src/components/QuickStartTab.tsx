@@ -27,11 +27,41 @@ function QuickStartTab({ repo, language }: QuickStartTabProps) {
         const quickStart = generateQuickStart(readme, language)
         setData(quickStart)
 
-        // Try to load cached AI data
+        // Try to load cached AI data first
         const cacheKey = `gitmentor_quickstart_${repo.owner}/${repo.name}`
         const cached = localStorage.getItem(cacheKey)
         if (cached) {
-          setAiData(JSON.parse(cached))
+          try {
+            setAiData(JSON.parse(cached))
+            setLoading(false)
+            return // Use cached AI analysis
+          } catch (e) {
+            console.warn('Failed to parse cached analysis')
+          }
+        }
+
+        // Auto-trigger AI analysis if provider is configured
+        if (isConfigured()) {
+          try {
+            console.log('[GitMentor] Auto-running Quick Start AI analysis...')
+            setAiLoading(true)
+            const projectInfo = `${repo.name} project`
+            const guide = await AIAnalysisService.generateQuickStart(
+              projectInfo,
+              readme,
+              undefined,
+              language
+            )
+            setAiData(guide)
+
+            // Cache the result
+            localStorage.setItem(cacheKey, JSON.stringify(guide))
+          } catch (aiErr) {
+            console.warn('[GitMentor] Quick Start AI analysis failed:', aiErr)
+            setAiError(aiErr instanceof Error ? aiErr.message : 'AI analysis failed')
+          } finally {
+            setAiLoading(false)
+          }
         }
       } catch (err) {
         console.error('Failed to load quick start data:', err)
@@ -40,7 +70,7 @@ function QuickStartTab({ repo, language }: QuickStartTabProps) {
       }
     }
     loadData()
-  }, [repo, language])
+  }, [repo, language, isConfigured])
 
   const handleAIAnalysis = async () => {
     if (!isConfigured()) {
