@@ -110,6 +110,13 @@ function SourceMapTab({ repo, language }: SourceMapTabProps) {
     }
   }
 
+  if (loading || aiLoading) {
+    return <div className="text-center text-gray-500 py-4 space-y-2">
+      <div>{language === 'zh' ? '✨ 生成源码地图中...' : '✨ Generating Source Map...'}</div>
+      <div className="text-xs text-gray-400">{language === 'zh' ? '这可能需要几秒钟' : 'This may take a few seconds'}</div>
+    </div>
+  }
+
   const labels = {
     zh: {
       architecture: '整体架构',

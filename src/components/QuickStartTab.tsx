@@ -102,11 +102,14 @@ function QuickStartTab({ repo, language }: QuickStartTabProps) {
     }
   }
 
-  if (loading) {
-    return <div className="text-center text-gray-500 py-4">{language === 'zh' ? '加载中...' : 'Loading...'}</div>
+  if (loading || aiLoading) {
+    return <div className="text-center text-gray-500 py-4 space-y-2">
+      <div>{language === 'zh' ? '✨ 生成快速上手指南中...' : '✨ Generating Quick Start Guide...'}</div>
+      <div className="text-xs text-gray-400">{language === 'zh' ? '这可能需要几秒钟' : 'This may take a few seconds'}</div>
+    </div>
   }
 
-  if (!data) {
+  if (!data && !aiData) {
     return <div className="text-center text-gray-500 py-4">{language === 'zh' ? '无法加载数据' : 'Failed to load data'}</div>
   }
 
