@@ -145,9 +145,21 @@ function SettingsTab({ language }: SettingsTabProps) {
       
       await llmManager.setCurrentProvider(selectedProvider, config)
       
-      console.log('[SettingsTab] Config saved successfully')
-      setSaved(true)
-      setTimeout(() => setSaved(false), 3000)
+      // Verify config was saved
+      const result = await new Promise<any>((resolve) => {
+        chrome.storage.local.get('gitmentor_llm_config', (data) => {
+          resolve(data)
+        })
+      })
+      
+      if (result.gitmentor_llm_config && result.gitmentor_llm_config.provider === selectedProvider) {
+        console.log('[SettingsTab] Config verified in storage:', result.gitmentor_llm_config)
+        setSaved(true)
+        setTimeout(() => setSaved(false), 3000)
+      } else {
+        console.error('[SettingsTab] Config NOT found in storage after save!')
+        alert(language === 'zh' ? '配置保存失败，请重试' : 'Config save verification failed, please try again')
+      }
     } catch (error) {
       console.error('[SettingsTab] Save failed:', error)
       alert(`${language === 'zh' ? '保存失败' : 'Save failed'}: ${error}`)

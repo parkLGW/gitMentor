@@ -42,6 +42,7 @@ async function analyzeFile(fileName, fileContent, forceDeepAnalysis = false) {
     }
     
     // Try AI analysis first (or force if requested)
+    let aiAnalysisError = null
     try {
       console.log('[GitMentor] Attempting AI analysis...', forceDeepAnalysis ? '(forced)' : '')
       const aiResult = await performAIAnalysis(fileName, fileContent, language)
@@ -49,20 +50,21 @@ async function analyzeFile(fileName, fileContent, forceDeepAnalysis = false) {
         console.log('[GitMentor] AI analysis succeeded!')
         return aiResult
       }
-      console.log('[GitMentor] AI analysis returned null')
+      console.log('[GitMentor] AI analysis returned null (no config)')
       
-      // If deep analysis was forced and AI failed, show error
+      // If deep analysis was forced and AI returned null, show error
       if (forceDeepAnalysis) {
-        throw new Error('AI analysis not available. Please configure an AI provider in Settings.')
+        throw new Error('AI provider not configured. Please set up an API key in Settings.')
       }
     } catch (aiError) {
       console.warn('[GitMentor] AI analysis failed:', aiError)
+      aiAnalysisError = aiError
       
       // If deep analysis was forced, show the error
       if (forceDeepAnalysis) {
         throw aiError
       }
-      console.log('[GitMentor] Falling back to basic analysis')
+      console.log('[GitMentor] Falling back to basic analysis due to:', aiError instanceof Error ? aiError.message : aiError)
     }
     
     // Fallback to basic analysis (only if not forcing deep)
@@ -104,16 +106,22 @@ async function performAIAnalysis(fileName, fileContent, language) {
   
   console.log('[GitMentor] Config loaded:', config)
   
-  if (!config || !config.apiKey || !config.provider) {
-    console.log('[GitMentor] No AI provider configured - missing:', {
-      hasConfig: !!config,
-      hasApiKey: config?.apiKey ? 'yes' : 'no',
-      hasProvider: config?.provider ? 'yes' : 'no',
-    })
+  if (!config) {
+    console.log('[GitMentor] No config in storage at all')
     return null
   }
   
-  console.log('[GitMentor] Using provider:', config.provider)
+  if (!config.apiKey) {
+    console.log('[GitMentor] Config exists but no apiKey:', config)
+    return null
+  }
+  
+  if (!config.provider) {
+    console.log('[GitMentor] Config exists but no provider:', config)
+    return null
+  }
+  
+  console.log('[GitMentor] Using provider:', config.provider, 'with model:', config.model)
   
   // Prepare the AI prompt
   const prompt = language === 'zh' 
@@ -259,7 +267,11 @@ JSON:
   } catch (error) {
     console.error('[GitMentor] AI API error:', error)
     console.error('[GitMentor] Error stack:', error.stack)
-    return null
+    console.error('[GitMentor] Full error:', error.toString())
+    
+    // Return error message to user instead of null
+    const errorMsg = error instanceof Error ? error.message : String(error)
+    throw new Error(`AI Analysis Failed: ${errorMsg}`)
   }
 }
 
@@ -311,6 +323,7 @@ async function callOpenAI(prompt, apiKey, model) {
 async function callClaude(prompt, apiKey, model) {
   try {
     console.log('[GitMentor] Claude: Calling API with model:', model || 'claude-3-sonnet-20240229')
+    console.log('[GitMentor] Claude: API Key starts with:', apiKey.substring(0, 10) + '...')
     
     const controller = new AbortController()
     const timeout = setTimeout(() => controller.abort(), 30000) // 30 second timeout
@@ -335,8 +348,20 @@ async function callClaude(prompt, apiKey, model) {
     
     if (!response.ok) {
       const errorText = await response.text()
-      console.error('[GitMentor] Claude API error:', response.status, errorText.substring(0, 500))
-      throw new Error(`Claude API error: ${response.status} - ${errorText.substring(0, 200)}`)
+      console.error('[GitMentor] Claude API error:', response.status)
+      console.error('[GitMentor] Claude error response:', errorText.substring(0, 1000))
+      
+      // Parse error message
+      let errorMsg = `HTTP ${response.status}`
+      try {
+        const errorJson = JSON.parse(errorText)
+        if (errorJson.error?.message) errorMsg = errorJson.error.message
+        else if (errorJson.message) errorMsg = errorJson.message
+      } catch (e) {
+        errorMsg = errorText.substring(0, 200)
+      }
+      
+      throw new Error(`Claude: ${errorMsg}`)
     }
     
     const data = await response.json()
@@ -356,6 +381,7 @@ async function callClaude(prompt, apiKey, model) {
 async function callDeepSeek(prompt, apiKey, model) {
   try {
     console.log('[GitMentor] DeepSeek: Calling API with model:', model || 'deepseek-chat')
+    console.log('[GitMentor] DeepSeek: API Key starts with:', apiKey.substring(0, 10) + '...')
     
     const controller = new AbortController()
     const timeout = setTimeout(() => controller.abort(), 30000) // 30 second timeout
@@ -380,8 +406,21 @@ async function callDeepSeek(prompt, apiKey, model) {
     
     if (!response.ok) {
       const errorText = await response.text()
-      console.error('[GitMentor] DeepSeek API error:', response.status, errorText.substring(0, 500))
-      throw new Error(`DeepSeek API error: ${response.status} - ${errorText.substring(0, 200)}`)
+      console.error('[GitMentor] DeepSeek API error:', response.status)
+      console.error('[GitMentor] DeepSeek error response:', errorText.substring(0, 1000))
+      
+      // Parse error message
+      let errorMsg = `HTTP ${response.status}`
+      try {
+        const errorJson = JSON.parse(errorText)
+        if (errorJson.detail) errorMsg = errorJson.detail
+        else if (errorJson.message) errorMsg = errorJson.message
+        else if (errorJson.error) errorMsg = errorJson.error
+      } catch (e) {
+        errorMsg = errorText.substring(0, 200)
+      }
+      
+      throw new Error(`DeepSeek: ${errorMsg}`)
     }
     
     const data = await response.json()
