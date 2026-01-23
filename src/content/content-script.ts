@@ -111,101 +111,113 @@ function makeDraggable(element: HTMLElement) {
 function openPanel(owner: string, repo: string) {
   console.log(`[GitMentor] openPanel called with ${owner}/${repo}`)
   
-  // Check if panel already exists
-  const existing = document.getElementById('gitmentor-panel')
-  if (existing) {
-    existing.remove()
-    return
-  }
-  
-  // Get the extension ID
-  const extensionId = chrome.runtime.id
-  const popupUrl = `chrome-extension://${extensionId}/src/popup/index.html?owner=${encodeURIComponent(owner)}&repo=${encodeURIComponent(repo)}`
-  
-  // Create floating panel
-  const panel = document.createElement('div')
-  panel.id = 'gitmentor-panel'
-  panel.style.cssText = `
-    position: fixed;
-    right: 20px;
-    top: 20px;
-    width: 500px;
-    height: 700px;
-    z-index: 9999;
-    background: white;
-    border-radius: 12px;
-    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
-    display: flex;
-    flex-direction: column;
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
-    overflow: hidden;
-  `
-  
-  // Header
-  const header = document.createElement('div')
-  header.style.cssText = `
-    padding: 16px;
-    border-bottom: 1px solid #e1e4e8;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    background: #f6f8fa;
-    cursor: move;
-    flex-shrink: 0;
-  `
-  header.innerHTML = `
-    <div style="display: flex; align-items: center; gap: 8px;">
-      <span style="font-size: 20px;">📚</span>
-      <div>
-        <span style="font-weight: 600; font-size: 14px; color: #24292e;">GitMentor</span>
-        <div style="font-size: 11px; color: #666; margin-top: 2px;">${owner}/${repo}</div>
-      </div>
-    </div>
-    <button id="gitmentor-close" style="
-      background: none;
-      border: none;
-      font-size: 20px;
-      cursor: pointer;
-      color: #666;
-      padding: 0;
-      width: 24px;
-      height: 24px;
-    ">×</button>
-  `
-  
-  // Iframe
-  const iframe = document.createElement('iframe')
-  iframe.style.cssText = `
-    flex: 1;
-    border: none;
-    background: white;
-    width: 100%;
-  `
-  iframe.src = popupUrl
-  
-  panel.appendChild(header)
-  panel.appendChild(iframe)
-  document.body.appendChild(panel)
-  
-  // Close button
-  const closeBtn = header.querySelector('#gitmentor-close') as HTMLElement
-  closeBtn?.addEventListener('click', () => {
-    panel.remove()
-  })
-  
-  // Escape to close
-  const escapeHandler = (e: KeyboardEvent) => {
-    if (e.key === 'Escape') {
-      panel.remove()
-      document.removeEventListener('keydown', escapeHandler)
+  try {
+    // Check if panel already exists
+    const existing = document.getElementById('gitmentor-panel')
+    if (existing) {
+      existing.remove()
+      return
     }
+    
+    // Get the extension ID
+    if (!chrome?.runtime?.id) {
+      console.error('[GitMentor] chrome.runtime.id not available')
+      showNotification('Error: Extension context unavailable')
+      return
+    }
+    
+    const extensionId = chrome.runtime.id
+    const popupUrl = `chrome-extension://${extensionId}/src/popup/index.html?owner=${encodeURIComponent(owner)}&repo=${encodeURIComponent(repo)}`
+    console.log('[GitMentor] Panel URL:', popupUrl)
+    
+    // Create floating panel
+    const panel = document.createElement('div')
+    panel.id = 'gitmentor-panel'
+    panel.style.cssText = `
+      position: fixed;
+      right: 20px;
+      top: 20px;
+      width: 500px;
+      height: 700px;
+      z-index: 9999;
+      background: white;
+      border-radius: 12px;
+      box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+      display: flex;
+      flex-direction: column;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+      overflow: hidden;
+    `
+    
+    // Header
+    const header = document.createElement('div')
+    header.style.cssText = `
+      padding: 16px;
+      border-bottom: 1px solid #e1e4e8;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      background: #f6f8fa;
+      cursor: move;
+      flex-shrink: 0;
+    `
+    header.innerHTML = `
+      <div style="display: flex; align-items: center; gap: 8px;">
+        <span style="font-size: 20px;">📚</span>
+        <div>
+          <span style="font-weight: 600; font-size: 14px; color: #24292e;">GitMentor</span>
+          <div style="font-size: 11px; color: #666; margin-top: 2px;">${owner}/${repo}</div>
+        </div>
+      </div>
+      <button id="gitmentor-close" style="
+        background: none;
+        border: none;
+        font-size: 20px;
+        cursor: pointer;
+        color: #666;
+        padding: 0;
+        width: 24px;
+        height: 24px;
+      ">×</button>
+    `
+    
+    // Iframe
+    const iframe = document.createElement('iframe')
+    iframe.style.cssText = `
+      flex: 1;
+      border: none;
+      background: white;
+      width: 100%;
+    `
+    iframe.src = popupUrl
+    
+    panel.appendChild(header)
+    panel.appendChild(iframe)
+    document.body.appendChild(panel)
+    
+    // Close button
+    const closeBtn = header.querySelector('#gitmentor-close') as HTMLElement
+    closeBtn?.addEventListener('click', () => {
+      panel.remove()
+    })
+    
+    // Escape to close
+    const escapeHandler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        panel.remove()
+        document.removeEventListener('keydown', escapeHandler)
+      }
+    }
+    document.addEventListener('keydown', escapeHandler)
+    
+    // Draggable
+    makeDraggablePanel(header, panel)
+    
+    showNotification(`✓ GitMentor opened for ${owner}/${repo}`)
+  } catch (error) {
+    console.error('[GitMentor] Error creating panel:', error)
+    showNotification(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`)
   }
-  document.addEventListener('keydown', escapeHandler)
-  
-  // Draggable
-  makeDraggablePanel(header, panel)
-  
-  showNotification(`✓ GitMentor opened for ${owner}/${repo}`)
 }
 
 function makeDraggablePanel(header: HTMLElement, panel: HTMLElement) {
