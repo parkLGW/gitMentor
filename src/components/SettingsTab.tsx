@@ -56,10 +56,13 @@ function SettingsTab({ language }: SettingsTabProps) {
 
   const t = labels[language]
 
-  const providerOptions: { value: LLMProviderType; label: string; defaultModel: string }[] = [
-    { value: 'claude', label: t.claude, defaultModel: 'claude-3-sonnet-20240229' },
-    { value: 'openai', label: t.openai, defaultModel: 'gpt-4' },
-    { value: 'ollama', label: t.ollama, defaultModel: 'mistral' },
+  const providerOptions: { value: LLMProviderType; label: string; defaultModel: string; cost?: string }[] = [
+    { value: 'claude', label: t.claude, defaultModel: 'claude-3-sonnet-20240229', cost: '¥' },
+    { value: 'openai', label: t.openai, defaultModel: 'gpt-4', cost: '¥¥' },
+    { value: 'deepseek', label: 'DeepSeek', defaultModel: 'deepseek-chat', cost: '¥ (便宜!)' },
+    { value: 'groq', label: 'Groq', defaultModel: 'mixtral-8x7b-32768', cost: '免费!' },
+    { value: 'lmstudio', label: 'LM Studio', defaultModel: 'local-model', cost: '免费' },
+    { value: 'ollama', label: t.ollama, defaultModel: 'mistral', cost: '免费' },
   ]
 
   useEffect(() => {
@@ -72,7 +75,7 @@ function SettingsTab({ language }: SettingsTabProps) {
   }, [selectedProvider])
 
   const handleTest = async () => {
-    if (!apiKey && selectedProvider !== 'ollama') {
+    if (!apiKey && !['ollama', 'lmstudio'].includes(selectedProvider)) {
       alert(language === 'zh' ? '请输入API密钥' : 'Please enter API key')
       return
     }
@@ -96,7 +99,7 @@ function SettingsTab({ language }: SettingsTabProps) {
   }
 
   const handleSave = async () => {
-    if (!apiKey && selectedProvider !== 'ollama') {
+    if (!apiKey && !['ollama', 'lmstudio'].includes(selectedProvider)) {
       alert(language === 'zh' ? '请输入API密钥' : 'Please enter API key')
       return
     }
@@ -144,14 +147,14 @@ function SettingsTab({ language }: SettingsTabProps) {
         >
           {providerOptions.map((opt) => (
             <option key={opt.value} value={opt.value}>
-              {opt.label}
+              {opt.label} {opt.cost ? `(${opt.cost})` : ''}
             </option>
           ))}
         </select>
       </div>
 
       {/* API Key Input */}
-      {selectedProvider !== 'ollama' && (
+      {!['ollama', 'lmstudio'].includes(selectedProvider) && (
         <div>
           <label className="text-xs font-semibold text-gray-600 block mb-2">
             {t.apiKey}
@@ -183,8 +186,8 @@ function SettingsTab({ language }: SettingsTabProps) {
         />
       </div>
 
-      {/* Base URL for Ollama */}
-      {selectedProvider === 'ollama' && (
+      {/* Base URL for Local Services */}
+      {['ollama', 'lmstudio'].includes(selectedProvider) && (
         <div>
           <label className="text-xs font-semibold text-gray-600 block mb-2">
             {t.baseUrl}
@@ -193,9 +196,14 @@ function SettingsTab({ language }: SettingsTabProps) {
             type="text"
             value={baseUrl}
             onChange={(e) => setBaseUrl(e.target.value)}
-            placeholder="http://localhost:11434"
+            placeholder={selectedProvider === 'ollama' ? 'http://localhost:11434' : 'http://localhost:1234'}
             className="w-full px-2 py-2 border border-gray-300 rounded text-sm"
           />
+          <p className="text-xs text-gray-500 mt-1">
+            {selectedProvider === 'ollama' 
+              ? 'Ollama default: http://localhost:11434'
+              : 'LM Studio default: http://localhost:1234'}
+          </p>
         </div>
       )}
 
@@ -243,7 +251,10 @@ function SettingsTab({ language }: SettingsTabProps) {
         <ul className="space-y-1">
           <li>• Claude: <a href="https://console.anthropic.com" target="_blank" rel="noreferrer" className="text-blue-600 hover:underline">console.anthropic.com</a></li>
           <li>• OpenAI: <a href="https://platform.openai.com" target="_blank" rel="noreferrer" className="text-blue-600 hover:underline">platform.openai.com</a></li>
-          <li>• Ollama: <a href="https://ollama.ai" target="_blank" rel="noreferrer" className="text-blue-600 hover:underline">ollama.ai</a></li>
+          <li>• DeepSeek 🔥: <a href="https://platform.deepseek.com" target="_blank" rel="noreferrer" className="text-blue-600 hover:underline">platform.deepseek.com</a></li>
+          <li>• Groq 🚀: <a href="https://console.groq.com" target="_blank" rel="noreferrer" className="text-blue-600 hover:underline">console.groq.com</a></li>
+          <li>• LM Studio: <a href="https://lmstudio.ai" target="_blank" rel="noreferrer" className="text-blue-600 hover:underline">lmstudio.ai</a> ({language === 'zh' ? '本地' : 'Local'})</li>
+          <li>• Ollama: <a href="https://ollama.ai" target="_blank" rel="noreferrer" className="text-blue-600 hover:underline">ollama.ai</a> ({language === 'zh' ? '本地' : 'Local'})</li>
         </ul>
       </div>
     </div>
