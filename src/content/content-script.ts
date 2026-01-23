@@ -22,9 +22,64 @@ function parseFileUrl(): FileInfo | null {
   return { owner, repo, branch, path }
 }
 
+function isCodeFile(filePath: string): boolean {
+  // List of code file extensions
+  const codeExtensions = [
+    'js', 'ts', 'tsx', 'jsx',
+    'py', 'pyc', 'pyw',
+    'java', 'class', 'jar',
+    'cs', 'cpp', 'c', 'h', 'hpp',
+    'go', 'rs', 'rb', 'php',
+    'swift', 'kt', 'scala', 'groovy',
+    'sql', 'sh', 'bash', 'zsh',
+    'html', 'htm', 'xml', 'css', 'scss', 'less',
+    'json', 'yaml', 'yml', 'toml', 'ini', 'conf',
+    'vue', 'svelte',
+    'r', 'R',
+    'pl', 'lua',
+  ]
+  
+  // List of non-code file extensions to skip
+  const nonCodeExtensions = [
+    'md', 'markdown', 'txt', 'text',
+    'rst', 'adoc', 'asciidoc',
+    'pdf', 'doc', 'docx', 'odt',
+    'xls', 'xlsx', 'csv',
+    'png', 'jpg', 'jpeg', 'gif', 'svg', 'webp',
+    'mp3', 'mp4', 'webm', 'mov',
+    'zip', 'tar', 'gz', 'rar',
+  ]
+  
+  // Get file extension
+  const match = filePath.match(/\.([^.]+)$/)
+  if (!match) return true // If no extension, assume it's code
+  
+  const ext = match[1].toLowerCase()
+  
+  // If explicitly a non-code file, skip
+  if (nonCodeExtensions.includes(ext)) {
+    console.log('[GitMentor] Skipping non-code file:', filePath, 'extension:', ext)
+    return false
+  }
+  
+  // If it's a known code extension, show sidebar
+  if (codeExtensions.includes(ext)) {
+    return true
+  }
+  
+  // For unknown extensions, be conservative and show sidebar
+  return true
+}
+
 function injectFileSidebar() {
   const fileInfo = parseFileUrl()
   if (!fileInfo) return
+  
+  // Check if this is a code file
+  if (!isCodeFile(fileInfo.path)) {
+    console.log('[GitMentor] Not a code file, skipping sidebar injection:', fileInfo.path)
+    return
+  }
   
   console.log('[GitMentor] Detected code file:', fileInfo.path)
   
