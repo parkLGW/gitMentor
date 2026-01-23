@@ -206,16 +206,16 @@ function SourceMapTab({ repo, language }: SourceMapTabProps) {
 
           {/* Architecture */}
           <div>
-            <p className="text-xs font-semibold text-gray-900 mb-1">
-              {language === 'zh' ? '架构' : 'Architecture'}
+            <p className="text-xs font-bold text-gray-900 mb-2">
+              {language === 'zh' ? '架构概览' : 'Architecture'}
             </p>
-            <p className="text-xs text-gray-700 leading-relaxed">{aiData.architecture}</p>
+            <p className="text-sm text-gray-700 leading-relaxed">{aiData.architecture}</p>
           </div>
 
           {/* Key Concepts */}
           {aiData.keyConcepts && aiData.keyConcepts.length > 0 && (
-            <div className="border-t border-gray-200 pt-2">
-              <p className="text-xs font-semibold text-gray-900 mb-1">
+            <div className="border-t border-gray-200 pt-3">
+              <p className="text-xs font-bold text-gray-900 mb-2">
                 {language === 'zh' ? '关键概念' : 'Key Concepts'}
               </p>
               <div className="space-y-1">
@@ -231,8 +231,8 @@ function SourceMapTab({ repo, language }: SourceMapTabProps) {
 
           {/* Files Map */}
           {aiData.files && aiData.files.length > 0 && (
-            <div className="border-t border-gray-200 pt-2">
-              <p className="text-xs font-semibold text-gray-900 mb-1">
+            <div className="border-t border-gray-200 pt-3">
+              <p className="text-xs font-bold text-gray-900 mb-2">
                 {language === 'zh' ? '关键文件' : 'Key Files'}
               </p>
               <div className="space-y-1">

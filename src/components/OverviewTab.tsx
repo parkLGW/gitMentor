@@ -198,16 +198,16 @@ function OverviewTab({ repo, language }: OverviewTabProps) {
           </div>
 
           {/* Core Value */}
-          <div className="space-y-1">
-            <p className="text-xs font-semibold text-gray-900">{language === 'zh' ? '核心价值' : 'Core Value'}</p>
-            <p className="text-xs text-gray-700 leading-relaxed">{aiAnalysis.coreValue}</p>
+          <div className="space-y-1.5">
+            <p className="text-sm font-bold text-gray-900">{language === 'zh' ? '核心价值' : 'Core Value'}</p>
+            <p className="text-sm text-gray-700 leading-relaxed">{aiAnalysis.coreValue}</p>
           </div>
 
           {/* Difficulty & Audience */}
-          <div className="grid grid-cols-2 gap-2 border-t border-gray-200 pt-2">
+          <div className="grid grid-cols-2 gap-3 border-t border-gray-200 pt-3">
             <div>
-              <p className="text-xs font-semibold text-gray-900">{language === 'zh' ? '难度' : 'Difficulty'}</p>
-              <p className="text-xs text-gray-700 mt-0.5">
+              <p className="text-xs font-bold text-gray-900 mb-1.5">{language === 'zh' ? '难度' : 'Difficulty'}</p>
+              <p className="text-sm text-gray-700">
                 {aiAnalysis.difficulty === 'beginner'
                   ? language === 'zh'
                     ? '初级'
@@ -222,16 +222,16 @@ function OverviewTab({ repo, language }: OverviewTabProps) {
               </p>
             </div>
             <div>
-              <p className="text-xs font-semibold text-gray-900">{language === 'zh' ? '面向群体' : 'For'}</p>
-              <p className="text-xs text-gray-700 mt-0.5">{aiAnalysis.targetAudience}</p>
+              <p className="text-xs font-bold text-gray-900 mb-1.5">{language === 'zh' ? '面向群体' : 'For'}</p>
+              <p className="text-sm text-gray-700">{aiAnalysis.targetAudience}</p>
             </div>
           </div>
 
           {/* Problems */}
           {aiAnalysis.problems.length > 0 && (
-            <div className="border-t border-gray-200 pt-2">
-              <p className="text-xs font-semibold text-gray-900 mb-1">{language === 'zh' ? '解决问题' : 'Problems'}</p>
-              <ul className="text-xs text-gray-700 space-y-0.5 ml-4">
+            <div className="border-t border-gray-200 pt-3">
+              <p className="text-xs font-bold text-gray-900 mb-2">{language === 'zh' ? '解决的问题' : 'Problems'}</p>
+              <ul className="text-sm text-gray-700 space-y-1 ml-4">
                 {aiAnalysis.problems.map((p: string, i: number) => (
                   <li key={i} className="list-disc">
                     {p}
@@ -243,9 +243,9 @@ function OverviewTab({ repo, language }: OverviewTabProps) {
 
           {/* Use Cases */}
           {aiAnalysis.useCases.length > 0 && (
-            <div className="border-t border-gray-200 pt-2">
-              <p className="text-xs font-semibold text-gray-900 mb-1">{language === 'zh' ? '应用场景' : 'Use Cases'}</p>
-              <ul className="text-xs text-gray-700 space-y-0.5 ml-4">
+            <div className="border-t border-gray-200 pt-3">
+              <p className="text-xs font-bold text-gray-900 mb-2">{language === 'zh' ? '应用场景' : 'Use Cases'}</p>
+              <ul className="text-sm text-gray-700 space-y-1 ml-4">
                 {aiAnalysis.useCases.map((u: string, i: number) => (
                   <li key={i} className="list-disc">
                     {u}
@@ -257,11 +257,11 @@ function OverviewTab({ repo, language }: OverviewTabProps) {
 
           {/* Key Features */}
           {aiAnalysis.keyFeatures.length > 0 && (
-            <div className="border-t border-gray-200 pt-2">
-              <p className="text-xs font-semibold text-gray-900 mb-1">{language === 'zh' ? '主要功能' : 'Features'}</p>
-              <div className="flex flex-wrap gap-1">
+            <div className="border-t border-gray-200 pt-3">
+              <p className="text-xs font-bold text-gray-900 mb-2">{language === 'zh' ? '主要功能' : 'Features'}</p>
+              <div className="flex flex-wrap gap-2">
                 {aiAnalysis.keyFeatures.map((f, i) => (
-                  <span key={i} className="bg-gray-200 text-gray-900 text-xs px-2 py-0.5 rounded">
+                  <span key={i} className="bg-blue-100 text-blue-900 text-xs px-2.5 py-1 rounded font-medium">
                     {f}
                   </span>
                 ))}

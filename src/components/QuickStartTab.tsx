@@ -191,10 +191,10 @@ function QuickStartTab({ repo, language }: QuickStartTabProps) {
           {/* Prerequisites */}
           {aiData.prerequisites && aiData.prerequisites.length > 0 && (
             <div>
-              <p className="text-xs font-semibold text-gray-900 mb-1">
+              <p className="text-xs font-bold text-gray-900 mb-2">
                 {language === 'zh' ? '前置条件' : 'Prerequisites'}
               </p>
-              <ul className="text-xs text-gray-700 space-y-0.5 ml-4">
+              <ul className="text-sm text-gray-700 space-y-1 ml-4">
                 {aiData.prerequisites.map((pre, i) => (
                   <li key={i} className="list-disc">
                     {pre}
@@ -226,12 +226,26 @@ function QuickStartTab({ repo, language }: QuickStartTabProps) {
                       <div className="px-3 pb-2 bg-gray-50 border-t border-gray-200 space-y-2">
                         <p className="text-xs text-gray-700">{step.description}</p>
                         {step.commands && step.commands.length > 0 && (
-                          <div className="bg-gray-900 text-green-400 p-2 rounded text-xs font-mono space-y-1 overflow-x-auto">
-                            {step.commands.map((cmd, j) => (
-                              <div key={j} className="select-all">
-                                $ {cmd}
-                              </div>
-                            ))}
+                          <div className="bg-gray-100 border border-gray-300 rounded p-3">
+                            <div className="flex justify-between items-center mb-2">
+                              <span className="text-xs text-gray-500">Command</span>
+                              <button
+                                onClick={() => {
+                                  const text = step.commands.join('\n');
+                                  navigator.clipboard.writeText(text);
+                                }}
+                                className="text-xs px-2 py-1 bg-gray-200 hover:bg-gray-300 text-gray-700 rounded transition"
+                              >
+                                Copy
+                              </button>
+                            </div>
+                            <div className="space-y-1 text-xs font-mono text-gray-900 overflow-x-auto">
+                              {step.commands.map((cmd, j) => (
+                                <div key={j} className="select-all">
+                                  $ {cmd}
+                                </div>
+                              ))}
+                            </div>
                           </div>
                         )}
                       </div>
@@ -245,15 +259,28 @@ function QuickStartTab({ repo, language }: QuickStartTabProps) {
           {/* First Example */}
           {aiData.firstExample && (
             <div className="border-t border-gray-200 pt-2">
-              <p className="text-xs font-semibold text-gray-900 mb-1">
+              <p className="text-xs font-semibold text-gray-900 mb-2">
                 {language === 'zh' ? '示例' : 'Example'}
               </p>
-              <div className="bg-white border border-gray-300 rounded p-2 space-y-2">
+              <div className="border border-gray-300 rounded p-3 space-y-2">
                 <p className="text-xs font-medium text-gray-900">{aiData.firstExample.title}</p>
-                <div className="bg-gray-900 text-green-400 p-2 rounded text-xs font-mono overflow-x-auto">
-                  {aiData.firstExample.code}
+                <div className="bg-gray-100 border border-gray-300 rounded p-3">
+                  <div className="flex justify-between items-center mb-2">
+                    <span className="text-xs text-gray-500">Code</span>
+                    <button
+                      onClick={() => {
+                        navigator.clipboard.writeText(aiData.firstExample.code);
+                      }}
+                      className="text-xs px-2 py-1 bg-gray-200 hover:bg-gray-300 text-gray-700 rounded transition"
+                    >
+                      Copy
+                    </button>
+                  </div>
+                  <div className="text-xs font-mono text-gray-900 overflow-x-auto whitespace-pre-wrap">
+                    {aiData.firstExample.code}
+                  </div>
                 </div>
-                <p className="text-xs text-gray-700">{aiData.firstExample.explanation}</p>
+                <p className="text-xs text-gray-700 leading-relaxed">{aiData.firstExample.explanation}</p>
               </div>
             </div>
           )}
