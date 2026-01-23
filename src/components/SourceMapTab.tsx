@@ -204,6 +204,26 @@ function SourceMapTab({ repo, language }: SourceMapTabProps) {
             </button>
           </div>
 
+          {/* Entry Point */}
+          {aiData.entryPoint && (
+            <div className="bg-blue-50 border border-blue-200 rounded p-3">
+              <p className="text-xs font-bold text-blue-900 mb-1">
+                {language === 'zh' ? '📍 入口文件' : '📍 Entry Point'}
+              </p>
+              <code className="text-sm font-mono text-blue-800">{aiData.entryPoint}</code>
+            </div>
+          )}
+
+          {/* Reading Path */}
+          {aiData.readingPath && (
+            <div className="bg-green-50 border border-green-200 rounded p-3">
+              <p className="text-xs font-bold text-green-900 mb-1">
+                {language === 'zh' ? '📖 推荐阅读路径' : '📖 Reading Path'}
+              </p>
+              <p className="text-sm text-green-800">{aiData.readingPath}</p>
+            </div>
+          )}
+
           {/* Architecture */}
           <div>
             <p className="text-xs font-bold text-gray-900 mb-2">
@@ -235,8 +255,8 @@ function SourceMapTab({ repo, language }: SourceMapTabProps) {
               <p className="text-xs font-bold text-gray-900 mb-2">
                 {language === 'zh' ? '关键文件' : 'Key Files'}
               </p>
-              <div className="space-y-1">
-                {aiData.files.slice(0, 3).map((file, i) => (
+              <div className="space-y-2">
+                {aiData.files.map((file, i) => (
                   <div
                     key={i}
                     className={`border-l-2 ${
@@ -245,13 +265,50 @@ function SourceMapTab({ repo, language }: SourceMapTabProps) {
                         : file.priority === 'important'
                           ? 'border-yellow-500 bg-yellow-50'
                           : 'border-blue-500 bg-blue-50'
-                    } rounded p-1.5`}
+                    } rounded p-2`}
                   >
-                    <p className="text-xs font-medium text-gray-900">{file.path}</p>
-                    <p className="text-xs text-gray-600">{file.description}</p>
+                    <div className="flex items-start justify-between">
+                      <div className="flex-1">
+                        <p className="text-xs font-mono font-bold text-gray-900">{file.path}</p>
+                        <p className="text-xs text-gray-700 mt-0.5">{file.description}</p>
+                      </div>
+                      <span className={`text-xs px-1.5 py-0.5 rounded font-bold ${
+                        file.priority === 'critical' ? 'bg-red-200 text-red-900' :
+                        file.priority === 'important' ? 'bg-yellow-200 text-yellow-900' :
+                        'bg-blue-200 text-blue-900'
+                      }`}>
+                        {file.priority === 'critical' ? language === 'zh' ? '必读' : 'Must' :
+                         file.priority === 'important' ? language === 'zh' ? '重要' : 'Important' :
+                         language === 'zh' ? '可选' : 'Optional'}
+                      </span>
+                    </div>
+                    {(file.dependsOn || file.usedBy) && (
+                      <div className="text-xs text-gray-600 mt-1 space-y-0.5">
+                        {file.dependsOn && file.dependsOn.length > 0 && (
+                          <p>{language === 'zh' ? '依赖: ' : 'Depends: '}<code className="text-xs font-mono">{file.dependsOn.join(', ')}</code></p>
+                        )}
+                        {file.usedBy && file.usedBy.length > 0 && (
+                          <p>{language === 'zh' ? '被使用: ' : 'Used by: '}<code className="text-xs font-mono">{file.usedBy.join(', ')}</code></p>
+                        )}
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>
+            </div>
+          )}
+
+          {/* Tips */}
+          {aiData.tips && aiData.tips.length > 0 && (
+            <div className="border-t border-gray-200 pt-3">
+              <p className="text-xs font-bold text-gray-900 mb-2">
+                {language === 'zh' ? '💡 实用建议' : '💡 Tips'}
+              </p>
+              <ul className="text-sm text-gray-700 space-y-1 ml-4">
+                {aiData.tips.map((tip, i) => (
+                  <li key={i} className="list-disc">{tip}</li>
+                ))}
+              </ul>
             </div>
           )}
         </div>

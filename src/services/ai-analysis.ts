@@ -43,10 +43,14 @@ export interface QuickStartGuide {
 
 export interface SourceCodeMap {
   architecture: string
+  entryPoint: string
+  readingPath: string
   files: Array<{
     path: string
     priority: 'critical' | 'important' | 'optional'
     description: string
+    dependsOn?: string[]
+    usedBy?: string[]
   }>
   learningPhases: Array<{
     phase: number
@@ -54,11 +58,13 @@ export interface SourceCodeMap {
     description: string
     files: string[]
     objectives: string[]
+    estimatedTime?: string
   }>
   keyConcepts: Array<{
     term: string
     explanation: string
   }>
+  tips: string[]
   architectureMermaid?: string
 }
 
@@ -209,37 +215,48 @@ ${fileTree}
 ${keyFiles ? `KEY FILES:\n${keyFiles}` : ''}
 
 Create REAL learning path for THIS project (not generic):
-- Analyze ACTUAL file structure
-- Identify REAL entry points and key files
+- Identify the ACTUAL entry point file (main.js, index.js, package.json main field, etc.)
+- Explain file dependencies and relationships
 - Create REAL learning phases based on THIS project's complexity
-- Explain REAL design patterns used
+- Include practical tips for navigating the codebase
+
+Important: Include "entryPoint" (the main file to start with), "readingPath" (recommended reading order), and file dependencies.
 
 JSON:
 {
+  "entryPoint": "Exact path/name of the main entry file (e.g., src/index.js or main.py)",
+  "readingPath": "Start with X, then look at Y for Z understanding",
   "architecture": "Real architecture explanation for THIS project",
   "files": [
     {
       "path": "real/file/path.js",
       "priority": "critical|important|optional",
-      "description": "What THIS file actually does"
+      "description": "What THIS file actually does in one sentence",
+      "dependsOn": ["other/file.js"],
+      "usedBy": ["dependent/file.js"]
     }
   ],
   "learningPhases": [
     {
       "phase": 1,
-      "title": "Start here - real entry point",
-      "description": "Real setup for this project",
-      "files": ["actual files for this project"],
-      "objectives": ["Real objectives for this project"]
+      "title": "Entry & Setup",
+      "description": "Understanding the main entry point",
+      "files": ["actual files"],
+      "objectives": ["Understand X", "Know how Y works"],
+      "estimatedTime": "5-10 minutes"
     }
   ],
   "keyConcepts": [
     {
-      "term": "Real concept from this project",
-      "explanation": "Real explanation in context"
+      "term": "Real concept",
+      "explanation": "What it means in this project's context"
     }
   ],
-  "architectureMermaid": "Real diagram for this architecture"
+  "tips": [
+    "Practical tip for understanding this codebase",
+    "Where to find important configuration",
+    "Common gotchas and how to avoid them"
+  ]
 }
 `,
 
@@ -255,37 +272,48 @@ ${fileTree}
 ${keyFiles ? `关键文件：\n${keyFiles}` : ''}
 
 为这个项目创建真实学习路径（不是通用的）：
-- 分析真实的文件结构
-- 找出真实的入口点和关键文件
+- 找出真实的入口点文件（main.js, index.js, package.json 的 main 字段等）
+- 解释文件之间的依赖关系
 - 根据这个项目的复杂度创建真实的学习阶段
-- 解释这个项目用的真实设计模式
+- 给出实用的代码库导航建议
+
+重要：包含"entryPoint"（主入口文件）、"readingPath"（推荐阅读顺序）和文件依赖关系。
 
 JSON：
 {
+  "entryPoint": "主入口文件的精确路径/名称 (例如: src/index.js 或 main.py)",
+  "readingPath": "从 X 开始，然后看 Y 来理解 Z",
   "architecture": "这个项目真实的架构说明",
   "files": [
     {
       "path": "真实/文件/路径.js",
       "priority": "critical|important|optional",
-      "description": "这个文件真正做什么"
+      "description": "这个文件真正做什么（一句话）",
+      "dependsOn": ["其他/文件.js"],
+      "usedBy": ["依赖/文件.js"]
     }
   ],
   "learningPhases": [
     {
       "phase": 1,
-      "title": "从这里开始 - 真实入口点",
-      "description": "这个项目的真实配置",
-      "files": ["这个项目的真实文件"],
-      "objectives": ["这个项目的真实学习目标"]
+      "title": "入口和设置",
+      "description": "理解主入口点",
+      "files": ["实际文件"],
+      "objectives": ["理解 X", "知道 Y 如何工作"],
+      "estimatedTime": "5-10 分钟"
     }
   ],
   "keyConcepts": [
     {
-      "term": "这个项目的真实概念",
-      "explanation": "在项目背景下的真实解释"
+      "term": "真实概念",
+      "explanation": "在这个项目背景下的含义"
     }
   ],
-  "architectureMermaid": "这个架构的真实图表"
+  "tips": [
+    "理解这个代码库的实用建议",
+    "重要配置文件在哪里",
+    "常见坑和如何避免它们"
+  ]
 }
 `,
 }
