@@ -126,6 +126,7 @@ function openPanel(owner: string, repo: string) {
     display: flex;
     flex-direction: column;
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    overflow: hidden;
   `
 
   // Header
@@ -136,11 +137,15 @@ function openPanel(owner: string, repo: string) {
     display: flex;
     justify-content: space-between;
     align-items: center;
+    background: #f6f8fa;
   `
   header.innerHTML = `
     <div style="display: flex; align-items: center; gap: 8px;">
       <span style="font-size: 20px;">📚</span>
-      <span style="font-weight: 600; font-size: 14px;">GitMentor</span>
+      <div>
+        <span style="font-weight: 600; font-size: 14px; color: #24292e;">GitMentor</span>
+        <div style="font-size: 11px; color: #666; margin-top: 2px;">${owner}/${repo}</div>
+      </div>
     </div>
     <button id="gitmentor-close" style="
       background: none;
@@ -148,25 +153,49 @@ function openPanel(owner: string, repo: string) {
       font-size: 20px;
       cursor: pointer;
       color: #666;
+      padding: 0;
+      width: 24px;
+      height: 24px;
     ">×</button>
   `
 
-  // Content iframe
-  const iframe = document.createElement('iframe')
-  iframe.id = 'gitmentor-iframe'
-  iframe.style.cssText = `
+  // Content container with scrolling
+  const content = document.createElement('div')
+  content.id = 'gitmentor-content'
+  content.style.cssText = `
     flex: 1;
-    border: none;
+    overflow-y: auto;
+    padding: 16px;
     background: white;
   `
-  // Use the popup page with owner/repo as params
-  iframe.src = chrome.runtime.getURL(
-    `src/popup/index.html?owner=${owner}&repo=${repo}`
-  )
+  content.innerHTML = `
+    <div style="text-align: center; color: #666; padding: 20px;">
+      <p style="font-size: 14px; margin: 0 0 10px 0;">Loading GitMentor...</p>
+      <p style="font-size: 12px; color: #999; margin: 0;">This will open the GitMentor popup in a new window.</p>
+    </div>
+  `
 
   panel.appendChild(header)
-  panel.appendChild(iframe)
+  panel.appendChild(content)
   document.body.appendChild(panel)
+
+  // Instead of iframe, open the popup in a new way
+  // Send message to background script to open popup
+  chrome.runtime.sendMessage(
+    {
+      type: 'openPopup',
+      owner,
+      repo,
+    },
+    (response) => {
+      if (response?.success) {
+        // Close panel and let user see the popup
+        setTimeout(() => {
+          panel!.remove()
+        }, 1000)
+      }
+    }
+  )
 
   // Close button handler
   const closeBtn = header.querySelector('#gitmentor-close') as HTMLElement
