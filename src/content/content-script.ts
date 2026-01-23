@@ -3,12 +3,19 @@
 function injectWidget() {
   // Only run on GitHub repo pages
   const pathMatch = window.location.pathname.match(/^\/([^\/]+)\/([^\/]+)(\/.*)?$/)
-  if (!pathMatch) return
+  console.log('[GitMentor] Checking pathname:', window.location.pathname)
+  console.log('[GitMentor] pathMatch result:', pathMatch)
+  if (!pathMatch) {
+    console.log('[GitMentor] Not a GitHub repo page, skipping injection')
+    return
+  }
 
   const [, owner, repo] = pathMatch
+  console.log(`[GitMentor] Injecting widget for ${owner}/${repo}`)
 
   // Check if widget already exists
   if (document.getElementById('gitmentor-widget')) {
+    console.log('[GitMentor] Widget already exists, skipping')
     return
   }
 
@@ -56,6 +63,7 @@ function injectWidget() {
   }
 
   button.onclick = (e) => {
+    console.log('[GitMentor] Button clicked!')
     e.stopPropagation()
     openPanel(owner, repo)
   }
@@ -101,6 +109,7 @@ function makeDraggable(element: HTMLElement) {
 }
 
 function openPanel(owner: string, repo: string) {
+  console.log(`[GitMentor] openPanel called with ${owner}/${repo}`)
   // Send message to service worker to open new tab
   chrome.runtime.sendMessage(
     {
@@ -109,6 +118,7 @@ function openPanel(owner: string, repo: string) {
       repo,
     },
     (response) => {
+      console.log('[GitMentor] Got response from service worker:', response)
       if (response?.success) {
         showNotification(`✓ GitMentor opened for ${owner}/${repo}`)
       } else {
