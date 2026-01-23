@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react'
 import { getRepoInfo, getReadme } from '@/services/github'
 import { analyzeReadme } from '@/services/analysis'
+import { AIAnalysisService, ProjectAnalysis } from '@/services/ai-analysis'
+import { useLLM } from '@/hooks/useLLM'
 
 interface OverviewTabProps {
   repo: { owner: string; name: string }
@@ -10,8 +12,12 @@ interface OverviewTabProps {
 function OverviewTab({ repo, language }: OverviewTabProps) {
   const [repoInfo, setRepoInfo] = useState<any>(null)
   const [overview, setOverview] = useState<any>(null)
+  const [aiAnalysis, setAiAnalysis] = useState<ProjectAnalysis | null>(null)
   const [loading, setLoading] = useState(true)
+  const [aiLoading, setAiLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [aiError, setAiError] = useState<string | null>(null)
+  const { isConfigured } = useLLM()
 
   useEffect(() => {
     const loadData = async () => {
@@ -19,6 +25,13 @@ function OverviewTab({ repo, language }: OverviewTabProps) {
         // Fetch repo info
         const info = await getRepoInfo(repo.owner, repo.name)
         setRepoInfo(info)
+        
+        // Try to load AI analysis from cache first
+        const cacheKey = `gitmentor_ai_analysis_${repo.owner}/${repo.name}`
+        const cached = localStorage.getItem(cacheKey)
+        if (cached) {
+          setAiAnalysis(JSON.parse(cached))
+        }
         
         // Fetch and analyze README
         try {
@@ -37,6 +50,35 @@ function OverviewTab({ repo, language }: OverviewTabProps) {
     }
     loadData()
   }, [repo])
+
+  const handleAIAnalysis = async () => {
+    if (!isConfigured()) {
+      setAiError(language === 'zh' ? '请先在设置中配置AI提供商' : 'Please configure AI provider in Settings')
+      return
+    }
+
+    setAiLoading(true)
+    setAiError(null)
+
+    try {
+      const readme = overview ? '' : await getReadme(repo.owner, repo.name)
+      const projectInfo = `${repoInfo.name} (${repoInfo.language})`
+      const analysis = await AIAnalysisService.analyzeProject(
+        projectInfo,
+        readme || (overview?.coreValue || ''),
+        language
+      )
+      setAiAnalysis(analysis)
+
+      // Cache the result
+      const cacheKey = `gitmentor_ai_analysis_${repo.owner}/${repo.name}`
+      localStorage.setItem(cacheKey, JSON.stringify(analysis))
+    } catch (err) {
+      setAiError(err instanceof Error ? err.message : 'Analysis failed')
+    } finally {
+      setAiLoading(false)
+    }
+  }
 
   if (loading) {
     return <div className="text-center text-gray-500 py-4">{language === 'zh' ? '加载中...' : 'Loading...'}</div>
@@ -70,6 +112,61 @@ function OverviewTab({ repo, language }: OverviewTabProps) {
 
   return (
     <div className="space-y-4">
+      {/* AI Analysis Button */}
+      {!aiAnalysis && (
+        <div className="bg-gradient-to-r from-purple-50 to-pink-50 border border-purple-200 rounded-lg p-3">
+          <div className="flex items-center justify-between">
+            <p className="text-xs font-semibold text-purple-900">
+              {language === 'zh' ? '✨ 用AI更深度分析此项目' : '✨ Get AI-Powered Insights'}
+            </p>
+            <button
+              onClick={handleAIAnalysis}
+              disabled={aiLoading || !isConfigured()}
+              className="px-2 py-1 bg-purple-500 hover:bg-purple-600 disabled:bg-gray-400 text-white rounded text-xs font-medium transition"
+            >
+              {aiLoading ? (language === 'zh' ? '分析中...' : 'Analyzing...') : 'AI'}
+            </button>
+          </div>
+          {!isConfigured() && (
+            <p className="text-xs text-purple-700 mt-1">
+              {language === 'zh' ? '需要在设置中配置AI提供商' : 'Configure AI provider in Settings'}
+            </p>
+          )}
+        </div>
+      )}
+
+      {/* AI Error */}
+      {aiError && (
+        <div className="bg-red-50 border border-red-200 rounded-lg p-2">
+          <p className="text-xs text-red-700">{aiError}</p>
+        </div>
+      )}
+
+      {/* AI Analysis Results */}
+      {aiAnalysis && (
+        <div className="bg-gradient-to-r from-purple-50 to-pink-50 border border-purple-200 rounded-lg p-3">
+          <div className="flex items-center justify-between mb-2">
+            <p className="text-xs font-semibold text-purple-900">
+              {language === 'zh' ? '✨ AI分析结果' : '✨ AI Analysis'}
+            </p>
+            <button
+              onClick={() => setAiAnalysis(null)}
+              className="text-xs text-purple-600 hover:text-purple-900 underline"
+            >
+              {language === 'zh' ? '重新分析' : 'Re-analyze'}
+            </button>
+          </div>
+          <div className="text-xs text-purple-900 space-y-2">
+            <p><strong>{language === 'zh' ? '核心价值：' : 'Core: '}</strong>{aiAnalysis.coreValue}</p>
+            <p><strong>{language === 'zh' ? '难度：' : 'Difficulty: '}</strong>{aiAnalysis.difficulty}</p>
+            <p><strong>{language === 'zh' ? '适合人群：' : 'For: '}</strong>{aiAnalysis.targetAudience}</p>
+            {aiAnalysis.keyFeatures.length > 0 && (
+              <p><strong>{language === 'zh' ? '关键特性：' : 'Features: '}</strong>{aiAnalysis.keyFeatures.join(', ')}</p>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Status Badge */}
       {isArchived && (
         <div className="bg-red-50 border border-red-200 rounded-lg p-2 text-center">
