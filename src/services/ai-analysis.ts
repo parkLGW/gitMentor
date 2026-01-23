@@ -2,6 +2,17 @@
 
 import { llmManager } from './llm'
 
+// Helper function to extract JSON from markdown code blocks
+function extractJSON(text: string): string {
+  // Try to extract JSON from markdown code block
+  const jsonMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/)
+  if (jsonMatch) {
+    return jsonMatch[1].trim()
+  }
+  // If no markdown block, return as-is
+  return text.trim()
+}
+
 export interface ProjectAnalysis {
   coreValue: string
   problems: string[]
@@ -281,7 +292,8 @@ export class AIAnalysisService {
         : PROMPTS.projectAnalysis(projectInfo, readme)
 
     const response = await provider.complete(prompt)
-    return JSON.parse(response.content)
+    const jsonText = extractJSON(response.content)
+    return JSON.parse(jsonText)
   }
 
   /**
@@ -302,7 +314,8 @@ export class AIAnalysisService {
         : PROMPTS.quickStart(projectInfo, readme, packageJson)
 
     const response = await provider.complete(prompt)
-    return JSON.parse(response.content)
+    const jsonText = extractJSON(response.content)
+    return JSON.parse(jsonText)
   }
 
   /**
@@ -323,7 +336,8 @@ export class AIAnalysisService {
         : PROMPTS.sourceMap(projectInfo, fileTree, keyFiles)
 
     const response = await provider.complete(prompt)
-    return JSON.parse(response.content)
+    const jsonText = extractJSON(response.content)
+    return JSON.parse(jsonText)
   }
 
   /**
