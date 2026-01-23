@@ -7,7 +7,7 @@
     "storage",
     "activeTab",
     "scripting",
-    "windows"
+    "tabs"
   ],
   "host_permissions": [
     "https://github.com/*",

@@ -16,26 +16,14 @@ declare const chrome: any
     sender: any,
     sendResponse: (response?: any) => void
   ) => {
-    if (message.type === 'openPopupWindow') {
-      const { owner, repo } = message
-      
-      // Create a new window to display the popup
-      const popupUrl = chrome.runtime.getURL(
-        `src/popup/index.html?owner=${encodeURIComponent(owner)}&repo=${encodeURIComponent(repo)}`
-      )
-
-      ;(chrome.windows.create as any)(
-        {
-          url: popupUrl,
-          type: 'popup',
-          width: 500,
-          height: 700,
-        },
-        (window: any) => {
-          sendResponse({ success: !!window })
+    if (message.type === 'openTab') {
+      // Open URL in new tab
+      (chrome.tabs.create as any)(
+        { url: message.url },
+        (tab: any) => {
+          sendResponse({ success: !!tab })
         }
       )
-      
       return true
     }
   }

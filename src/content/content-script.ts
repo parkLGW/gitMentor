@@ -101,22 +101,24 @@ function makeDraggable(element: HTMLElement) {
 }
 
 function openPanel(owner: string, repo: string) {
-  // Send message to service worker to open popup window
+  // Open GitMentor in a new tab
+  const url = chrome.runtime.getURL(
+    `src/popup/index.html?owner=${encodeURIComponent(owner)}&repo=${encodeURIComponent(repo)}`
+  )
+  
   chrome.runtime.sendMessage(
     {
-      type: 'openPopupWindow',
-      owner,
-      repo,
+      type: 'openTab',
+      url,
     },
     (response) => {
       if (response?.success) {
-        console.log('GitMentor window opened')
+        showNotification(`✓ GitMentor opened for ${owner}/${repo}`)
+      } else {
+        showNotification(`Failed to open GitMentor`)
       }
     }
   )
-
-  // Show a brief notification in the page
-  showNotification(`Opening GitMentor for ${owner}/${repo}...`)
 }
 
 function showNotification(message: string) {
