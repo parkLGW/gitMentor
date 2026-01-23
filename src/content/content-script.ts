@@ -112,6 +112,47 @@ function injectFileSidebar() {
   fetchAndAnalyzeFile(fileInfo, content)
 }
 
+async function performDeepAnalysis(contentDiv: HTMLElement, fileData: any) {
+  console.log('[GitMentor] Requesting deep analysis...')
+  
+  // Show loading state
+  contentDiv.innerHTML = `
+    <div style="padding: 12px; background: #f0f2f5; border-radius: 4px; text-align: center; font-size: 12px; color: #666;">
+      🤖 Performing deep analysis with AI...
+      <div style="margin-top: 8px; font-size: 11px;">This may take a moment</div>
+    </div>
+  `
+  
+  // Request deep analysis from service worker
+  chrome.runtime.sendMessage({
+    action: 'analyzeFileDeep',
+    fileName: fileData.fileName,
+    fileContent: fileData.fileContent,
+  }, (response: any) => {
+    if (response?.error) {
+      contentDiv.innerHTML = `<div style="color: #d73a49; padding: 12px; background: #ffeef0; border-radius: 4px; font-size: 12px;">Deep analysis failed: ${response.error}</div>`
+    } else if (response?.html) {
+      contentDiv.innerHTML = response.html
+      
+      // Re-attach event listener for back to quick analysis button if it exists
+      const backBtn = contentDiv.querySelector('#gitmentor-back-to-quick-btn')
+      if (backBtn) {
+        backBtn.addEventListener('click', () => {
+          fetchAndAnalyzeFile(
+            {
+              owner: '',
+              repo: '',
+              branch: '',
+              path: fileData.fileName,
+            },
+            contentDiv
+          )
+        })
+      }
+    }
+  })
+}
+
 async function fetchAndAnalyzeFile(fileInfo: FileInfo, contentDiv: HTMLElement) {
   try {
     // Fetch file content from GitHub API
@@ -136,11 +177,16 @@ async function fetchAndAnalyzeFile(fileInfo: FileInfo, contentDiv: HTMLElement) 
       ? fileContent.substring(0, maxSize) + '\n... (file truncated)'
       : fileContent
     
+    // Store file info for deep analysis
+    const fileData = {
+      fileName: fileInfo.path,
+      fileContent: truncatedContent,
+    }
+    
     // Send to background script for AI analysis
     chrome.runtime.sendMessage({
       action: 'analyzeFile',
-      fileName: fileInfo.path,
-      fileContent: truncatedContent,
+      ...fileData,
     }, (response: any) => {
       const loadingDiv = document.getElementById('gitmentor-loading')
       if (loadingDiv) {
@@ -151,6 +197,14 @@ async function fetchAndAnalyzeFile(fileInfo: FileInfo, contentDiv: HTMLElement) 
         contentDiv.innerHTML = `<div style="color: #d73a49; padding: 12px; background: #ffeef0; border-radius: 4px; font-size: 12px;">${response.error}</div>`
       } else if (response?.html) {
         contentDiv.innerHTML = response.html
+        
+        // Attach event listener for deep analysis button
+        const deepAnalysisBtn = contentDiv.querySelector('#gitmentor-deep-analysis-btn')
+        if (deepAnalysisBtn) {
+          deepAnalysisBtn.addEventListener('click', () => {
+            performDeepAnalysis(contentDiv, fileData)
+          })
+        }
       }
     })
   } catch (error) {

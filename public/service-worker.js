@@ -2,7 +2,18 @@
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === 'analyzeFile') {
-    analyzeFile(message.fileName, message.fileContent)
+    analyzeFile(message.fileName, message.fileContent, false)
+      .then((result) => {
+        sendResponse({ html: result })
+      })
+      .catch((error) => {
+        sendResponse({ error: error.message })
+      })
+    return true // Keep channel open for async response
+  }
+  
+  if (message.action === 'analyzeFileDeep') {
+    analyzeFile(message.fileName, message.fileContent, true)
       .then((result) => {
         sendResponse({ html: result })
       })
@@ -13,7 +24,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 })
 
-async function analyzeFile(fileName, fileContent) {
+async function analyzeFile(fileName, fileContent, forceDeepAnalysis = false) {
   try {
     // Get language from Chrome storage
     let language = 'en'
@@ -30,23 +41,43 @@ async function analyzeFile(fileName, fileContent) {
       language = 'en'
     }
     
-    // Try AI analysis first
+    // Try AI analysis first (or force if requested)
     try {
-      console.log('[GitMentor] Attempting AI analysis...')
+      console.log('[GitMentor] Attempting AI analysis...', forceDeepAnalysis ? '(forced)' : '')
       const aiResult = await performAIAnalysis(fileName, fileContent, language)
       if (aiResult) {
         console.log('[GitMentor] AI analysis succeeded!')
         return aiResult
       }
-      console.log('[GitMentor] AI analysis returned null, falling back to basic')
+      console.log('[GitMentor] AI analysis returned null')
+      
+      // If deep analysis was forced and AI failed, show error
+      if (forceDeepAnalysis) {
+        throw new Error('AI analysis not available. Please configure an AI provider in Settings.')
+      }
     } catch (aiError) {
-      console.warn('[GitMentor] AI analysis failed, falling back to basic:', aiError)
+      console.warn('[GitMentor] AI analysis failed:', aiError)
+      
+      // If deep analysis was forced, show the error
+      if (forceDeepAnalysis) {
+        throw aiError
+      }
+      console.log('[GitMentor] Falling back to basic analysis')
     }
     
-    // Fallback to basic analysis
+    // Fallback to basic analysis (only if not forcing deep)
+    if (forceDeepAnalysis) {
+      throw new Error('Deep analysis requires AI configuration')
+    }
     return generateBasicAnalysis(fileName, fileContent, language)
   } catch (error) {
     console.error('[GitMentor] Analysis error:', error)
+    
+    // If forcing deep analysis, return error message
+    if (forceDeepAnalysis) {
+      return `<div style="color: #d73a49; padding: 12px; background: #ffeef0; border-radius: 4px; font-size: 12px;">${escapeHtml(error.message)}</div>`
+    }
+    
     return generateBasicAnalysis(fileName, fileContent, 'en')
   }
 }
@@ -419,15 +450,17 @@ function generateBasicAnalysis(fileName, fileContent, language) {
     difficulty: '难度',
     noFunctions: '未检测到函数',
     quickAnalysis: '⚡ 快速分析',
+    deepAnalysis: '🤖 深度分析',
   } : {
     overview: 'File Overview',
     functions: 'Functions & Classes',
     difficulty: 'Difficulty',
     noFunctions: 'No functions detected',
     quickAnalysis: '⚡ Quick Analysis',
+    deepAnalysis: '🤖 Deep Analysis',
   }
   
-  let html = `<div style="padding: 8px; background: #f0f2f5; border-radius: 4px; margin-bottom: 12px;"><p style="margin: 0; font-size: 10px; color: #666; font-weight: 600;">${labels.quickAnalysis}</p></div>`
+  let html = `<div style="padding: 8px; background: #f0f2f5; border-radius: 4px; margin-bottom: 12px; display: flex; justify-content: space-between; align-items: center;"><p style="margin: 0; font-size: 10px; color: #666; font-weight: 600;">${labels.quickAnalysis}</p><button id="gitmentor-deep-analysis-btn" style="padding: 4px 8px; font-size: 10px; background: #0366d6; color: white; border: none; border-radius: 3px; cursor: pointer;">${labels.deepAnalysis}</button></div>`
   
   html += `<div style="padding: 8px; background: #f6f8fa; border-radius: 4px; margin-bottom: 12px;"><p style="margin: 0; font-size: 11px; color: #666; word-break: break-word;">📄 ${escapeHtml(fileName)}</p></div>`
   
@@ -459,6 +492,8 @@ function generateAnalysisHTML(analysis, language) {
     lineNumber: '行',
     calls: '调用',
     calledBy: '被调用',
+    deepAnalysis: '🔍 深度分析',
+    backToQuick: '⚡ 快速分析',
   } : {
     overview: 'File Overview',
     difficulty: 'Difficulty',
@@ -470,7 +505,12 @@ function generateAnalysisHTML(analysis, language) {
     lineNumber: 'line',
     calls: 'calls',
     calledBy: 'called by',
+    deepAnalysis: '🔍 Deep Analysis',
+    backToQuick: '⚡ Quick Analysis',
   }
+  
+  // Header with back button
+  html += `<div style="padding: 8px; background: #f0f2f5; border-radius: 4px; margin-bottom: 12px; display: flex; justify-content: space-between; align-items: center;"><p style="margin: 0; font-size: 10px; color: #666; font-weight: 600;">${labels.deepAnalysis}</p><button id="gitmentor-back-to-quick-btn" style="padding: 4px 8px; font-size: 10px; background: #6f42c1; color: white; border: none; border-radius: 3px; cursor: pointer;">${labels.backToQuick}</button></div>`
   
   // File overview
   if (analysis.fileOverview) {
