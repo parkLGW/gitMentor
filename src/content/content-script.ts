@@ -118,7 +118,7 @@ function openPanel(owner: string, repo: string) {
     right: 20px;
     top: 20px;
     width: 450px;
-    height: 600px;
+    height: 650px;
     z-index: 9999;
     background: white;
     border-radius: 12px;
@@ -138,6 +138,8 @@ function openPanel(owner: string, repo: string) {
     justify-content: space-between;
     align-items: center;
     background: #f6f8fa;
+    cursor: move;
+    flex-shrink: 0;
   `
   header.innerHTML = `
     <div style="display: flex; align-items: center; gap: 8px;">
@@ -159,43 +161,29 @@ function openPanel(owner: string, repo: string) {
     ">×</button>
   `
 
-  // Content container with scrolling
-  const content = document.createElement('div')
-  content.id = 'gitmentor-content'
-  content.style.cssText = `
+  // Content iframe - load popup.html with params
+  const iframe = document.createElement('iframe')
+  iframe.id = 'gitmentor-iframe'
+  iframe.style.cssText = `
     flex: 1;
-    overflow-y: auto;
-    padding: 16px;
+    border: none;
     background: white;
+    width: 100%;
+    height: 100%;
   `
-  content.innerHTML = `
-    <div style="text-align: center; color: #666; padding: 20px;">
-      <p style="font-size: 14px; margin: 0 0 10px 0;">Loading GitMentor...</p>
-      <p style="font-size: 12px; color: #999; margin: 0;">This will open the GitMentor popup in a new window.</p>
-    </div>
-  `
+  
+  // Store owner/repo in session storage for iframe to access
+  const iframeUrl = chrome.runtime.getURL(
+    `src/popup/index.html?owner=${encodeURIComponent(owner)}&repo=${encodeURIComponent(repo)}&embedded=true`
+  )
+  iframe.src = iframeUrl
+  iframe.sandbox.add('allow-same-origin')
+  iframe.sandbox.add('allow-scripts')
+  iframe.sandbox.add('allow-storage-access')
 
   panel.appendChild(header)
-  panel.appendChild(content)
+  panel.appendChild(iframe)
   document.body.appendChild(panel)
-
-  // Instead of iframe, open the popup in a new way
-  // Send message to background script to open popup
-  chrome.runtime.sendMessage(
-    {
-      type: 'openPopup',
-      owner,
-      repo,
-    },
-    (response) => {
-      if (response?.success) {
-        // Close panel and let user see the popup
-        setTimeout(() => {
-          panel!.remove()
-        }, 1000)
-      }
-    }
-  )
 
   // Close button handler
   const closeBtn = header.querySelector('#gitmentor-close') as HTMLElement

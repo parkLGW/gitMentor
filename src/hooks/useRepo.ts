@@ -13,7 +13,7 @@ export function useRepo() {
   useEffect(() => {
     async function extractRepo() {
       try {
-        // First, try to get from URL query parameters (from floating widget)
+        // First, try to get from URL query parameters (from floating widget iframe)
         const urlParams = new URLSearchParams(window.location.search)
         const owner = urlParams.get('owner')
         const repoName = urlParams.get('repo')
@@ -24,46 +24,31 @@ export function useRepo() {
           return
         }
 
-        // Second, try to get from chrome storage (from floating widget)
+        // Fallback: try to get from active tab (when opened as popup directly)
         try {
-          const stored = await new Promise<any>((resolve) => {
-            (chrome.storage.local.get as any)('currentRepo', (result: any) => {
-              resolve(result.currentRepo || null)
-            })
+          const response = await (chrome.tabs.query as any)({
+            active: true,
+            currentWindow: true,
           })
+          const tab = response[0]
 
-          if (stored?.owner && stored?.repo) {
-            setRepo({ owner: stored.owner, name: stored.repo })
+          if (!tab.url || !tab.url.includes('github.com')) {
+            setError('Not on a GitHub page')
             setLoading(false)
-            // Clear the stored repo after reading
-            ;(chrome.storage.local.remove as any)('currentRepo')
             return
           }
+
+          const urlMatch = tab.url.match(/github\.com\/([^/]+)\/([^/]+)/)
+          if (urlMatch) {
+            setRepo({
+              owner: urlMatch[1],
+              name: urlMatch[2],
+            })
+          } else {
+            setError('Could not extract repo info')
+          }
         } catch (e) {
-          // Ignore storage errors, fall back to tab detection
-        }
-
-        // Third, try to get from active tab (original behavior)
-        const response = await (chrome.tabs.query as any)({
-          active: true,
-          currentWindow: true,
-        })
-        const tab = response[0]
-
-        if (!tab.url || !tab.url.includes('github.com')) {
-          setError('Not on a GitHub page')
-          setLoading(false)
-          return
-        }
-
-        const urlMatch = tab.url.match(/github\.com\/([^/]+)\/([^/]+)/)
-        if (urlMatch) {
-          setRepo({
-            owner: urlMatch[1],
-            name: urlMatch[2],
-          })
-        } else {
-          setError('Could not extract repo info')
+          setError('Could not detect GitHub repository')
         }
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Unknown error')
