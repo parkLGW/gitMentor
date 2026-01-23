@@ -111,28 +111,40 @@ function makeDraggable(element: HTMLElement) {
 function openPanel(owner: string, repo: string) {
   console.log(`[GitMentor] openPanel called with ${owner}/${repo}`)
   
+  sendMessageWithRetry({ type: 'openTab', owner, repo }, (response) => {
+    console.log('[GitMentor] Got response:', response)
+    if (response?.success) {
+      showNotification(`✓ GitMentor opened for ${owner}/${repo}`)
+    } else {
+      showNotification(`Failed to open GitMentor`)
+    }
+  })
+}
+
+function sendMessageWithRetry(message: any, callback: (response: any) => void, retries: number = 3) {
   try {
-    // Send message to service worker to open new tab
-    console.log('[GitMentor] Sending message to service worker...')
-    const response = chrome.runtime.sendMessage(
-      {
-        type: 'openTab',
-        owner,
-        repo,
-      },
-      (response) => {
-        console.log('[GitMentor] Got response from service worker:', response)
-        if (response?.success) {
-          showNotification(`✓ GitMentor opened for ${owner}/${repo}`)
+    console.log('[GitMentor] Sending message (attempt):', message)
+    chrome.runtime.sendMessage(message, (response) => {
+      if (chrome.runtime.lastError) {
+        console.error('[GitMentor] Chrome error:', chrome.runtime.lastError)
+        if (retries > 0) {
+          console.log(`[GitMentor] Retrying... (${retries} attempts left)`)
+          setTimeout(() => sendMessageWithRetry(message, callback, retries - 1), 100)
         } else {
-          showNotification(`Failed to open GitMentor`)
+          callback({ success: false, error: chrome.runtime.lastError?.message })
         }
+      } else {
+        callback(response)
       }
-    )
-    console.log('[GitMentor] Message sent, response:', response)
+    })
   } catch (error) {
-    console.error('[GitMentor] Error sending message:', error)
-    showNotification(`Error: ${error}`)
+    console.error('[GitMentor] Exception:', error)
+    if (retries > 0) {
+      console.log(`[GitMentor] Retrying after exception... (${retries} attempts left)`)
+      setTimeout(() => sendMessageWithRetry(message, callback, retries - 1), 100)
+    } else {
+      callback({ success: false, error: String(error) })
+    }
   }
 }
 

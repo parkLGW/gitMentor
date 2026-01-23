@@ -19,6 +19,7 @@ console.log('[GitMentor SW] Service worker loaded!')
     sendResponse: (response?: any) => void
   ) => {
     console.log('[GitMentor SW] Received message:', message)
+    
     if (message.type === 'openTab') {
       try {
         const { owner, repo } = message
@@ -37,11 +38,17 @@ console.log('[GitMentor SW] Service worker loaded!')
             sendResponse({ success: !!tab })
           }
         )
+        // Return true to indicate we'll call sendResponse asynchronously
+        return true
       } catch (error) {
         console.error('[GitMentor SW] Error opening tab:', error)
-        sendResponse({ success: false })
+        sendResponse({ success: false, error: String(error) })
+        return true
       }
-      return true
     }
+    
+    // Always send response for unknown messages
+    sendResponse({ success: false, error: 'Unknown message type' })
+    return true
   }
 )
