@@ -3,10 +3,11 @@ import TabNav from '@/components/TabNav'
 import OverviewTab from '@/components/OverviewTab'
 import QuickStartTab from '@/components/QuickStartTab'
 import SourceMapTab from '@/components/SourceMapTab'
+import SettingsTab from '@/components/SettingsTab'
 import { useRepo } from '@/hooks/useRepo'
 import { useLanguage } from '@/hooks/useLanguage'
 
-type TabType = 'overview' | 'quickstart' | 'sourcemap'
+type TabType = 'overview' | 'quickstart' | 'sourcemap' | 'settings'
 
 function App() {
   const [activeTab, setActiveTab] = useState<TabType>('overview')
@@ -69,10 +70,15 @@ function App() {
       <TabNav activeTab={activeTab} setActiveTab={setActiveTab} language={language} />
 
       {/* Tab Content */}
-      <div className="px-4 py-4 max-h-[600px] overflow-y-auto">
-        {activeTab === 'overview' && <OverviewTab repo={repo} language={language} />}
-        {activeTab === 'quickstart' && <QuickStartTab repo={repo} language={language} />}
-        {activeTab === 'sourcemap' && <SourceMapTab repo={repo} language={language} />}
+      <div className="max-h-[600px] overflow-y-auto">
+        {activeTab === 'settings' && <SettingsTab language={language} />}
+        {activeTab !== 'settings' && (
+          <div className="px-4 py-4">
+            {activeTab === 'overview' && <OverviewTab repo={repo} language={language} />}
+            {activeTab === 'quickstart' && <QuickStartTab repo={repo} language={language} />}
+            {activeTab === 'sourcemap' && <SourceMapTab repo={repo} language={language} />}
+          </div>
+        )}
       </div>
     </div>
   )

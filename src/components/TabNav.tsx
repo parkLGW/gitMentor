@@ -1,8 +1,8 @@
 import React from 'react'
 
 interface TabNavProps {
-  activeTab: 'overview' | 'quickstart' | 'sourcemap'
-  setActiveTab: (tab: 'overview' | 'quickstart' | 'sourcemap') => void
+  activeTab: 'overview' | 'quickstart' | 'sourcemap' | 'settings'
+  setActiveTab: (tab: 'overview' | 'quickstart' | 'sourcemap' | 'settings') => void
   language: 'zh' | 'en'
 }
 
@@ -11,6 +11,7 @@ function TabNav({ activeTab, setActiveTab, language }: TabNavProps) {
     { id: 'overview', label: language === 'zh' ? '📋 概览' : '📋 Overview', icon: '📋' },
     { id: 'quickstart', label: language === 'zh' ? '🚀 快速上手' : '🚀 Quick Start', icon: '🚀' },
     { id: 'sourcemap', label: language === 'zh' ? '🗺️ 源码地图' : '🗺️ Source Map', icon: '🗺️' },
+    { id: 'settings', label: language === 'zh' ? '⚙️ 设置' : '⚙️ Settings', icon: '⚙️' },
   ]
 
   return (
