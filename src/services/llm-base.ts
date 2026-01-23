@@ -408,7 +408,9 @@ export class DeepSeekProvider extends BaseLLMProvider {
       })
 
       if (!response.ok) {
-        throw new Error(`DeepSeek API error: ${response.statusText}`)
+        const errorData = await response.json().catch(() => ({}))
+        const errorMessage = errorData.error?.message || response.statusText || `HTTP ${response.status}`
+        throw new Error(`DeepSeek API error: ${errorMessage}`)
       }
 
       const data = await response.json()
@@ -528,7 +530,9 @@ export class GroqProvider extends BaseLLMProvider {
       })
 
       if (!response.ok) {
-        throw new Error(`Groq API error: ${response.statusText}`)
+        const errorData = await response.json().catch(() => ({}))
+        const errorMessage = errorData.error?.message || response.statusText || `HTTP ${response.status}`
+        throw new Error(`Groq API error: ${errorMessage}`)
       }
 
       const data = await response.json()
@@ -569,7 +573,9 @@ export class GroqProvider extends BaseLLMProvider {
       })
 
       if (!response.ok) {
-        throw new Error(`Groq API error: ${response.statusText}`)
+        const errorData = await response.json().catch(() => ({}))
+        const errorMessage = errorData.error?.message || response.statusText || `HTTP ${response.status}`
+        throw new Error(`Groq API error: ${errorMessage}`)
       }
 
       const reader = response.body?.getReader()
