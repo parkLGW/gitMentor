@@ -233,72 +233,138 @@ JSON:
 }
 
 async function callOpenAI(prompt, apiKey, model) {
-  const response = await fetch('https://api.openai.com/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${apiKey}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      model: model || 'gpt-3.5-turbo',
-      messages: [{ role: 'user', content: prompt }],
-      temperature: 0.7,
-      max_tokens: 1000,
-    }),
-  })
-  
-  if (!response.ok) {
-    throw new Error(`OpenAI API error: ${response.status}`)
+  try {
+    console.log('[GitMentor] OpenAI: Calling API with model:', model || 'gpt-3.5-turbo')
+    
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), 30000) // 30 second timeout
+    
+    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: model || 'gpt-3.5-turbo',
+        messages: [{ role: 'user', content: prompt }],
+        temperature: 0.7,
+        max_tokens: 1000,
+      }),
+      signal: controller.signal
+    })
+    
+    clearTimeout(timeout)
+    console.log('[GitMentor] OpenAI: Response status:', response.status)
+    
+    if (!response.ok) {
+      const errorText = await response.text()
+      console.error('[GitMentor] OpenAI API error:', response.status, errorText.substring(0, 500))
+      throw new Error(`OpenAI API error: ${response.status} - ${errorText.substring(0, 200)}`)
+    }
+    
+    const data = await response.json()
+    const content = data.choices?.[0]?.message?.content
+    console.log('[GitMentor] OpenAI: Got response, length:', content?.length)
+    if (!content) {
+      console.error('[GitMentor] OpenAI: Empty content in response:', data)
+      throw new Error('OpenAI returned empty response')
+    }
+    return content
+  } catch (error) {
+    console.error('[GitMentor] OpenAI call failed:', error.message)
+    throw error
   }
-  
-  const data = await response.json()
-  return data.choices[0]?.message?.content || null
 }
 
 async function callClaude(prompt, apiKey, model) {
-  const response = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: {
-      'x-api-key': apiKey,
-      'anthropic-version': '2023-06-01',
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      model: model || 'claude-3-sonnet-20240229',
-      max_tokens: 1024,
-      messages: [{ role: 'user', content: prompt }],
-    }),
-  })
-  
-  if (!response.ok) {
-    throw new Error(`Claude API error: ${response.status}`)
+  try {
+    console.log('[GitMentor] Claude: Calling API with model:', model || 'claude-3-sonnet-20240229')
+    
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), 30000) // 30 second timeout
+    
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: model || 'claude-3-sonnet-20240229',
+        max_tokens: 1024,
+        messages: [{ role: 'user', content: prompt }],
+      }),
+      signal: controller.signal
+    })
+    
+    clearTimeout(timeout)
+    console.log('[GitMentor] Claude: Response status:', response.status)
+    
+    if (!response.ok) {
+      const errorText = await response.text()
+      console.error('[GitMentor] Claude API error:', response.status, errorText.substring(0, 500))
+      throw new Error(`Claude API error: ${response.status} - ${errorText.substring(0, 200)}`)
+    }
+    
+    const data = await response.json()
+    const content = data.content?.[0]?.text
+    console.log('[GitMentor] Claude: Got response, length:', content?.length)
+    if (!content) {
+      console.error('[GitMentor] Claude: Empty content in response:', data)
+      throw new Error('Claude returned empty response')
+    }
+    return content
+  } catch (error) {
+    console.error('[GitMentor] Claude call failed:', error.message)
+    throw error
   }
-  
-  const data = await response.json()
-  return data.content[0]?.text || null
 }
 
 async function callDeepSeek(prompt, apiKey, model) {
-  const response = await fetch('https://api.deepseek.com/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${apiKey}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify({
-      model: model || 'deepseek-chat',
-      messages: [{ role: 'user', content: prompt }],
-      temperature: 0.7,
-      max_tokens: 1000,
-    }),
-  })
-  
-  if (!response.ok) {
-    throw new Error(`DeepSeek API error: ${response.status}`)
+  try {
+    console.log('[GitMentor] DeepSeek: Calling API with model:', model || 'deepseek-chat')
+    
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), 30000) // 30 second timeout
+    
+    const response = await fetch('https://api.deepseek.com/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: model || 'deepseek-chat',
+        messages: [{ role: 'user', content: prompt }],
+        temperature: 0.7,
+        max_tokens: 1000,
+      }),
+      signal: controller.signal
+    })
+    
+    clearTimeout(timeout)
+    console.log('[GitMentor] DeepSeek: Response status:', response.status)
+    
+    if (!response.ok) {
+      const errorText = await response.text()
+      console.error('[GitMentor] DeepSeek API error:', response.status, errorText.substring(0, 500))
+      throw new Error(`DeepSeek API error: ${response.status} - ${errorText.substring(0, 200)}`)
+    }
+    
+    const data = await response.json()
+    const content = data.choices?.[0]?.message?.content
+    console.log('[GitMentor] DeepSeek: Got response, length:', content?.length)
+    if (!content) {
+      console.error('[GitMentor] DeepSeek: Empty content in response:', data)
+      throw new Error('DeepSeek returned empty response')
+    }
+    return content
+  } catch (error) {
+    console.error('[GitMentor] DeepSeek call failed:', error.message)
+    throw error
   }
-  
-  const data = await response.json()
-  return data.choices[0]?.message?.content || null
 }
 
 function extractJSON(text) {
