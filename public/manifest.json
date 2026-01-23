@@ -6,7 +6,8 @@
   "permissions": [
     "storage",
     "activeTab",
-    "scripting"
+    "scripting",
+    "windows"
   ],
   "host_permissions": [
     "https://github.com/*",
@@ -25,9 +26,6 @@
       "run_at": "document_end"
     }
   ],
-  "content_security_policy": {
-    "extension_pages": "script-src 'self'; object-src 'self'; frame-src 'self'"
-  },
   "icons": {
     "16": "icons/icon-16.png",
     "48": "icons/icon-48.png",

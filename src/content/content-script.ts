@@ -101,149 +101,87 @@ function makeDraggable(element: HTMLElement) {
 }
 
 function openPanel(owner: string, repo: string) {
-  // Check if panel already exists
-  let panel = document.getElementById('gitmentor-panel')
-  if (panel) {
-    // Toggle visibility
-    const isHidden = panel.style.display === 'none'
-    panel.style.display = isHidden ? 'flex' : 'none'
-    return
-  }
-
-  // Create panel
-  panel = document.createElement('div')
-  panel.id = 'gitmentor-panel'
-  panel.style.cssText = `
-    position: fixed;
-    right: 20px;
-    top: 20px;
-    width: 450px;
-    height: 650px;
-    z-index: 9999;
-    background: white;
-    border-radius: 12px;
-    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
-    display: flex;
-    flex-direction: column;
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
-    overflow: hidden;
-  `
-
-  // Header
-  const header = document.createElement('div')
-  header.style.cssText = `
-    padding: 16px;
-    border-bottom: 1px solid #e1e4e8;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    background: #f6f8fa;
-    cursor: move;
-    flex-shrink: 0;
-  `
-  header.innerHTML = `
-    <div style="display: flex; align-items: center; gap: 8px;">
-      <span style="font-size: 20px;">📚</span>
-      <div>
-        <span style="font-weight: 600; font-size: 14px; color: #24292e;">GitMentor</span>
-        <div style="font-size: 11px; color: #666; margin-top: 2px;">${owner}/${repo}</div>
-      </div>
-    </div>
-    <button id="gitmentor-close" style="
-      background: none;
-      border: none;
-      font-size: 20px;
-      cursor: pointer;
-      color: #666;
-      padding: 0;
-      width: 24px;
-      height: 24px;
-    ">×</button>
-  `
-
-  // Content iframe - load popup.html with params
-  const iframe = document.createElement('iframe')
-  iframe.id = 'gitmentor-iframe'
-  iframe.style.cssText = `
-    flex: 1;
-    border: none;
-    background: white;
-    width: 100%;
-    height: 100%;
-  `
-  
-  // Store owner/repo in session storage for iframe to access
-  const iframeUrl = chrome.runtime.getURL(
-    `src/popup/index.html?owner=${encodeURIComponent(owner)}&repo=${encodeURIComponent(repo)}&embedded=true`
-  )
-  iframe.src = iframeUrl
-  iframe.sandbox.add('allow-same-origin')
-  iframe.sandbox.add('allow-scripts')
-  iframe.sandbox.add('allow-storage-access')
-
-  panel.appendChild(header)
-  panel.appendChild(iframe)
-  document.body.appendChild(panel)
-
-  // Close button handler
-  const closeBtn = header.querySelector('#gitmentor-close') as HTMLElement
-  closeBtn?.addEventListener('click', () => {
-    panel!.remove()
-  })
-
-  // Close on Escape
-  const escapeHandler = (e: KeyboardEvent) => {
-    if (e.key === 'Escape') {
-      panel!.remove()
-      document.removeEventListener('keydown', escapeHandler)
+  // Send message to service worker to open popup window
+  chrome.runtime.sendMessage(
+    {
+      type: 'openPopupWindow',
+      owner,
+      repo,
+    },
+    (response) => {
+      if (response?.success) {
+        console.log('GitMentor window opened')
+      }
     }
-  }
-  document.addEventListener('keydown', escapeHandler)
+  )
 
-  // Make panel draggable
-  makePanelDraggable(header, panel)
+  // Show a brief notification in the page
+  showNotification(`Opening GitMentor for ${owner}/${repo}...`)
 }
 
-function makePanelDraggable(header: HTMLElement, panel: HTMLElement) {
-  let pos1 = 0,
-    pos2 = 0,
-    pos3 = 0,
-    pos4 = 0
-
-  header.onmousedown = dragMouseDown
-
-  function dragMouseDown(e: MouseEvent) {
-    e.preventDefault()
-    pos3 = e.clientX
-    pos4 = e.clientY
-    document.onmouseup = closeDragElement
-
-    function closeDragElement() {
-      document.onmouseup = null
-      document.onmousemove = null
-    }
-
-    document.onmousemove = elementDrag
-
-    function elementDrag(e: MouseEvent) {
-      e.preventDefault()
-      pos1 = pos3 - e.clientX
-      pos2 = pos4 - e.clientY
-      pos3 = e.clientX
-      pos4 = e.clientY
-
-      const newTop = panel.offsetTop - pos2
-      const newLeft = panel.offsetLeft - pos1
-
-      // Keep panel within viewport
-      if (newTop >= 0 && newTop + panel.offsetHeight <= window.innerHeight) {
-        panel.style.top = newTop + 'px'
-      }
-      if (newLeft >= 0 && newLeft + panel.offsetWidth <= window.innerWidth) {
-        panel.style.left = newLeft + 'px'
-      }
-    }
+function showNotification(message: string) {
+  // Remove existing notification
+  const existing = document.getElementById('gitmentor-notification')
+  if (existing) {
+    existing.remove()
   }
+
+  const notification = document.createElement('div')
+  notification.id = 'gitmentor-notification'
+  notification.style.cssText = `
+    position: fixed;
+    bottom: 100px;
+    right: 20px;
+    background: #24292e;
+    color: white;
+    padding: 12px 16px;
+    border-radius: 8px;
+    font-size: 13px;
+    z-index: 10001;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+    animation: slideIn 0.3s ease-out;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+  `
+  notification.textContent = message
+
+  // Add animation
+  const style = document.createElement('style')
+  if (!document.getElementById('gitmentor-styles')) {
+    style.id = 'gitmentor-styles'
+    style.textContent = `
+      @keyframes slideIn {
+        from {
+          transform: translateY(20px);
+          opacity: 0;
+        }
+        to {
+          transform: translateY(0);
+          opacity: 1;
+        }
+      }
+      @keyframes slideOut {
+        from {
+          transform: translateY(0);
+          opacity: 1;
+        }
+        to {
+          transform: translateY(20px);
+          opacity: 0;
+        }
+      }
+    `
+    document.head.appendChild(style)
+  }
+
+  document.body.appendChild(notification)
+
+  // Auto remove after 3 seconds
+  setTimeout(() => {
+    notification.style.animation = 'slideOut 0.3s ease-out'
+    setTimeout(() => {
+      notification.remove()
+    }, 300)
+  }, 3000)
 }
 
 // Initialize when DOM is ready

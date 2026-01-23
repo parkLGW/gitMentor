@@ -16,19 +16,26 @@ declare const chrome: any
     sender: any,
     sendResponse: (response?: any) => void
   ) => {
-    if (message.type === 'openPopup') {
-      // Store repo info for popup to access
+    if (message.type === 'openPopupWindow') {
       const { owner, repo } = message
-      chrome.storage.local.set(
+      
+      // Create a new window to display the popup
+      const popupUrl = chrome.runtime.getURL(
+        `src/popup/index.html?owner=${encodeURIComponent(owner)}&repo=${encodeURIComponent(repo)}`
+      )
+
+      ;(chrome.windows.create as any)(
         {
-          currentRepo: { owner, repo },
+          url: popupUrl,
+          type: 'popup',
+          width: 500,
+          height: 700,
         },
-        () => {
-          // Open the popup
-          chrome.action.openPopup()
-          sendResponse({ success: true })
+        (window: any) => {
+          sendResponse({ success: !!window })
         }
       )
+      
       return true
     }
   }
