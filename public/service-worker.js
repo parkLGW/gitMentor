@@ -32,10 +32,13 @@ async function analyzeFile(fileName, fileContent) {
     
     // Try AI analysis first
     try {
+      console.log('[GitMentor] Attempting AI analysis...')
       const aiResult = await performAIAnalysis(fileName, fileContent, language)
       if (aiResult) {
+        console.log('[GitMentor] AI analysis succeeded!')
         return aiResult
       }
+      console.log('[GitMentor] AI analysis returned null, falling back to basic')
     } catch (aiError) {
       console.warn('[GitMentor] AI analysis failed, falling back to basic:', aiError)
     }
@@ -50,16 +53,36 @@ async function analyzeFile(fileName, fileContent) {
 
 async function performAIAnalysis(fileName, fileContent, language) {
   // Get saved LLM config from storage
-  const config = await new Promise((resolve) => {
-    chrome.storage.local.get('gitmentor_llm_config', (data) => {
-      resolve(data.gitmentor_llm_config)
+  let config
+  try {
+    config = await new Promise((resolve, reject) => {
+      chrome.storage.local.get('gitmentor_llm_config', (data) => {
+        if (chrome.runtime.lastError) {
+          console.error('[GitMentor] Storage error:', chrome.runtime.lastError)
+          reject(chrome.runtime.lastError)
+        } else {
+          console.log('[GitMentor] Storage data:', data)
+          resolve(data.gitmentor_llm_config)
+        }
+      })
     })
-  })
-  
-  if (!config || !config.apiKey || !config.provider) {
-    console.log('[GitMentor] No AI provider configured')
+  } catch (storageError) {
+    console.error('[GitMentor] Failed to read from storage:', storageError)
     return null
   }
+  
+  console.log('[GitMentor] Config loaded:', config)
+  
+  if (!config || !config.apiKey || !config.provider) {
+    console.log('[GitMentor] No AI provider configured - missing:', {
+      hasConfig: !!config,
+      hasApiKey: config?.apiKey ? 'yes' : 'no',
+      hasProvider: config?.provider ? 'yes' : 'no',
+    })
+    return null
+  }
+  
+  console.log('[GitMentor] Using provider:', config.provider)
   
   // Prepare the AI prompt
   const prompt = language === 'zh' 
@@ -172,6 +195,8 @@ JSON:
   try {
     let response
     
+    console.log('[GitMentor] Calling provider:', config.provider)
+    
     if (config.provider === 'openai') {
       response = await callOpenAI(prompt, config.apiKey, config.model)
     } else if (config.provider === 'claude') {
@@ -184,14 +209,25 @@ JSON:
     }
     
     if (!response) {
+      console.log('[GitMentor] Empty response from provider')
       return null
     }
     
+    console.log('[GitMentor] Got response, parsing...')
+    
     // Parse and generate HTML
-    const analysis = JSON.parse(extractJSON(response))
-    return generateAnalysisHTML(analysis, language)
+    const jsonStr = extractJSON(response)
+    console.log('[GitMentor] Extracted JSON length:', jsonStr.length)
+    
+    const analysis = JSON.parse(jsonStr)
+    console.log('[GitMentor] Parsed analysis, generating HTML...')
+    
+    const html = generateAnalysisHTML(analysis, language)
+    console.log('[GitMentor] Analysis complete!')
+    return html
   } catch (error) {
     console.error('[GitMentor] AI API error:', error)
+    console.error('[GitMentor] Error stack:', error.stack)
     return null
   }
 }

@@ -197,8 +197,8 @@ function SettingsTab({ language }: SettingsTabProps) {
           />
           <p className="text-xs text-gray-500 mt-1">
             {language === 'zh' 
-              ? '⚠️ API密钥仅在本次会话中保存（每次打开需重新输入，这是为了安全考虑）' 
-              : '⚠️ API key is only saved for this session (you need to enter it again next time for security)'}
+              ? '✓ API密钥已保存到浏览器本地存储' 
+              : '✓ API key is saved to browser local storage'}
           </p>
         </div>
       )}
