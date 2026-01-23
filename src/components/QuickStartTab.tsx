@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react'
-import { getReadme, getRepoTree } from '@/services/github'
+import { useState, useEffect } from 'react'
+import { getReadme } from '@/services/github'
 import { generateQuickStart } from '@/services/analysis'
 import { AIAnalysisService, QuickStartGuide } from '@/services/ai-analysis'
 import { useLLM } from '@/hooks/useLLM'

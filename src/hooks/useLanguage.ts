@@ -5,7 +5,7 @@ export function useLanguage() {
 
   useEffect(() => {
     // Load from storage
-    chrome.storage.local.get(['language'], (result) => {
+    (chrome.storage.local.get as any)(['language'], (result: any) => {
       if (result.language) {
         setLanguageState(result.language)
       }
@@ -13,8 +13,8 @@ export function useLanguage() {
   }, [])
 
   const setLanguage = (lang: 'zh' | 'en') => {
-    setLanguageState(lang)
-    chrome.storage.local.set({ language: lang })
+    setLanguageState(lang);
+    (chrome as any).storage?.local?.set({ language: lang })
   }
 
   return { language, setLanguage }

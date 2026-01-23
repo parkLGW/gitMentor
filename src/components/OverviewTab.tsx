@@ -1,10 +1,9 @@
-import React, { useState, useEffect } from 'react'
+import { useState, useEffect } from 'react'
 import { getRepoInfo, getReadme } from '@/services/github'
 import { analyzeReadme } from '@/services/analysis'
 import { AIAnalysisService, ProjectAnalysis } from '@/services/ai-analysis'
 import { useLLM } from '@/hooks/useLLM'
 import { LoadingSpinner } from './LoadingSpinner'
-import { MarkdownDisplay } from './MarkdownDisplay'
 
 interface OverviewTabProps {
   repo: { owner: string; name: string }
@@ -203,7 +202,7 @@ function OverviewTab({ repo, language }: OverviewTabProps) {
             <div>
               <p className="text-xs font-semibold text-purple-800 mb-1">{language === 'zh' ? '解决的问题' : 'Problems Solved'}</p>
               <ul className="text-xs text-gray-700 space-y-0.5 ml-4">
-                {aiAnalysis.problems.map((p, i) => (
+                {aiAnalysis.problems.map((p: string, i: number) => (
                   <li key={i} className="list-disc">
                     {p}
                   </li>
@@ -217,7 +216,7 @@ function OverviewTab({ repo, language }: OverviewTabProps) {
             <div>
               <p className="text-xs font-semibold text-purple-800 mb-1">{language === 'zh' ? '适用场景' : 'Use Cases'}</p>
               <ul className="text-xs text-gray-700 space-y-0.5 ml-4">
-                {aiAnalysis.useCases.map((u, i) => (
+                {aiAnalysis.useCases.map((u: string, i: number) => (
                   <li key={i} className="list-disc">
                     {u}
                   </li>
@@ -286,7 +285,7 @@ function OverviewTab({ repo, language }: OverviewTabProps) {
             {language === 'zh' ? '解决的问题' : 'Problems Solved'}
           </p>
           <div className="space-y-1">
-            {problems.map((problem, i) => (
+            {problems.map((problem: string, i: number) => (
               <p key={i} className="text-xs text-gray-700">• {problem}</p>
             ))}
           </div>
@@ -300,7 +299,7 @@ function OverviewTab({ repo, language }: OverviewTabProps) {
             {language === 'zh' ? '适用场景' : 'Use Cases'}
           </p>
           <div className="space-y-1">
-            {useCases.map((useCase, i) => (
+            {useCases.map((useCase: string, i: number) => (
               <p key={i} className="text-xs text-gray-700">• {useCase}</p>
             ))}
           </div>

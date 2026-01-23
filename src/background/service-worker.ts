@@ -1,9 +1,10 @@
 // Service Worker for GitMentor
+declare const chrome: any
 
-chrome.runtime.onInstalled.addListener(() => {
+(chrome.runtime.onInstalled as any).addListener(() => {
   console.log('GitMentor extension installed')
 })
 
-chrome.tabs.onActivated.addListener(() => {
+(chrome.tabs.onActivated as any).addListener(() => {
   console.log('Tab activated')
 })

@@ -1,7 +1,6 @@
 // AI Analysis Service - Prompt design and analysis logic
 
 import { llmManager } from './llm'
-import { AnalysisResult } from '@/types/llm'
 
 export interface ProjectAnalysis {
   coreValue: string

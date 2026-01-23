@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react'
+import { useState } from 'react'
 import TabNav from '@/components/TabNav'
 import OverviewTab from '@/components/OverviewTab'
 import QuickStartTab from '@/components/QuickStartTab'

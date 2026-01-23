@@ -1,4 +1,3 @@
-import React from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 
@@ -20,7 +19,7 @@ export function MarkdownDisplay({ content, className = '' }: MarkdownDisplayProp
           ul: ({ node, ...props }) => <ul className="list-disc list-inside text-xs space-y-0.5" {...props} />,
           ol: ({ node, ...props }) => <ol className="list-decimal list-inside text-xs space-y-0.5" {...props} />,
           li: ({ node, ...props }) => <li className="text-xs" {...props} />,
-          code: ({ node, inline, ...props }) =>
+          code: ({ node, inline, ...props }: any) =>
             inline ? (
               <code className="bg-gray-900 text-green-400 px-1 rounded text-xs font-mono" {...props} />
             ) : (

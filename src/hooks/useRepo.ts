@@ -13,7 +13,7 @@ export function useRepo() {
   useEffect(() => {
     async function extractRepo() {
       try {
-        const response = await chrome.tabs.query({ active: true, currentWindow: true })
+        const response = await (chrome.tabs.query as any)({ active: true, currentWindow: true })
         const tab = response[0]
         
         if (!tab.url || !tab.url.includes('github.com')) {

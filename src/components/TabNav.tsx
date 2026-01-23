@@ -1,4 +1,4 @@
-import React from 'react'
+
 
 interface TabNavProps {
   activeTab: 'overview' | 'quickstart' | 'sourcemap' | 'settings'

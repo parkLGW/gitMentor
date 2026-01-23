@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import { useState } from 'react'
 import { generateSourceMap } from '@/services/analysis'
 import { AIAnalysisService, SourceCodeMap } from '@/services/ai-analysis'
 import { useLLM } from '@/hooks/useLLM'
