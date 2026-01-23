@@ -8,6 +8,7 @@ export class LLMManager {
   private providers: Map<LLMProviderType, LLMProvider> = new Map()
   private currentProvider: LLMProvider | null = null
   private configKey = 'gitmentor_llm_config'
+  private initialized = false
 
   private constructor() {
     this.initializeProviders()
@@ -31,14 +32,20 @@ export class LLMManager {
   }
 
   private loadSavedConfig(): void {
-    try {
-      const saved = localStorage.getItem(this.configKey)
-      if (saved) {
-        const config = JSON.parse(saved)
-        this.setCurrentProvider(config.provider, config)
-      }
-    } catch (error) {
-      console.warn('Failed to load saved LLM config:', error)
+    // Use chrome.storage for persistence across extension reloads
+    if (typeof chrome !== 'undefined' && chrome.storage) {
+      chrome.storage.local.get(this.configKey, (data: any) => {
+        try {
+          if (data[this.configKey]) {
+            const config = data[this.configKey]
+            console.log('[LLMManager] Loaded saved config from chrome.storage:', config.provider)
+            this.setCurrentProvider(config.provider, config)
+            this.initialized = true
+          }
+        } catch (error) {
+          console.warn('Failed to load saved LLM config from chrome.storage:', error)
+        }
+      })
     }
   }
 
@@ -51,15 +58,18 @@ export class LLMManager {
     await provider.configure(config)
     this.currentProvider = provider
 
-    // Save config (without API key for security)
-    localStorage.setItem(
-      this.configKey,
-      JSON.stringify({
+    // Save config to chrome.storage for persistence
+    if (typeof chrome !== 'undefined' && chrome.storage) {
+      const configToSave = {
         provider: type,
         model: config.model,
         baseUrl: config.baseUrl,
+        apiKey: config.apiKey, // Store API key securely in chrome.storage
+      }
+      chrome.storage.local.set({ [this.configKey]: configToSave }, () => {
+        console.log('[LLMManager] Config saved to chrome.storage:', type)
       })
-    )
+    }
   }
 
   getCurrentProvider(): LLMProvider | null {
@@ -92,7 +102,12 @@ export class LLMManager {
   }
 
   clearConfig(): void {
-    localStorage.removeItem(this.configKey)
+    // Clear from chrome.storage
+    if (typeof chrome !== 'undefined' && chrome.storage) {
+      chrome.storage.local.remove(this.configKey, () => {
+        console.log('[LLMManager] Config cleared from chrome.storage')
+      })
+    }
     this.currentProvider = null
   }
 }

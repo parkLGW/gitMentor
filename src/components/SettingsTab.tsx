@@ -67,17 +67,31 @@ function SettingsTab({ language }: SettingsTabProps) {
 
   // Load saved configuration on component mount
   useEffect(() => {
-    try {
-      const saved = localStorage.getItem('gitmentor_llm_config')
-      if (saved) {
-        const config = JSON.parse(saved)
-        setSelectedProvider(config.provider || 'claude')
-        setModel(config.model || '')
-        setBaseUrl(config.baseUrl || '')
+    const loadConfig = async () => {
+      try {
+        // Use chrome.storage.local for persistence across reloads
+        const result = await new Promise<any>((resolve) => {
+          chrome.storage.local.get('gitmentor_llm_config', (data) => {
+            resolve(data)
+          })
+        })
+        
+        if (result.gitmentor_llm_config) {
+          const config = result.gitmentor_llm_config
+          console.log('[GitMentor] Loaded saved LLM config:', config.provider)
+          setSelectedProvider(config.provider || 'claude')
+          setModel(config.model || '')
+          setBaseUrl(config.baseUrl || '')
+          // Also populate API key if it was saved
+          if (config.apiKey) {
+            setApiKey(config.apiKey)
+          }
+        }
+      } catch (error) {
+        console.warn('Failed to load saved LLM config:', error)
       }
-    } catch (error) {
-      console.warn('Failed to load saved LLM config:', error)
     }
+    loadConfig()
   }, [])
 
   useEffect(() => {
