@@ -739,3 +739,125 @@ export class LMStudioProvider extends BaseLLMProvider {
     }
   }
 }
+
+// Zhipu (ChatGLM) Provider
+export class ZhipuProvider extends BaseLLMProvider {
+  type: LLMProviderType = 'zhipu'
+  name = 'Zhipu AI (ChatGLM)'
+
+  async complete(prompt: string, systemPrompt?: string): Promise<LLMResponse> {
+    const config = this.getConfig()
+
+    try {
+      const response = await fetch('https://open.bigmodel.cn/api/paas/v4/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${config.apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: config.model || 'glm-4',
+          temperature: config.temperature ?? 0.7,
+          max_tokens: config.maxTokens || 2000,
+          messages: [
+            { role: 'system', content: this.createSystemPrompt(systemPrompt) },
+            { role: 'user', content: prompt },
+          ],
+        }),
+      })
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}))
+        const errorMessage = errorData.error?.message || response.statusText || `HTTP ${response.status}`
+        throw new Error(`Zhipu API error: ${errorMessage}`)
+      }
+
+      const data = await response.json()
+      return {
+        content: data.choices[0].message.content,
+        model: config.model || 'glm-4',
+        tokensUsed: {
+          prompt: data.usage?.prompt_tokens || 0,
+          completion: data.usage?.completion_tokens || 0,
+          total: data.usage?.total_tokens || 0,
+        },
+      }
+    } catch (error) {
+      throw new Error(`Zhipu error: ${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
+
+  async *stream(prompt: string, systemPrompt?: string): AsyncGenerator<string> {
+    const config = this.getConfig()
+
+    try {
+      const response = await fetch('https://open.bigmodel.cn/api/paas/v4/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${config.apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: config.model || 'glm-4',
+          temperature: config.temperature ?? 0.7,
+          max_tokens: config.maxTokens || 2000,
+          stream: true,
+          messages: [
+            { role: 'system', content: this.createSystemPrompt(systemPrompt) },
+            { role: 'user', content: prompt },
+          ],
+        }),
+      })
+
+      if (!response.ok) {
+        throw new Error(`Zhipu API error: ${response.statusText}`)
+      }
+
+      const reader = response.body?.getReader()
+      if (!reader) throw new Error('No response body')
+
+      const decoder = new TextDecoder()
+      let buffer = ''
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split('\n')
+        buffer = lines.pop() || ''
+
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            const dataStr = line.slice(6)
+            if (dataStr === '[DONE]') continue
+            try {
+              const data = JSON.parse(dataStr)
+              if (data.choices[0]?.delta?.content) {
+                yield data.choices[0].delta.content
+              }
+            } catch {
+              // Skip invalid JSON lines
+            }
+          }
+        }
+      }
+    } catch (error) {
+      throw new Error(`Zhipu stream error: ${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
+
+  async testConnection(): Promise<boolean> {
+    try {
+      const config = this.getConfig()
+      const response = await fetch('https://open.bigmodel.cn/api/paas/v4/models', {
+        headers: {
+          'Authorization': `Bearer ${config.apiKey}`,
+        },
+      })
+      return response.ok
+    } catch {
+      return false
+    }
+  }
+}

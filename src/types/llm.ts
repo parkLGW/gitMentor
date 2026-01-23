@@ -1,6 +1,6 @@
 // LLM Provider types and interfaces
 
-export type LLMProviderType = 'claude' | 'openai' | 'ollama' | 'deepseek' | 'groq' | 'lmstudio'
+export type LLMProviderType = 'claude' | 'openai' | 'ollama' | 'deepseek' | 'groq' | 'lmstudio' | 'zhipu'
 
 export interface LLMConfig {
   provider: LLMProviderType

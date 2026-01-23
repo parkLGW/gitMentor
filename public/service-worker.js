@@ -242,6 +242,8 @@ JSON:
       response = await callClaude(prompt, config.apiKey, config.model)
     } else if (config.provider === 'deepseek') {
       response = await callDeepSeek(prompt, config.apiKey, config.model)
+    } else if (config.provider === 'zhipu') {
+      response = await callZhipu(prompt, config.apiKey, config.model)
     } else {
       console.log('[GitMentor] Unsupported provider:', config.provider)
       return null
@@ -433,6 +435,65 @@ async function callDeepSeek(prompt, apiKey, model) {
     return content
   } catch (error) {
     console.error('[GitMentor] DeepSeek call failed:', error.message)
+    throw error
+  }
+}
+
+async function callZhipu(prompt, apiKey, model) {
+  try {
+    console.log('[GitMentor] Zhipu: Calling API with model:', model || 'glm-4')
+    console.log('[GitMentor] Zhipu: API Key starts with:', apiKey.substring(0, 10) + '...')
+    
+    const controller = new AbortController()
+    const timeout = setTimeout(() => controller.abort(), 30000) // 30 second timeout
+    
+    const response = await fetch('https://open.bigmodel.cn/api/paas/v4/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: model || 'glm-4',
+        messages: [{ role: 'user', content: prompt }],
+        temperature: 0.7,
+        max_tokens: 1000,
+      }),
+      signal: controller.signal
+    })
+    
+    clearTimeout(timeout)
+    console.log('[GitMentor] Zhipu: Response status:', response.status)
+    
+    if (!response.ok) {
+      const errorText = await response.text()
+      console.error('[GitMentor] Zhipu API error:', response.status)
+      console.error('[GitMentor] Zhipu error response:', errorText.substring(0, 1000))
+      
+      // Parse error message
+      let errorMsg = `HTTP ${response.status}`
+      try {
+        const errorJson = JSON.parse(errorText)
+        if (errorJson.error?.message) errorMsg = errorJson.error.message
+        else if (errorJson.message) errorMsg = errorJson.message
+        else if (errorJson.detail) errorMsg = errorJson.detail
+      } catch (e) {
+        errorMsg = errorText.substring(0, 200)
+      }
+      
+      throw new Error(`Zhipu: ${errorMsg}`)
+    }
+    
+    const data = await response.json()
+    const content = data.choices?.[0]?.message?.content
+    console.log('[GitMentor] Zhipu: Got response, length:', content?.length)
+    if (!content) {
+      console.error('[GitMentor] Zhipu: Empty content in response:', data)
+      throw new Error('Zhipu returned empty response')
+    }
+    return content
+  } catch (error) {
+    console.error('[GitMentor] Zhipu call failed:', error.message)
     throw error
   }
 }

@@ -1,7 +1,7 @@
 // LLM Service Manager
 
 import { LLMConfig, LLMProvider, LLMProviderType } from '@/types/llm'
-import { ClaudeProvider, OpenAIProvider, OllamaProvider, DeepSeekProvider, GroqProvider, LMStudioProvider } from './llm-base'
+import { ClaudeProvider, OpenAIProvider, OllamaProvider, DeepSeekProvider, GroqProvider, LMStudioProvider, ZhipuProvider } from './llm-base'
 
 export class LLMManager {
   private static instance: LLMManager
@@ -27,6 +27,7 @@ export class LLMManager {
     this.providers.set('openai', new OpenAIProvider())
     this.providers.set('ollama', new OllamaProvider())
     this.providers.set('deepseek', new DeepSeekProvider())
+    this.providers.set('zhipu', new ZhipuProvider())
     this.providers.set('groq', new GroqProvider())
     this.providers.set('lmstudio', new LMStudioProvider())
   }
