@@ -1,5 +1,11 @@
 // Content script for injecting GitMentor floating widget on GitHub pages
 
+// Save language preference
+function detectAndSaveLanguage() {
+  const language = navigator.language?.startsWith('zh') ? 'zh' : 'en'
+  chrome.storage.local.set({ gitmentor_language: language })
+}
+
 interface FileInfo {
   owner: string
   repo: string
@@ -481,10 +487,12 @@ function showNotification(message: string) {
 // Initialize when DOM is ready
 if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', () => {
+    detectAndSaveLanguage()
     injectWidget()
     injectFileSidebar()
   })
 } else {
+  detectAndSaveLanguage()
   injectWidget()
   injectFileSidebar()
 }
