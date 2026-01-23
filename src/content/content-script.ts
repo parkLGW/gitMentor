@@ -110,22 +110,30 @@ function makeDraggable(element: HTMLElement) {
 
 function openPanel(owner: string, repo: string) {
   console.log(`[GitMentor] openPanel called with ${owner}/${repo}`)
-  // Send message to service worker to open new tab
-  chrome.runtime.sendMessage(
-    {
-      type: 'openTab',
-      owner,
-      repo,
-    },
-    (response) => {
-      console.log('[GitMentor] Got response from service worker:', response)
-      if (response?.success) {
-        showNotification(`✓ GitMentor opened for ${owner}/${repo}`)
-      } else {
-        showNotification(`Failed to open GitMentor`)
+  
+  try {
+    // Send message to service worker to open new tab
+    console.log('[GitMentor] Sending message to service worker...')
+    const response = chrome.runtime.sendMessage(
+      {
+        type: 'openTab',
+        owner,
+        repo,
+      },
+      (response) => {
+        console.log('[GitMentor] Got response from service worker:', response)
+        if (response?.success) {
+          showNotification(`✓ GitMentor opened for ${owner}/${repo}`)
+        } else {
+          showNotification(`Failed to open GitMentor`)
+        }
       }
-    }
-  )
+    )
+    console.log('[GitMentor] Message sent, response:', response)
+  } catch (error) {
+    console.error('[GitMentor] Error sending message:', error)
+    showNotification(`Error: ${error}`)
+  }
 }
 
 function showNotification(message: string) {
