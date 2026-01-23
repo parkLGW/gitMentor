@@ -63,71 +63,109 @@ async function performAIAnalysis(fileName, fileContent, language) {
   
   // Prepare the AI prompt
   const prompt = language === 'zh' 
-    ? `你是代码专家。分析这个真实的文件并提供详细理解。
+    ? `你是代码专家。分析这个真实的文件并提供详细理解，用于学习。
 
 文件：${fileName}
 
 内容：
 ${fileContent.substring(0, 10000)}
 
-提供简洁、可操作的分析：
-- 一句话：这个文件做什么
-- 列出所有函数/类/导出及说明
-- 识别导入/依赖
-- 评估每个函数的复杂度
-- 建议理解难度
-- 给出学习要点
+重要：包含行号（如需要可估计），专注于代码的理解和学习价值。
 
 JSON：
 {
   "fileOverview": "一句话：这个文件做什么",
+  "difficulty": "beginner|intermediate|advanced",
+  "keyTakeaway": "学习这段代码的关键洞察",
+  "coreConcepts": [
+    {
+      "concept": "设计模式或关键概念名称",
+      "explanation": "为什么这个概念在这个文件中很重要",
+      "relatedLines": [10, 25, 30]
+    }
+  ],
+  "codeFlow": [
+    {
+      "step": 1,
+      "description": "首先发生什么",
+      "lineNumber": 15,
+      "functionName": "entryPoint"
+    },
+    {
+      "step": 2,
+      "description": "接下来发生什么",
+      "lineNumber": 25,
+      "functionName": "processData"
+    }
+  ],
   "functions": [
     {
       "name": "函数名或类名",
       "type": "function|class|export|constant",
-      "description": "它做什么（一句话）",
+      "lineNumber": 15,
+      "description": "一句话描述",
       "complexity": "simple|moderate|complex",
-      "parameters": ["参数1", "参数2"],
-      "returns": "返回类型或描述"
+      "purpose": "为什么存在，解决什么问题",
+      "parameters": ["参数1: 类型", "参数2: 类型"],
+      "returns": "返回类型和含义",
+      "calls": ["helperFunction", "otherFunction"],
+      "calledBy": ["mainFunction", "setup"]
     }
   ],
   "dependencies": ["./其他文件", "外部库"],
-  "exports": ["导出1", "导出2"],
-  "difficulty": "beginner|intermediate|advanced",
-  "keyTakeaway": "关于这个文件最重要的理解"
+  "exports": ["导出1", "导出2"]
 }`
-    : `You are a code expert. Analyze THIS ACTUAL file and provide detailed understanding.
+    : `You are a code expert. Analyze THIS ACTUAL file and provide detailed understanding for learning.
 
 FILE: ${fileName}
 
 CONTENT:
 ${fileContent.substring(0, 10000)}
 
-Provide concise, actionable analysis:
-- One-liner overview of what this file does
-- List all functions/classes/exports with descriptions
-- Identify imports/dependencies
-- Rate complexity for each function
-- Suggest difficulty level for understanding
-- Give key takeaway for learning
+IMPORTANT: Include line numbers (estimate if needed) and focus on UNDERSTANDING and LEARNING, not just listing.
 
 JSON:
 {
   "fileOverview": "One sentence: what this file does",
+  "difficulty": "beginner|intermediate|advanced",
+  "keyTakeaway": "One key insight for someone learning this code",
+  "coreConcepts": [
+    {
+      "concept": "Design pattern or key concept name",
+      "explanation": "Why this concept matters in this file",
+      "relatedLines": [10, 25, 30]
+    }
+  ],
+  "codeFlow": [
+    {
+      "step": 1,
+      "description": "What happens first",
+      "lineNumber": 15,
+      "functionName": "entryPoint"
+    },
+    {
+      "step": 2,
+      "description": "What happens next",
+      "lineNumber": 25,
+      "functionName": "processData"
+    }
+  ],
   "functions": [
     {
       "name": "functionName or ClassName",
       "type": "function|class|export|constant",
-      "description": "What it does in one sentence",
+      "lineNumber": 15,
+      "description": "One sentence description",
       "complexity": "simple|moderate|complex",
-      "parameters": ["param1", "param2"],
-      "returns": "return type or description"
+      "purpose": "Why this exists and what problem it solves",
+      "parameters": ["param1: type", "param2: type"],
+      "returns": "return type and what it means",
+      "calls": ["helperFunction", "otherFunction"],
+      "calledBy": ["mainFunction", "setup"]
     }
   ],
   "dependencies": ["./other-file", "external-lib"],
-  "exports": ["exported1", "exported2"],
-  "difficulty": "beginner|intermediate|advanced",
-  "keyTakeaway": "The most important thing to understand about this file"
+  "exports": ["exported1", "exported2"]
 }`
   
   // Call the appropriate LLM provider
@@ -306,51 +344,82 @@ function generateBasicAnalysis(fileName, fileContent, language) {
 
 function generateAnalysisHTML(analysis, language) {
   let html = ''
+  const labels = language === 'zh' ? {
+    overview: '文件概览',
+    difficulty: '难度',
+    keyTakeaway: '关键要点',
+    coreConcepts: '核心概念',
+    codeFlow: '代码执行流',
+    functions: '函数和类',
+    clickToHighlight: '点击可定位到代码行',
+    lineNumber: '行',
+    calls: '调用',
+    calledBy: '被调用',
+  } : {
+    overview: 'File Overview',
+    difficulty: 'Difficulty',
+    keyTakeaway: 'Key Takeaway',
+    coreConcepts: 'Core Concepts',
+    codeFlow: 'Code Execution Flow',
+    functions: 'Functions & Classes',
+    clickToHighlight: 'Click to highlight in code',
+    lineNumber: 'line',
+    calls: 'calls',
+    calledBy: 'called by',
+  }
   
   // File overview
   if (analysis.fileOverview) {
-    html += `
-      <div style="padding: 12px; background: #f0f2f5; border-radius: 4px; margin-bottom: 12px;">
-        <p style="margin: 0; font-size: 12px; font-weight: 600; color: #24292e;">${analysis.fileOverview}</p>
-      </div>
-    `
+    html += `<div style="padding: 12px; background: #f0f2f5; border-radius: 4px; margin-bottom: 12px;"><p style="margin: 0; font-size: 12px; font-weight: 600; color: #24292e;">${escapeHtml(analysis.fileOverview)}</p></div>`
   }
   
-  // Difficulty
-  if (analysis.difficulty) {
+  // Difficulty & Key Takeaway
+  if (analysis.difficulty || analysis.keyTakeaway) {
     const diffColor = analysis.difficulty === 'beginner' ? '#28a745' : 
                      analysis.difficulty === 'intermediate' ? '#ffc107' : '#dc3545'
-    html += `
-      <div style="padding: 8px; background: ${diffColor}20; border-radius: 4px; margin-bottom: 12px; border-left: 2px solid ${diffColor};">
-        <p style="margin: 0; font-size: 11px; color: ${diffColor};">
-          Difficulty: <strong>${analysis.difficulty}</strong>
-        </p>
-      </div>
-    `
+    html += `<div style="display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 12px;">`
+    
+    if (analysis.difficulty) {
+      html += `<div style="padding: 8px; background: ${diffColor}20; border-radius: 4px; border-left: 2px solid ${diffColor};"><p style="margin: 0; font-size: 11px; color: ${diffColor};"><strong>${labels.difficulty}:</strong> ${analysis.difficulty}</p></div>`
+    }
+    
+    if (analysis.keyTakeaway) {
+      html += `<div style="padding: 8px; background: #e7f5ff; border-radius: 4px; border-left: 2px solid #0366d6;"><p style="margin: 0; font-size: 11px; color: #0366d6;"><strong>💡:</strong> ${escapeHtml(analysis.keyTakeaway)}</p></div>`
+    }
+    
+    html += `</div>`
   }
   
-  // Functions
-  if (analysis.functions && analysis.functions.length > 0) {
-    html += `
-      <div style="margin-bottom: 12px;">
-        <p style="font-size: 12px; font-weight: 600; margin: 0 0 8px 0;">Functions & Classes</p>
-        <div style="space-y: 4px;">
-    `
+  // Core Concepts (Learning Guide - C)
+  if (analysis.coreConcepts && analysis.coreConcepts.length > 0) {
+    html += `<div style="border-bottom: 1px solid #e1e4e8; margin-bottom: 12px; padding-bottom: 12px;"><p style="font-size: 12px; font-weight: 600; margin: 0 0 8px 0; color: #24292e;">📚 ${labels.coreConcepts}</p><div style="space-y: 6px;">`
     
-    for (const func of analysis.functions.slice(0, 15)) {
+    for (const concept of analysis.coreConcepts.slice(0, 3)) {
+      html += `<div style="padding: 8px; background: #fff8e1; border-left: 2px solid #ffc107; border-radius: 3px; margin-bottom: 6px;"><p style="margin: 0; font-size: 11px; font-weight: 600; color: #664d03;">${escapeHtml(concept.concept)}</p><p style="margin: 4px 0 0 0; font-size: 11px; color: #856404;">${escapeHtml(concept.explanation)}</p>${concept.relatedLines ? `<p style="margin: 4px 0 0 0; font-size: 10px; color: #999;">📍 ${labels.lineNumber}: ${concept.relatedLines.join(', ')}</p>` : ''}</div>`
+    }
+    
+    html += `</div></div>`
+  }
+  
+  // Code Flow (Interactive Code Map - B)
+  if (analysis.codeFlow && analysis.codeFlow.length > 0) {
+    html += `<div style="border-bottom: 1px solid #e1e4e8; margin-bottom: 12px; padding-bottom: 12px;"><p style="font-size: 12px; font-weight: 600; margin: 0 0 8px 0; color: #24292e;">🔄 ${labels.codeFlow} <span style="font-size: 10px; color: #999;">(${labels.clickToHighlight})</span></p><div style="space-y: 4px;">`
+    
+    for (const step of analysis.codeFlow) {
+      html += `<div style="padding: 8px; background: #f6f8fa; border-left: 3px solid #0366d6; border-radius: 3px; margin-bottom: 6px; cursor: pointer; transition: background 0.2s;" onclick="console.log('Line: ${step.lineNumber}')"><div style="display: flex; align-items: baseline; gap: 8px;"><span style="font-size: 11px; font-weight: 600; color: #0366d6; min-width: 20px;">${step.step}.</span><div style="flex: 1;"><p style="margin: 0; font-size: 11px; color: #24292e;">${escapeHtml(step.description)}</p><p style="margin: 2px 0 0 0; font-size: 10px; color: #666;"><code>${escapeHtml(step.functionName)}</code> <span style="color: #999;">${labels.lineNumber} ${step.lineNumber}</span></p></div></div></div>`
+    }
+    
+    html += `</div></div>`
+  }
+  
+  // Functions (Interactive Map - B)
+  if (analysis.functions && analysis.functions.length > 0) {
+    html += `<div><p style="font-size: 12px; font-weight: 600; margin: 0 0 8px 0; color: #24292e;">⚙️ ${labels.functions}</p><div style="space-y: 4px;">`
+    
+    for (const func of analysis.functions.slice(0, 12)) {
       const complexColor = func.complexity === 'simple' ? '#28a745' : 
                           func.complexity === 'moderate' ? '#ffc107' : '#dc3545'
-      html += `
-        <div style="padding: 8px; background: #f6f8fa; border-radius: 4px; margin-bottom: 4px; border-left: 2px solid #0366d6;">
-          <div style="display: flex; justify-content: space-between; align-items: center;">
-            <code style="font-size: 11px; color: #0366d6; font-weight: 500;">${escapeHtml(func.name)}</code>
-            <span style="font-size: 10px; padding: 2px 6px; background: ${complexColor}20; color: ${complexColor}; border-radius: 3px;">
-              ${func.complexity}
-            </span>
-          </div>
-          <div style="font-size: 11px; color: #666; margin-top: 4px;">${escapeHtml(func.description)}</div>
-        </div>
-      `
+      html += `<div style="padding: 8px; background: #f6f8fa; border-left: 2px solid #0366d6; border-radius: 3px; margin-bottom: 6px; cursor: pointer;" onclick="console.log('Jump to: ${func.name} line ${func.lineNumber}')"><div style="display: flex; justify-content: space-between; align-items: start; gap: 8px;"><div style="flex: 1; min-width: 0;"><code style="font-size: 11px; color: #0366d6; font-weight: 500; word-break: break-word;">${escapeHtml(func.name)}</code><p style="margin: 2px 0 0 0; font-size: 10px; color: #999;">${labels.lineNumber} ${func.lineNumber} • ${func.complexity}</p><p style="margin: 3px 0 0 0; font-size: 11px; color: #24292e;">${escapeHtml(func.purpose || func.description)}</p>${func.calls && func.calls.length > 0 ? `<p style="margin: 3px 0 0 0; font-size: 10px; color: #666;">↳ ${labels.calls}: ${escapeHtml(func.calls.join(', '))}</p>` : ''}${func.calledBy && func.calledBy.length > 0 ? `<p style="margin: 1px 0 0 0; font-size: 10px; color: #666;">↤ ${labels.calledBy}: ${escapeHtml(func.calledBy.join(', '))}</p>` : ''}</div><span style="font-size: 10px; padding: 2px 6px; background: ${complexColor}20; color: ${complexColor}; border-radius: 3px; white-space: nowrap;">${func.complexity}</span></div></div>`
     }
     
     html += `</div></div>`

@@ -318,93 +318,145 @@ JSON：
 `,
 
   fileAnalysis: (fileName: string, fileContent: string, language: 'zh' | 'en' = 'en') => `
-You are a code expert. Analyze THIS ACTUAL file and provide detailed understanding.
+You are a code expert. Analyze THIS ACTUAL file and provide detailed understanding for learning.
 
 FILE: ${fileName}
 
 CONTENT:
 ${fileContent}
 
-Provide concise, actionable analysis:
-- One-liner overview of what this file does
-- List all functions/classes/exports with descriptions
-- Identify imports/dependencies
-- Rate complexity for each function
-- Suggest difficulty level for understanding
-- Give key takeaway for learning
+IMPORTANT: Include line numbers (estimate if needed) and focus on UNDERSTANDING and LEARNING, not just listing.
 
 JSON:
 {
   "fileOverview": "One sentence: what this file does",
+  "difficulty": "beginner|intermediate|advanced",
+  "keyTakeaway": "One key insight for someone learning this code",
+  "coreConcepts": [
+    {
+      "concept": "Design pattern or key concept name",
+      "explanation": "Why this concept matters in this file",
+      "relatedLines": [10, 25, 30]
+    }
+  ],
+  "codeFlow": [
+    {
+      "step": 1,
+      "description": "What happens first",
+      "lineNumber": 15,
+      "functionName": "entryPoint"
+    },
+    {
+      "step": 2,
+      "description": "What happens next",
+      "lineNumber": 25,
+      "functionName": "processData"
+    }
+  ],
   "functions": [
     {
       "name": "functionName or ClassName",
       "type": "function|class|export|constant",
-      "description": "What it does in one sentence",
+      "lineNumber": 15,
+      "description": "One sentence description",
       "complexity": "simple|moderate|complex",
-      "parameters": ["param1", "param2"],
-      "returns": "return type or description"
+      "purpose": "Why this exists and what problem it solves",
+      "parameters": ["param1: type", "param2: type"],
+      "returns": "return type and what it means",
+      "calls": ["helperFunction", "otherFunction"],
+      "calledBy": ["mainFunction", "setup"]
     }
   ],
   "dependencies": ["./other-file", "external-lib"],
-  "exports": ["exported1", "exported2"],
-  "difficulty": "beginner|intermediate|advanced",
-  "keyTakeaway": "The most important thing to understand about this file"
+  "exports": ["exported1", "exported2"]
 }
 `,
 
   fileAnalysisCN: (fileName: string, fileContent: string) => `
-你是代码专家。分析这个真实的文件并提供详细理解。
+你是代码专家。分析这个真实的文件并提供详细理解，用于学习。
 
 文件：${fileName}
 
 内容：
 ${fileContent}
 
-提供简洁、可操作的分析：
-- 一句话：这个文件做什么
-- 列出所有函数/类/导出及说明
-- 识别导入/依赖
-- 评估每个函数的复杂度
-- 建议理解难度
-- 给出学习要点
+重要：包含行号（如需要可估计），专注于代码的理解和学习价值。
 
 JSON：
 {
   "fileOverview": "一句话：这个文件做什么",
+  "difficulty": "beginner|intermediate|advanced",
+  "keyTakeaway": "学习这段代码的关键洞察",
+  "coreConcepts": [
+    {
+      "concept": "设计模式或关键概念名称",
+      "explanation": "为什么这个概念在这个文件中很重要",
+      "relatedLines": [10, 25, 30]
+    }
+  ],
+  "codeFlow": [
+    {
+      "step": 1,
+      "description": "首先发生什么",
+      "lineNumber": 15,
+      "functionName": "entryPoint"
+    },
+    {
+      "step": 2,
+      "description": "接下来发生什么",
+      "lineNumber": 25,
+      "functionName": "processData"
+    }
+  ],
   "functions": [
     {
       "name": "函数名或类名",
       "type": "function|class|export|constant",
-      "description": "它做什么（一句话）",
+      "lineNumber": 15,
+      "description": "一句话描述",
       "complexity": "simple|moderate|complex",
-      "parameters": ["参数1", "参数2"],
-      "returns": "返回类型或描述"
+      "purpose": "为什么存在，解决什么问题",
+      "parameters": ["参数1: 类型", "参数2: 类型"],
+      "returns": "返回类型和含义",
+      "calls": ["helperFunction", "otherFunction"],
+      "calledBy": ["mainFunction", "setup"]
     }
   ],
   "dependencies": ["./其他文件", "外部库"],
-  "exports": ["导出1", "导出2"],
-  "difficulty": "beginner|intermediate|advanced",
-  "keyTakeaway": "关于这个文件最重要的理解"
+  "exports": ["导出1", "导出2"]
 }
 `,
 }
 
 export interface FileAnalysis {
   fileOverview: string
+  difficulty: 'beginner' | 'intermediate' | 'advanced'
+  keyTakeaway: string
+  coreConcepts: Array<{
+    concept: string
+    explanation: string
+    relatedLines?: number[]
+  }>
+  codeFlow: Array<{
+    step: number
+    description: string
+    lineNumber: number
+    functionName: string
+  }>
   functions: Array<{
     name: string
     type: 'function' | 'class' | 'export' | 'constant'
-    lineNumber?: number
+    lineNumber: number
     description: string
     complexity: 'simple' | 'moderate' | 'complex'
     parameters?: string[]
     returns?: string
+    purpose: string
+    calls?: string[]
+    calledBy?: string[]
   }>
   dependencies: string[]
   exports: string[]
-  difficulty: 'beginner' | 'intermediate' | 'advanced'
-  keyTakeaway: string
 }
 
 export class AIAnalysisService {
