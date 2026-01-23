@@ -1,5 +1,7 @@
 import React, { useState } from 'react'
 import { generateSourceMap } from '@/services/analysis'
+import { AIAnalysisService, SourceCodeMap } from '@/services/ai-analysis'
+import { useLLM } from '@/hooks/useLLM'
 
 interface SourceMapTabProps {
   repo: { owner: string; name: string }
@@ -8,7 +10,40 @@ interface SourceMapTabProps {
 
 function SourceMapTab({ repo, language }: SourceMapTabProps) {
   const [expandedPhase, setExpandedPhase] = useState<number | null>(0)
+  const [aiData, setAiData] = useState<SourceCodeMap | null>(null)
+  const [aiLoading, setAiLoading] = useState(false)
+  const [aiError, setAiError] = useState<string | null>(null)
+  const { isConfigured } = useLLM()
   const sourceMap = generateSourceMap(language)
+
+  const handleAIAnalysis = async () => {
+    if (!isConfigured()) {
+      setAiError(language === 'zh' ? '请先在设置中配置AI提供商' : 'Please configure AI provider in Settings')
+      return
+    }
+
+    setAiLoading(true)
+    setAiError(null)
+
+    try {
+      const projectInfo = `${repo.name} project`
+      const guide = await AIAnalysisService.generateSourceMap(
+        projectInfo,
+        'placeholder',
+        undefined,
+        language
+      )
+      setAiData(guide)
+
+      // Cache the result
+      const cacheKey = `gitmentor_sourcemap_${repo.owner}/${repo.name}`
+      localStorage.setItem(cacheKey, JSON.stringify(guide))
+    } catch (err) {
+      setAiError(err instanceof Error ? err.message : 'Analysis failed')
+    } finally {
+      setAiLoading(false)
+    }
+  }
 
   const labels = {
     zh: {
@@ -43,6 +78,54 @@ function SourceMapTab({ repo, language }: SourceMapTabProps) {
 
   return (
     <div className="space-y-4">
+      {/* AI Analysis Button */}
+      {!aiData && (
+        <div className="bg-gradient-to-r from-purple-50 to-pink-50 border border-purple-200 rounded-lg p-3">
+          <div className="flex items-center justify-between">
+            <p className="text-xs font-semibold text-purple-900">
+              {language === 'zh' ? '✨ 用AI生成源码学习路线' : '✨ AI Source Code Map'}
+            </p>
+            <button
+              onClick={handleAIAnalysis}
+              disabled={aiLoading || !isConfigured()}
+              className="px-2 py-1 bg-purple-500 hover:bg-purple-600 disabled:bg-gray-400 text-white rounded text-xs font-medium transition"
+            >
+              {aiLoading ? (language === 'zh' ? '生成中...' : 'Generating...') : 'AI'}
+            </button>
+          </div>
+          {!isConfigured() && (
+            <p className="text-xs text-purple-700 mt-1">
+              {language === 'zh' ? '需要在设置中配置AI提供商' : 'Configure AI provider in Settings'}
+            </p>
+          )}
+        </div>
+      )}
+
+      {/* AI Error */}
+      {aiError && (
+        <div className="bg-red-50 border border-red-200 rounded-lg p-2">
+          <p className="text-xs text-red-700">{aiError}</p>
+        </div>
+      )}
+
+      {/* AI Analysis Results */}
+      {aiData && (
+        <div className="bg-gradient-to-r from-purple-50 to-pink-50 border border-purple-200 rounded-lg p-3">
+          <div className="flex items-center justify-between mb-2">
+            <p className="text-xs font-semibold text-purple-900">
+              {language === 'zh' ? '✨ AI生成的学习路线' : '✨ AI Learning Path'}
+            </p>
+            <button
+              onClick={() => setAiData(null)}
+              className="text-xs text-purple-600 hover:text-purple-900 underline"
+            >
+              {language === 'zh' ? '重新生成' : 'Regenerate'}
+            </button>
+          </div>
+          <p className="text-xs text-purple-900"><strong>{language === 'zh' ? '架构：' : 'Architecture: '}</strong>{aiData.architecture}</p>
+        </div>
+      )}
+
       {/* Architecture */}
       <div className="bg-purple-50 border border-purple-200 rounded-lg p-3">
         <p className="text-xs font-semibold text-gray-600 mb-2">🏗️ {texts.architecture}</p>
