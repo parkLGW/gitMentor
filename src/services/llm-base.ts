@@ -1,10 +1,10 @@
 // Base LLM Provider implementations
 
-import { LLMConfig, LLMProvider, LLMResponse } from '@/types/llm'
+import { LLMConfig, LLMProvider, LLMProviderType, LLMResponse } from '@/types/llm'
 
 export abstract class BaseLLMProvider implements LLMProvider {
   abstract name: string
-  abstract type: 'claude' | 'openai' | 'azure' | 'ollama' | 'custom'
+  abstract type: LLMProviderType
   
   protected config: LLMConfig | null = null
   protected isConfiguredFlag = false
@@ -28,7 +28,7 @@ export abstract class BaseLLMProvider implements LLMProvider {
     return this.config
   }
 
-  abstract complete(prompt: string, systemPrompt?: string): Promise<LLMResponse>
+  abstract complete(prompt: string, systemPrompt?: string, signal?: AbortSignal): Promise<LLMResponse>
   abstract stream(prompt: string, systemPrompt?: string): AsyncGenerator<string>
   abstract testConnection(): Promise<boolean>
 
@@ -42,7 +42,7 @@ export class ClaudeProvider extends BaseLLMProvider {
   name = 'Claude (Anthropic)'
   type = 'claude' as const
 
-  async complete(prompt: string, systemPrompt?: string): Promise<LLMResponse> {
+  async complete(prompt: string, systemPrompt?: string, signal?: AbortSignal): Promise<LLMResponse> {
     const config = this.getConfig()
     
     try {
@@ -59,6 +59,7 @@ export class ClaudeProvider extends BaseLLMProvider {
           system: this.createSystemPrompt(systemPrompt),
           messages: [{ role: 'user', content: prompt }],
         }),
+        signal,
       })
 
       if (!response.ok) {
@@ -77,6 +78,9 @@ export class ClaudeProvider extends BaseLLMProvider {
         },
       }
     } catch (error) {
+      if (error instanceof Error && error.name === 'AbortError') {
+        throw error
+      }
       throw new Error(`Claude error: ${error instanceof Error ? error.message : String(error)}`)
     }
   }
@@ -503,129 +507,6 @@ export class DeepSeekProvider extends BaseLLMProvider {
   }
 }
 
-// Groq Provider - 免费快速推理引擎
-export class GroqProvider extends BaseLLMProvider {
-  type: LLMProviderType = 'groq'
-  name = 'Groq'
-
-  async complete(prompt: string, systemPrompt?: string): Promise<LLMResponse> {
-    const config = this.getConfig()
-
-    try {
-      const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${config.apiKey}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          model: config.model || 'mixtral-8x7b-32768',
-          temperature: config.temperature ?? 0.7,
-          max_tokens: config.maxTokens || 2000,
-          messages: [
-            { role: 'system', content: this.createSystemPrompt(systemPrompt) },
-            { role: 'user', content: prompt },
-          ],
-        }),
-      })
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}))
-        const errorMessage = errorData.error?.message || response.statusText || `HTTP ${response.status}`
-        throw new Error(`Groq API error: ${errorMessage}`)
-      }
-
-      const data = await response.json()
-      return {
-        content: data.choices[0].message.content,
-        model: config.model || 'mixtral-8x7b-32768',
-        tokensUsed: {
-          prompt: data.usage?.prompt_tokens || 0,
-          completion: data.usage?.completion_tokens || 0,
-          total: data.usage?.total_tokens || 0,
-        },
-      }
-    } catch (error) {
-      throw new Error(`Groq error: ${error instanceof Error ? error.message : String(error)}`)
-    }
-  }
-
-  async *stream(prompt: string, systemPrompt?: string): AsyncGenerator<string> {
-    const config = this.getConfig()
-
-    try {
-      const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${config.apiKey}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          model: config.model || 'mixtral-8x7b-32768',
-          temperature: config.temperature ?? 0.7,
-          max_tokens: config.maxTokens || 2000,
-          stream: true,
-          messages: [
-            { role: 'system', content: this.createSystemPrompt(systemPrompt) },
-            { role: 'user', content: prompt },
-          ],
-        }),
-      })
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}))
-        const errorMessage = errorData.error?.message || response.statusText || `HTTP ${response.status}`
-        throw new Error(`Groq API error: ${errorMessage}`)
-      }
-
-      const reader = response.body?.getReader()
-      if (!reader) throw new Error('No response body')
-
-      const decoder = new TextDecoder()
-      let buffer = ''
-
-      while (true) {
-        const { done, value } = await reader.read()
-        if (done) break
-
-        buffer += decoder.decode(value, { stream: true })
-        const lines = buffer.split('\n')
-        buffer = lines.pop() || ''
-
-        for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            const dataStr = line.slice(6)
-            if (dataStr === '[DONE]') continue
-            try {
-              const data = JSON.parse(dataStr)
-              if (data.choices[0].delta.content) {
-                yield data.choices[0].delta.content
-              }
-            } catch {
-              // Skip invalid JSON lines
-            }
-          }
-        }
-      }
-    } catch (error) {
-      throw new Error(`Groq stream error: ${error instanceof Error ? error.message : String(error)}`)
-    }
-  }
-
-  async testConnection(): Promise<boolean> {
-    try {
-      const config = this.getConfig()
-      const response = await fetch('https://api.groq.com/openai/v1/models', {
-        headers: {
-          'Authorization': `Bearer ${config.apiKey}`,
-        },
-      })
-      return response.ok
-    } catch {
-      return false
-    }
-  }
-}
 
 // LM Studio Provider - 本地免费运行，兼容OpenAI API
 export class LMStudioProvider extends BaseLLMProvider {
@@ -851,6 +732,132 @@ export class ZhipuProvider extends BaseLLMProvider {
     try {
       const config = this.getConfig()
       const response = await fetch('https://open.bigmodel.cn/api/paas/v4/models', {
+        headers: {
+          'Authorization': `Bearer ${config.apiKey}`,
+        },
+      })
+      return response.ok
+    } catch {
+      return false
+    }
+  }
+}
+
+// Silicon Flow Provider - 硅基流动
+export class SiliconFlowProvider extends BaseLLMProvider {
+  type: LLMProviderType = 'siliconflow'
+  name = 'Silicon Flow (硅基流动)'
+
+  async complete(prompt: string, systemPrompt?: string, signal?: AbortSignal): Promise<LLMResponse> {
+    const config = this.getConfig()
+
+    try {
+      const response = await fetch('https://api.siliconflow.cn/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${config.apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: config.model || 'Qwen/Qwen2.5-72B-Instruct',
+          temperature: config.temperature ?? 0.7,
+          max_tokens: config.maxTokens || 2000,
+          messages: [
+            { role: 'system', content: this.createSystemPrompt(systemPrompt) },
+            { role: 'user', content: prompt },
+          ],
+        }),
+        signal,
+      })
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}))
+        const errorMessage = errorData.error?.message || response.statusText || `HTTP ${response.status}`
+        throw new Error(`Silicon Flow API error: ${errorMessage}`)
+      }
+
+      const data = await response.json()
+      return {
+        content: data.choices[0].message.content,
+        model: config.model || 'Qwen/Qwen2.5-72B-Instruct',
+        tokensUsed: {
+          prompt: data.usage?.prompt_tokens || 0,
+          completion: data.usage?.completion_tokens || 0,
+          total: data.usage?.total_tokens || 0,
+        },
+      }
+    } catch (error) {
+      if (error instanceof Error && error.name === 'AbortError') {
+        throw error
+      }
+      throw new Error(`Silicon Flow error: ${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
+
+  async *stream(prompt: string, systemPrompt?: string): AsyncGenerator<string> {
+    const config = this.getConfig()
+
+    try {
+      const response = await fetch('https://api.siliconflow.cn/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${config.apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: config.model || 'Qwen/Qwen2.5-72B-Instruct',
+          temperature: config.temperature ?? 0.7,
+          max_tokens: config.maxTokens || 2000,
+          stream: true,
+          messages: [
+            { role: 'system', content: this.createSystemPrompt(systemPrompt) },
+            { role: 'user', content: prompt },
+          ],
+        }),
+      })
+
+      if (!response.ok) {
+        throw new Error(`Silicon Flow API error: ${response.statusText}`)
+      }
+
+      const reader = response.body?.getReader()
+      if (!reader) throw new Error('No response body')
+
+      const decoder = new TextDecoder()
+      let buffer = ''
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split('\n')
+        buffer = lines.pop() || ''
+
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            const dataStr = line.slice(6)
+            if (dataStr === '[DONE]') continue
+            try {
+              const data = JSON.parse(dataStr)
+              if (data.choices[0].delta.content) {
+                yield data.choices[0].delta.content
+              }
+            } catch {
+              // Skip invalid JSON lines
+            }
+          }
+        }
+      }
+    } catch (error) {
+      throw new Error(`Silicon Flow stream error: ${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
+
+  async testConnection(): Promise<boolean> {
+    try {
+      const config = this.getConfig()
+      const response = await fetch('https://api.siliconflow.cn/v1/models', {
         headers: {
           'Authorization': `Bearer ${config.apiKey}`,
         },

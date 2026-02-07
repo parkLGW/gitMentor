@@ -1,16 +1,141 @@
 // AI Analysis Service - Prompt design and analysis logic
 
 import { llmManager } from './llm'
+import { usageTracker } from './usage-tracker'
 
-// Helper function to extract JSON from markdown code blocks
-function extractJSON(text: string): string {
+// Helper function to extract JSON from markdown code block
+function extractJSONFromMarkdown(text: string): string | null {
   // Try to extract JSON from markdown code block
   const jsonMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/)
-  if (jsonMatch) {
+  if (jsonMatch && jsonMatch[1]) {
     return jsonMatch[1].trim()
   }
-  // If no markdown block, return as-is
-  return text.trim()
+  return null
+}
+
+// Find JSON boundaries in text
+function findJSONBoundaries(text: string): { start: number; end: number } | null {
+  let braceCount = 0
+  let inString = false
+  let escapeNext = false
+  let start = -1
+
+  for (let i = 0; i < text.length; i++) {
+    const char = text[i]
+
+    if (escapeNext) {
+      escapeNext = false
+      continue
+    }
+
+    if (char === '\\') {
+      escapeNext = true
+      continue
+    }
+
+    if (char === '"' && !inString) {
+      inString = true
+      if (start === -1) {
+        // Look back for opening brace
+        for (let j = i - 1; j >= 0; j--) {
+          if (text[j] === '{') {
+            start = j
+            braceCount = 1
+            break
+          }
+        }
+      }
+    } else if (char === '"' && inString) {
+      inString = false
+    } else if (!inString) {
+      if (char === '{') {
+        if (start === -1) {
+          start = i
+        }
+        braceCount++
+      } else if (char === '}') {
+        braceCount--
+        if (braceCount === 0 && start !== -1) {
+          return { start, end: i + 1 }
+        }
+      }
+    }
+  }
+
+  return null
+}
+
+// Safe JSON parse with comprehensive error handling
+function safeParseJSON<T>(text: string, fallback?: Partial<T>): T {
+  // First, try to extract from markdown
+  let jsonText = extractJSONFromMarkdown(text)
+
+  // If not in markdown, try to find JSON boundaries
+  if (!jsonText) {
+    const boundaries = findJSONBoundaries(text)
+    if (boundaries) {
+      jsonText = text.slice(boundaries.start, boundaries.end)
+    } else {
+      jsonText = text.trim()
+    }
+  }
+
+  // Attempt 1: Direct parse
+  try {
+    return JSON.parse(jsonText)
+  } catch (e) {
+    console.warn('[AI Analysis] Initial JSON parse failed, trying fixes...')
+  }
+
+  // Attempt 2: Fix common issues
+  try {
+    let fixed = jsonText
+      // Remove BOM
+      .replace(/^\uFEFF/, '')
+      // Remove trailing commas
+      .replace(/,\s*([}\]])/g, '$1')
+      // Fix unescaped newlines in strings (be more careful here)
+      .replace(/("(?:[^"\\]|\\.)*")/g, (match) => {
+        return match
+          .replace(/\n/g, '\\n')
+          .replace(/\r/g, '\\r')
+          .replace(/\t/g, '\\t')
+      })
+
+    return JSON.parse(fixed)
+  } catch (e) {
+    console.warn('[AI Analysis] Second attempt failed, trying aggressive fixes...')
+  }
+
+  // Attempt 3: Aggressive cleaning
+  try {
+    let cleaned = jsonText
+      // Remove all control characters except newlines and tabs
+      .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '')
+      // Fix multiple consecutive newlines
+      .replace(/\n+/g, '\\n')
+      // Ensure proper string escapes
+      .replace(/\\"/g, '"')
+      .replace(/"/g, '\\"')
+      .replace(/\\n/g, '__NEWLINE__')
+      .replace(/\\t/g, '__TAB__')
+      .replace(/__NEWLINE__/g, '\\n')
+      .replace(/__TAB__/g, '\\t')
+
+    return JSON.parse(cleaned)
+  } catch (e) {
+    console.error('[AI Analysis] All JSON parse attempts failed')
+    console.error('[AI Analysis] Raw text (first 1000 chars):', text.slice(0, 1000))
+    console.error('[AI Analysis] JSON text (first 1000 chars):', jsonText.slice(0, 1000))
+  }
+
+  // Use fallback if provided
+  if (fallback) {
+    console.warn('[AI Analysis] Using fallback data')
+    return fallback as T
+  }
+
+  throw new Error('Failed to parse AI response: Invalid JSON format')
 }
 
 export interface ProjectAnalysis {
@@ -317,7 +442,7 @@ JSON：
 }
 `,
 
-  fileAnalysis: (fileName: string, fileContent: string, language: 'zh' | 'en' = 'en') => `
+  fileAnalysis: (fileName: string, fileContent: string, _language: 'zh' | 'en' = 'en') => `
 You are a code expert. Analyze THIS ACTUAL file and provide detailed understanding for learning.
 
 FILE: ${fileName}
@@ -477,8 +602,11 @@ export class AIAnalysisService {
         : PROMPTS.projectAnalysis(projectInfo, readme)
 
     const response = await provider.complete(prompt)
-    const jsonText = extractJSON(response.content)
-    return JSON.parse(jsonText)
+    
+    // Track usage
+    usageTracker.track('projectAnalysis', prompt, response.content, response.model || 'unknown')
+    
+    return safeParseJSON<ProjectAnalysis>(response.content)
   }
 
   /**
@@ -499,8 +627,11 @@ export class AIAnalysisService {
         : PROMPTS.quickStart(projectInfo, readme, packageJson)
 
     const response = await provider.complete(prompt)
-    const jsonText = extractJSON(response.content)
-    return JSON.parse(jsonText)
+    
+    // Track usage
+    usageTracker.track('quickStart', prompt, response.content, response.model || 'unknown')
+    
+    return safeParseJSON<QuickStartGuide>(response.content)
   }
 
   /**
@@ -521,8 +652,11 @@ export class AIAnalysisService {
         : PROMPTS.sourceMap(projectInfo, fileTree, keyFiles)
 
     const response = await provider.complete(prompt)
-    const jsonText = extractJSON(response.content)
-    return JSON.parse(jsonText)
+    
+    // Track usage
+    usageTracker.track('sourceMap', prompt, response.content, response.model || 'unknown')
+    
+    return safeParseJSON<SourceCodeMap>(response.content)
   }
 
   /**
@@ -542,8 +676,11 @@ export class AIAnalysisService {
         : PROMPTS.fileAnalysis(fileName, fileContent, language)
 
     const response = await provider.complete(prompt)
-    const jsonText = extractJSON(response.content)
-    return JSON.parse(jsonText)
+    
+    // Track usage
+    usageTracker.track('fileAnalysis', prompt, response.content, response.model || 'unknown')
+    
+    return safeParseJSON<FileAnalysis>(response.content)
   }
 
   /**

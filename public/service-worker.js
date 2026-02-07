@@ -499,18 +499,66 @@ async function callZhipu(prompt, apiKey, model) {
 }
 
 function extractJSON(text) {
-  // Try to extract JSON from markdown code block or plain text
+  console.log('[GitMentor] Extracting JSON from text, length:', text.length)
+  
+  // Try to extract JSON from markdown code block first
   const jsonMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/)
   if (jsonMatch) {
-    return jsonMatch[1].trim()
+    const extracted = jsonMatch[1].trim()
+    console.log('[GitMentor] Found JSON in code block, length:', extracted.length)
+    return extracted
   }
   
-  // Try to find JSON object
-  const objectMatch = text.match(/\{[\s\S]*\}/)
-  if (objectMatch) {
-    return objectMatch[0]
+  // Try to find JSON object by finding first { and matching }
+  const startIdx = text.indexOf('{')
+  if (startIdx !== -1) {
+    let braceCount = 0
+    let endIdx = startIdx
+    let inString = false
+    let escaped = false
+    
+    for (let i = startIdx; i < text.length; i++) {
+      const char = text[i]
+      const prevChar = i > 0 ? text[i - 1] : ''
+      
+      // Handle escaping
+      if (escaped) {
+        escaped = false
+        continue
+      }
+      
+      if (char === '\\') {
+        escaped = true
+        continue
+      }
+      
+      // Handle strings
+      if (char === '"' && prevChar !== '\\') {
+        inString = !inString
+        continue
+      }
+      
+      // Count braces only outside strings
+      if (!inString) {
+        if (char === '{') braceCount++
+        else if (char === '}') {
+          braceCount--
+          if (braceCount === 0) {
+            endIdx = i + 1
+            break
+          }
+        }
+      }
+    }
+    
+    if (braceCount === 0 && endIdx > startIdx) {
+      const extracted = text.substring(startIdx, endIdx)
+      console.log('[GitMentor] Found JSON object, length:', extracted.length)
+      return extracted
+    }
   }
   
+  console.log('[GitMentor] No valid JSON found, using raw text')
   return text.trim()
 }
 

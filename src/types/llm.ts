@@ -1,6 +1,6 @@
 // LLM Provider types and interfaces
 
-export type LLMProviderType = 'claude' | 'openai' | 'ollama' | 'deepseek' | 'groq' | 'lmstudio' | 'zhipu'
+export type LLMProviderType = 'claude' | 'openai' | 'ollama' | 'deepseek' | 'lmstudio' | 'zhipu' | 'siliconflow'
 
 export interface LLMConfig {
   provider: LLMProviderType
@@ -36,8 +36,8 @@ export interface LLMProvider {
   // Check if provider is properly configured
   isConfigured(): boolean
   
-  // Single completion call
-  complete(prompt: string, systemPrompt?: string): Promise<LLMResponse>
+  // Single completion call with optional abort signal
+  complete(prompt: string, systemPrompt?: string, signal?: AbortSignal): Promise<LLMResponse>
   
   // Stream completion (for long responses)
   stream(prompt: string, systemPrompt?: string): AsyncGenerator<string>

@@ -1,9 +1,63 @@
 // Content script for injecting GitMentor floating widget on GitHub pages
 
+// Track current file path to detect changes
+let currentFilePath: string | null = null
+let currentLanguage: 'zh' | 'en' = 'en'
+
+// Get current language from storage
+async function getLanguage(): Promise<'zh' | 'en'> {
+  try {
+    if (!isExtensionContextValid()) return 'en'
+    const result = await chrome.storage.local.get(['gitmentor_language'])
+    return result.gitmentor_language || 'en'
+  } catch (e) {
+    console.warn('[GitMentor] Could not get language:', e)
+    return 'en'
+  }
+}
+
+// Translations for sidebar UI
+const uiTranslations = {
+  zh: {
+    readyToAnalyze: '准备分析',
+    clickToAnalyze: '点击下方按钮开始使用 AI 分析此文件',
+    startAnalysis: '开始分析',
+    requiresLLMConfig: '需要在设置中配置 LLM',
+    analyzingFile: '正在分析文件...',
+    deepAnalysisInProgress: '正在进行 AI 深度分析...',
+    mayTakeMoment: '这可能需要一点时间',
+    deepAnalysisFailed: '深度分析失败',
+    thinking: '思考中...',
+  },
+  en: {
+    readyToAnalyze: 'Ready to Analyze',
+    clickToAnalyze: 'Click the button below to start analyzing this file with AI',
+    startAnalysis: 'Start Analysis',
+    requiresLLMConfig: 'Requires LLM configuration in settings',
+    analyzingFile: 'Analyzing file...',
+    deepAnalysisInProgress: 'Performing deep analysis with AI...',
+    mayTakeMoment: 'This may take a moment',
+    deepAnalysisFailed: 'Deep analysis failed',
+    thinking: 'Thinking...',
+  },
+}
+
+type UITranslationKey = keyof typeof uiTranslations.en
+
+function getText(key: UITranslationKey) {
+  return uiTranslations[currentLanguage][key]
+}
+
 // Save language preference
 function detectAndSaveLanguage() {
-  const language = navigator.language?.startsWith('zh') ? 'zh' : 'en'
-  chrome.storage.local.set({ gitmentor_language: language })
+  try {
+    if (!isExtensionContextValid()) return
+    const language = navigator.language?.startsWith('zh') ? 'zh' : 'en'
+    chrome.storage.local.set({ gitmentor_language: language })
+    currentLanguage = language
+  } catch (e) {
+    console.warn('[GitMentor] Could not save language preference:', e)
+  }
 }
 
 interface FileInfo {
@@ -71,23 +125,49 @@ function isCodeFile(filePath: string): boolean {
   return true
 }
 
-function injectFileSidebar() {
+async function injectFileSidebar() {
+  // Load current language
+  currentLanguage = await getLanguage()
+  
   const fileInfo = parseFileUrl()
-  if (!fileInfo) return
+  if (!fileInfo) {
+    // Not on a file page, remove sidebar if exists
+    const existingSidebar = document.getElementById('gitmentor-file-sidebar')
+    if (existingSidebar) {
+      existingSidebar.remove()
+      currentFilePath = null
+    }
+    return
+  }
   
   // Check if this is a code file
   if (!isCodeFile(fileInfo.path)) {
     console.log('[GitMentor] Not a code file, skipping sidebar injection:', fileInfo.path)
+    // Remove existing sidebar if switching to non-code file
+    const existingSidebar = document.getElementById('gitmentor-file-sidebar')
+    if (existingSidebar) {
+      existingSidebar.remove()
+      currentFilePath = null
+    }
     return
   }
   
   console.log('[GitMentor] Detected code file:', fileInfo.path)
   
-  // Check if sidebar already exists
-  if (document.getElementById('gitmentor-file-sidebar')) {
-    console.log('[GitMentor] File sidebar already exists')
+  // Check if sidebar already exists for the same file
+  if (document.getElementById('gitmentor-file-sidebar') && currentFilePath === fileInfo.path) {
+    console.log('[GitMentor] File sidebar already exists for:', fileInfo.path)
     return
   }
+  
+  // If sidebar exists but file changed, remove it
+  if (document.getElementById('gitmentor-file-sidebar') && currentFilePath !== fileInfo.path) {
+    console.log('[GitMentor] File changed from', currentFilePath, 'to', fileInfo.path, ', updating sidebar')
+    document.getElementById('gitmentor-file-sidebar')?.remove()
+  }
+  
+  // Update current file path
+  currentFilePath = fileInfo.path
   
   // Create sidebar container
   const sidebar = document.createElement('div')
@@ -131,26 +211,45 @@ function injectFileSidebar() {
     <div style="font-size: 12px; color: #666; margin-top: 8px; word-break: break-all;">
       ${fileInfo.path}
     </div>
-    <div id="gitmentor-loading" style="
-      margin-top: 12px;
-      padding: 8px;
-      background: #f0f2f5;
-      border-radius: 4px;
-      text-align: center;
-      font-size: 12px;
-      color: #666;
-    ">
-      Analyzing file...
-    </div>
   `
   
-  // Content area
+  // Content area - 默认显示开始分析按钮
   const content = document.createElement('div')
   content.id = 'gitmentor-file-content'
   content.style.cssText = `
     padding: 16px;
     font-size: 13px;
     color: #24292e;
+  `
+  
+  // 默认显示开始分析界面
+  content.innerHTML = `
+    <div style="text-align: center; padding: 40px 20px;">
+      <div style="font-size: 48px; margin-bottom: 16px;">🔍</div>
+      <h3 style="font-size: 16px; font-weight: 600; margin: 0 0 8px 0; color: #24292e;">
+        ${getText('readyToAnalyze')}
+      </h3>
+      <p style="font-size: 13px; color: #666; margin: 0 0 20px 0; line-height: 1.5;">
+        ${getText('clickToAnalyze')}
+      </p>
+      <button id="gitmentor-start-analysis-btn" style="
+        width: 100%;
+        padding: 12px 20px;
+        background: #24292e;
+        color: white;
+        border: 1px solid rgba(27, 31, 35, 0.15);
+        border-radius: 6px;
+        font-size: 14px;
+        font-weight: 500;
+        cursor: pointer;
+        transition: background-color 0.2s;
+      ">
+        ${getText('startAnalysis')}
+      </button>
+      <p style="font-size: 11px; color: #999; margin-top: 12px;">
+        ${getText('requiresLLMConfig')}
+      </p>
+    </div>
   `
   
   sidebar.appendChild(header)
@@ -163,45 +262,123 @@ function injectFileSidebar() {
     sidebar.remove()
   })
   
-  // Fetch and analyze file
-  fetchAndAnalyzeFile(fileInfo, content)
+  // Start analysis button
+  const startAnalysisBtn = content.querySelector('#gitmentor-start-analysis-btn')
+  startAnalysisBtn?.addEventListener('click', () => {
+    fetchAndAnalyzeFile(fileInfo, content)
+  })
 }
 
 async function performDeepAnalysis(contentDiv: HTMLElement, fileData: any) {
   console.log('[GitMentor] Requesting deep analysis...')
   
+  // Load current language
+  currentLanguage = await getLanguage()
+  
+  // Check extension context
+  if (!isExtensionContextValid()) {
+    contentDiv.innerHTML = `<div style="color: #d73a49; padding: 12px; background: #ffeef0; border-radius: 4px; font-size: 12px;">Extension context unavailable. Please refresh the page.</div>`
+    showReloadPrompt()
+    return
+  }
+  
   // Show loading state
   contentDiv.innerHTML = `
     <div style="padding: 12px; background: #f0f2f5; border-radius: 4px; text-align: center; font-size: 12px; color: #666;">
-      🤖 Performing deep analysis with AI...
-      <div style="margin-top: 8px; font-size: 11px;">This may take a moment</div>
+      🤖 ${getText('deepAnalysisInProgress')}
+      <div style="margin-top: 8px; font-size: 11px;">${getText('mayTakeMoment')}</div>
     </div>
   `
   
-  // Request deep analysis from service worker
+    // Request deep analysis from service worker
   chrome.runtime.sendMessage({
     action: 'analyzeFileDeep',
     fileName: fileData.fileName,
     fileContent: fileData.fileContent,
+    language: currentLanguage,
   }, (response: any) => {
-    if (response?.error) {
-      contentDiv.innerHTML = `<div style="color: #d73a49; padding: 12px; background: #ffeef0; border-radius: 4px; font-size: 12px;">Deep analysis failed: ${response.error}</div>`
+    if (response?.error && !response?.html) {
+      contentDiv.innerHTML = `<div style="color: #d73a49; padding: 12px; background: #ffeef0; border-radius: 4px; font-size: 12px;">${getText('deepAnalysisFailed')}: ${response.error}</div>`
     } else if (response?.html) {
       contentDiv.innerHTML = response.html
+      
+      // Attach Q&A event listeners
+      const questionInput = contentDiv.querySelector('#gitmentor-question-input') as HTMLInputElement
+      const askBtn = contentDiv.querySelector('#gitmentor-ask-btn')
+      const qaResponse = contentDiv.querySelector('#gitmentor-qa-response')
+      
+      if (questionInput && askBtn && qaResponse) {
+        const handleAsk = () => {
+          const question = questionInput.value.trim()
+          if (!question) return
+          
+          qaResponse.innerHTML = `<div style="padding: 8px; background: #f0f2f5; border-radius: 4px; font-size: 12px; color: #666;">${getText('thinking')}</div>`
+          
+          chrome.runtime.sendMessage({
+            action: 'askQuestion',
+            fileName: fileData.fileName,
+            fileContent: fileData.fileContent,
+            question,
+          }, (qaResult: any) => {
+            if (qaResult?.error) {
+              qaResponse.innerHTML = `<div style="color: #d73a49; padding: 8px; background: #ffeef0; border-radius: 4px; font-size: 12px;">${qaResult.error}</div>`
+            } else if (qaResult?.answer) {
+              qaResponse.innerHTML = `<div style="padding: 12px; background: #f6f8fa; border-radius: 6px; font-size: 12px; line-height: 1.6; color: #24292e;">${qaResult.answer.replace(/\n/g, '<br>')}</div>`
+            }
+          })
+        }
+        
+        askBtn.addEventListener('click', handleAsk)
+        questionInput.addEventListener('keypress', (e) => {
+          if ((e as KeyboardEvent).key === 'Enter') handleAsk()
+        })
+      }
       
       // Re-attach event listener for back to quick analysis button if it exists
       const backBtn = contentDiv.querySelector('#gitmentor-back-to-quick-btn')
       if (backBtn) {
         backBtn.addEventListener('click', () => {
-          fetchAndAnalyzeFile(
-            {
-              owner: '',
-              repo: '',
-              branch: '',
-              path: fileData.fileName,
-            },
-            contentDiv
-          )
+          // 返回到开始分析界面
+          contentDiv.innerHTML = `
+            <div style="text-align: center; padding: 40px 20px;">
+              <div style="font-size: 48px; margin-bottom: 16px;">🔍</div>
+              <h3 style="font-size: 16px; font-weight: 600; margin: 0 0 8px 0; color: #24292e;">
+                ${getText('readyToAnalyze')}
+              </h3>
+              <p style="font-size: 13px; color: #666; margin: 0 0 20px 0; line-height: 1.5;">
+                ${getText('clickToAnalyze')}
+              </p>
+              <button id="gitmentor-start-analysis-btn" style="
+                width: 100%;
+                padding: 12px 20px;
+                background: #24292e;
+                color: white;
+                border: 1px solid rgba(27, 31, 35, 0.15);
+                border-radius: 6px;
+                font-size: 14px;
+                font-weight: 500;
+                cursor: pointer;
+                transition: background-color 0.2s;
+              ">
+                ${getText('startAnalysis')}
+              </button>
+              <p style="font-size: 11px; color: #999; margin-top: 12px;">
+                ${getText('requiresLLMConfig')}
+              </p>
+            </div>
+          `
+          const startBtn = contentDiv.querySelector('#gitmentor-start-analysis-btn')
+          startBtn?.addEventListener('click', () => {
+            fetchAndAnalyzeFile(
+              {
+                owner: '',
+                repo: '',
+                branch: '',
+                path: fileData.fileName,
+              },
+              contentDiv
+            )
+          })
         })
       }
     }
@@ -210,6 +387,9 @@ async function performDeepAnalysis(contentDiv: HTMLElement, fileData: any) {
 
 async function fetchAndAnalyzeFile(fileInfo: FileInfo, contentDiv: HTMLElement) {
   try {
+    // Load current language
+    currentLanguage = await getLanguage()
+    
     // Fetch file content from GitHub API
     const response = await fetch(
       `https://api.github.com/repos/${fileInfo.owner}/${fileInfo.repo}/contents/${fileInfo.path}?ref=${fileInfo.branch}`,
@@ -238,16 +418,32 @@ async function fetchAndAnalyzeFile(fileInfo: FileInfo, contentDiv: HTMLElement) 
       fileContent: truncatedContent,
     }
     
+    // Check extension context before sending message
+    if (!isExtensionContextValid()) {
+      contentDiv.innerHTML = `<div style="color: #d73a49; padding: 12px; background: #ffeef0; border-radius: 4px; font-size: 12px;">Extension context unavailable. Please refresh the page.</div>`
+      showReloadPrompt()
+      return
+    }
+    
+    // Show loading state
+    contentDiv.innerHTML = `
+      <div style="padding: 12px; background: #f0f2f5; border-radius: 4px; text-align: center; font-size: 12px; color: #666;">
+        <div style="display: inline-block; width: 16px; height: 16px; border: 2px solid #24292e; border-top-color: transparent; border-radius: 50%; animation: spin 1s linear infinite; margin-right: 8px; vertical-align: middle;"></div>
+        ${getText('analyzingFile')}
+      </div>
+      <style>
+        @keyframes spin {
+          to { transform: rotate(360deg); }
+        }
+      </style>
+    `
+    
     // Send to background script for AI analysis
     chrome.runtime.sendMessage({
       action: 'analyzeFile',
       ...fileData,
+      language: currentLanguage,
     }, (response: any) => {
-      const loadingDiv = document.getElementById('gitmentor-loading')
-      if (loadingDiv) {
-        loadingDiv.remove()
-      }
-      
       if (response?.error) {
         contentDiv.innerHTML = `<div style="color: #d73a49; padding: 12px; background: #ffeef0; border-radius: 4px; font-size: 12px;">${response.error}</div>`
       } else if (response?.html) {
@@ -263,10 +459,6 @@ async function fetchAndAnalyzeFile(fileInfo: FileInfo, contentDiv: HTMLElement) 
       }
     })
   } catch (error) {
-    const loadingDiv = document.getElementById('gitmentor-loading')
-    if (loadingDiv) {
-      loadingDiv.remove()
-    }
     contentDiv.innerHTML = `<div style="color: #d73a49; padding: 12px; background: #ffeef0; border-radius: 4px; font-size: 12px;">Failed to fetch file: ${error instanceof Error ? error.message : 'Unknown error'}</div>`
   }
 }
@@ -309,18 +501,27 @@ function injectWidget() {
     height: 100%;
     border-radius: 50%;
     border: none;
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-    color: white;
-    font-size: 24px;
-    cursor: pointer;
+    background: white;
+    padding: 0;
+    overflow: hidden;
     box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
     transition: all 0.3s ease;
     display: flex;
     align-items: center;
     justify-content: center;
-    font-weight: bold;
+    cursor: pointer;
   `
-  button.innerHTML = '📚'
+  
+  const img = document.createElement('img')
+  img.src = chrome.runtime.getURL('gitmentor.png')
+  img.alt = 'GitMentor'
+  img.style.cssText = `
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    border-radius: 50%;
+  `
+  button.appendChild(img)
   button.title = 'GitMentor - Learn this project'
 
   button.onmouseover = () => {
@@ -379,6 +580,81 @@ function makeDraggable(element: HTMLElement) {
   }
 }
 
+// Check if extension context is still valid
+function isExtensionContextValid(): boolean {
+  try {
+    // Try to access chrome.runtime.id - this will throw or be undefined if context is invalid
+    return !!(chrome?.runtime?.id)
+  } catch {
+    return false
+  }
+}
+
+// Show a reload prompt when extension context is invalid
+function showReloadPrompt() {
+  // Remove existing prompt
+  const existing = document.getElementById('gitmentor-reload-prompt')
+  if (existing) {
+    existing.remove()
+  }
+
+  const prompt = document.createElement('div')
+  prompt.id = 'gitmentor-reload-prompt'
+  prompt.style.cssText = `
+    position: fixed;
+    bottom: 100px;
+    right: 20px;
+    background: #24292e;
+    color: white;
+    padding: 16px 20px;
+    border-radius: 12px;
+    font-size: 13px;
+    z-index: 10001;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    max-width: 300px;
+  `
+  prompt.innerHTML = `
+    <div style="margin-bottom: 12px; font-weight: 600;">Extension Updated</div>
+    <div style="margin-bottom: 12px; color: #ccc; font-size: 12px;">
+      GitMentor was updated or reloaded. Please refresh this page to continue.
+    </div>
+    <div style="display: flex; gap: 8px;">
+      <button id="gitmentor-reload-btn" style="
+        background: #24292e;
+        color: white;
+        border: 1px solid rgba(27, 31, 35, 0.15);
+        padding: 8px 16px;
+        border-radius: 6px;
+        cursor: pointer;
+        font-size: 12px;
+        font-weight: 500;
+      ">Refresh Page</button>
+      <button id="gitmentor-dismiss-btn" style="
+        background: transparent;
+        color: #999;
+        border: 1px solid #555;
+        padding: 8px 12px;
+        border-radius: 6px;
+        cursor: pointer;
+        font-size: 12px;
+      ">Dismiss</button>
+    </div>
+  `
+
+  document.body.appendChild(prompt)
+
+  const reloadBtn = prompt.querySelector('#gitmentor-reload-btn')
+  reloadBtn?.addEventListener('click', () => {
+    window.location.reload()
+  })
+
+  const dismissBtn = prompt.querySelector('#gitmentor-dismiss-btn')
+  dismissBtn?.addEventListener('click', () => {
+    prompt.remove()
+  })
+}
+
 function openPanel(owner: string, repo: string) {
   console.log(`[GitMentor] openPanel called with ${owner}/${repo}`)
   
@@ -390,10 +666,10 @@ function openPanel(owner: string, repo: string) {
       return
     }
     
-    // Get the extension ID
-    if (!chrome?.runtime?.id) {
-      console.error('[GitMentor] chrome.runtime.id not available')
-      showNotification('Error: Extension context unavailable')
+    // Check if extension context is valid
+    if (!isExtensionContextValid()) {
+      console.error('[GitMentor] Extension context invalidated - extension was likely updated/reloaded')
+      showReloadPrompt()
       return
     }
     
@@ -611,12 +887,33 @@ const observer = new MutationObserver(() => {
   if (!document.getElementById('gitmentor-widget')) {
     injectWidget()
   }
-  if (!document.getElementById('gitmentor-file-sidebar')) {
-    injectFileSidebar()
-  }
+  // Always call injectFileSidebar to check if file changed
+  injectFileSidebar()
 })
 
 observer.observe(document.body, {
   childList: true,
   subtree: true,
 })
+
+// Also listen for URL changes via popstate (back/forward buttons)
+window.addEventListener('popstate', () => {
+  console.log('[GitMentor] URL changed via popstate')
+  injectFileSidebar()
+})
+
+// Listen for pushState/replaceState calls (GitHub navigation)
+const originalPushState = history.pushState
+const originalReplaceState = history.replaceState
+
+history.pushState = function(...args) {
+  originalPushState.apply(this, args)
+  console.log('[GitMentor] pushState detected')
+  setTimeout(injectFileSidebar, 100)
+}
+
+history.replaceState = function(...args) {
+  originalReplaceState.apply(this, args)
+  console.log('[GitMentor] replaceState detected')
+  setTimeout(injectFileSidebar, 100)
+}

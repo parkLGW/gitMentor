@@ -1,14 +1,15 @@
 // LLM Service Manager
 
 import { LLMConfig, LLMProvider, LLMProviderType } from '@/types/llm'
-import { ClaudeProvider, OpenAIProvider, OllamaProvider, DeepSeekProvider, GroqProvider, LMStudioProvider, ZhipuProvider } from './llm-base'
+import { ClaudeProvider, OpenAIProvider, OllamaProvider, DeepSeekProvider, LMStudioProvider, ZhipuProvider, SiliconFlowProvider } from './llm-base'
+import { eventBus, EVENTS } from '@/utils/eventBus'
 
 export class LLMManager {
   private static instance: LLMManager
   private providers: Map<LLMProviderType, LLMProvider> = new Map()
   private currentProvider: LLMProvider | null = null
   private configKey = 'gitmentor_llm_config'
-  private initialized = false
+  private multiConfigKey = 'gitmentor_llm_configs_map'
 
   private constructor() {
     this.initializeProviders()
@@ -28,8 +29,8 @@ export class LLMManager {
     this.providers.set('ollama', new OllamaProvider())
     this.providers.set('deepseek', new DeepSeekProvider())
     this.providers.set('zhipu', new ZhipuProvider())
-    this.providers.set('groq', new GroqProvider())
     this.providers.set('lmstudio', new LMStudioProvider())
+    this.providers.set('siliconflow', new SiliconFlowProvider())
   }
 
   private loadSavedConfig(): void {
@@ -41,7 +42,6 @@ export class LLMManager {
             const config = data[this.configKey]
             console.log('[LLMManager] Loaded saved config from chrome.storage:', config.provider)
             this.setCurrentProvider(config.provider, config)
-            this.initialized = true
           }
         } catch (error) {
           console.warn('Failed to load saved LLM config from chrome.storage:', error)
@@ -59,23 +59,45 @@ export class LLMManager {
     await provider.configure(config)
     this.currentProvider = provider
 
+    // Emit event to notify listeners
+    eventBus.emit(EVENTS.LLM_CONFIG_CHANGED, type, config)
+
     // Save config to chrome.storage for persistence
     if (typeof chrome !== 'undefined' && chrome.storage) {
       const configToSave = {
         provider: type,
         model: config.model,
         baseUrl: config.baseUrl,
-        apiKey: config.apiKey, // Store API key securely in chrome.storage
+        apiKey: config.apiKey,
       }
-      
+
       // Use promise-based wrapper to ensure config is saved before returning
       return new Promise<void>((resolve) => {
+        // 1. Save active config
         chrome.storage.local.set({ [this.configKey]: configToSave }, () => {
-          console.log('[LLMManager] Config saved to chrome.storage:', type, configToSave)
-          resolve()
+          // 2. Save to map for multi-provider support
+          chrome.storage.local.get(this.multiConfigKey, (data: Record<string, unknown>) => {
+            const map = (data[this.multiConfigKey] as Record<string, unknown>) || {}
+            map[type] = configToSave
+            chrome.storage.local.set({ [this.multiConfigKey]: map }, () => {
+              console.log('[LLMManager] Config saved to map:', type)
+              resolve()
+            })
+          })
         })
       })
     }
+  }
+
+  async getSavedConfig(type: LLMProviderType): Promise<LLMConfig | null> {
+    if (typeof chrome === 'undefined' || !chrome.storage) return null
+
+    return new Promise((resolve) => {
+      chrome.storage.local.get(this.multiConfigKey, (data: Record<string, unknown>) => {
+        const map = (data[this.multiConfigKey] as Record<string, LLMConfig>) || {}
+        resolve(map[type] || null)
+      })
+    })
   }
 
   getCurrentProvider(): LLMProvider | null {
@@ -108,6 +130,9 @@ export class LLMManager {
   }
 
   clearConfig(): void {
+    // Emit event before clearing
+    eventBus.emit(EVENTS.LLM_CONFIG_CLEARED)
+
     // Clear from chrome.storage
     if (typeof chrome !== 'undefined' && chrome.storage) {
       chrome.storage.local.remove(this.configKey, () => {

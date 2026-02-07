@@ -20,7 +20,7 @@
   },
   "web_accessible_resources": [
     {
-      "resources": ["src/popup/index.html"],
+      "resources": ["src/popup/index.html", "gitmentor.png"],
       "matches": ["https://github.com/*"]
     }
   ],

@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { llmManager } from '@/services/llm'
 import { LLMProviderType, LLMConfig } from '@/types/llm'
+import { usageTracker, UsageStats } from '@/services/usage-tracker'
 
 interface SettingsTabProps {
   language: 'zh' | 'en'
@@ -14,6 +15,8 @@ function SettingsTab({ language }: SettingsTabProps) {
   const [testing, setTesting] = useState(false)
   const [testResult, setTestResult] = useState<boolean | null>(null)
   const [saved, setSaved] = useState(false)
+  const [usageStats, setUsageStats] = useState<UsageStats | null>(null)
+  const [savedConfig, setSavedConfig] = useState<any>(null)
 
   const labels = {
     zh: {
@@ -34,6 +37,7 @@ function SettingsTab({ language }: SettingsTabProps) {
       openai: 'GPT-4 (OpenAI)',
       ollama: 'Ollama (本地)',
       zhipu: '智谱 AI (Zhipu)',
+      siliconflow: '硅基流动 (Silicon Flow)',
     },
     en: {
       settings: 'Settings',
@@ -53,6 +57,7 @@ function SettingsTab({ language }: SettingsTabProps) {
       openai: 'GPT-4 (OpenAI)',
       ollama: 'Ollama (Local)',
       zhipu: 'Zhipu AI (ChatGLM)',
+      siliconflow: 'Silicon Flow',
     },
   }
 
@@ -62,10 +67,8 @@ function SettingsTab({ language }: SettingsTabProps) {
     { value: 'claude', label: t.claude, defaultModel: 'claude-3-sonnet-20240229', cost: '¥' },
     { value: 'openai', label: t.openai, defaultModel: 'gpt-4', cost: '¥¥' },
     { value: 'deepseek', label: 'DeepSeek', defaultModel: 'deepseek-chat', cost: '¥ (便宜!)' },
+    { value: 'siliconflow', label: t.siliconflow, defaultModel: 'Qwen/Qwen2.5-72B-Instruct', cost: '$ (便宜)' },
     { value: 'zhipu', label: t.zhipu, defaultModel: 'glm-4', cost: '¥ (便宜)' },
-    { value: 'groq', label: 'Groq', defaultModel: 'mixtral-8x7b-32768', cost: '免费!' },
-    { value: 'lmstudio', label: 'LM Studio', defaultModel: 'local-model', cost: '免费' },
-    { value: 'ollama', label: t.ollama, defaultModel: 'mistral', cost: '免费' },
   ]
 
   // Load saved configuration on component mount
@@ -73,8 +76,8 @@ function SettingsTab({ language }: SettingsTabProps) {
     const loadConfig = async () => {
       try {
         // Use chrome.storage.local for persistence across reloads
-        const result = await new Promise<any>((resolve) => {
-          chrome.storage.local.get('gitmentor_llm_config', (data) => {
+        const result = await new Promise<Record<string, any>>((resolve) => {
+          chrome.storage.local.get('gitmentor_llm_config', (data: Record<string, any>) => {
             resolve(data)
           })
         })
@@ -82,6 +85,7 @@ function SettingsTab({ language }: SettingsTabProps) {
         if (result.gitmentor_llm_config) {
           const config = result.gitmentor_llm_config
           console.log('[GitMentor] Loaded saved LLM config:', config.provider)
+          setSavedConfig(config)
           setSelectedProvider(config.provider || 'claude')
           setModel(config.model || '')
           setBaseUrl(config.baseUrl || '')
@@ -97,14 +101,43 @@ function SettingsTab({ language }: SettingsTabProps) {
     loadConfig()
   }, [])
 
+  // Load usage stats
+  useEffect(() => {
+    usageTracker.getStats(7).then(setUsageStats)
+  }, [])
+
   useEffect(() => {
     // Reset form when provider changes
     const option = providerOptions.find(o => o.value === selectedProvider)
-    setModel(option?.defaultModel || '')
-    setBaseUrl(selectedProvider === 'ollama' ? 'http://localhost:11434' : selectedProvider === 'lmstudio' ? 'http://localhost:1234' : '')
+    
+    const loadProviderConfig = async () => {
+      // Try to load saved config for this specific provider from the map
+      const savedProviderConfig = await llmManager.getSavedConfig(selectedProvider)
+      
+      if (savedProviderConfig) {
+        console.log('[SettingsTab] Found saved config for:', selectedProvider)
+        setModel(savedProviderConfig.model || option?.defaultModel || '')
+        setBaseUrl(savedProviderConfig.baseUrl || '')
+        setApiKey(savedProviderConfig.apiKey || '')
+      } else {
+        // Fallback: If this is the currently active provider in legacy storage
+        if (savedConfig && savedConfig.provider === selectedProvider) {
+           setModel(savedConfig.model || option?.defaultModel || '')
+           setBaseUrl(savedConfig.baseUrl || '')
+           setApiKey(savedConfig.apiKey || '')
+        } else {
+          // Use defaults
+          setModel(option?.defaultModel || '')
+          setBaseUrl(selectedProvider === 'ollama' ? 'http://localhost:11434' : selectedProvider === 'lmstudio' ? 'http://localhost:1234' : '')
+          setApiKey('')
+        }
+      }
+    }
+
+    loadProviderConfig()
     setSaved(false)
     setTestResult(null)
-  }, [selectedProvider])
+  }, [selectedProvider, savedConfig])
 
   const handleTest = async () => {
     if (!apiKey && !['ollama', 'lmstudio'].includes(selectedProvider)) {
@@ -149,14 +182,15 @@ function SettingsTab({ language }: SettingsTabProps) {
       await llmManager.setCurrentProvider(selectedProvider, config)
       
       // Verify config was saved
-      const result = await new Promise<any>((resolve) => {
-        chrome.storage.local.get('gitmentor_llm_config', (data) => {
+      const result = await new Promise<Record<string, any>>((resolve) => {
+        chrome.storage.local.get('gitmentor_llm_config', (data: Record<string, any>) => {
           resolve(data)
         })
       })
       
       if (result.gitmentor_llm_config && result.gitmentor_llm_config.provider === selectedProvider) {
         console.log('[SettingsTab] Config verified in storage:', result.gitmentor_llm_config)
+        setSavedConfig(result.gitmentor_llm_config)
         setSaved(true)
         setTimeout(() => setSaved(false), 3000)
       } else {
@@ -297,6 +331,34 @@ function SettingsTab({ language }: SettingsTabProps) {
         </div>
       )}
 
+      {/* Usage Stats */}
+      {usageStats && usageStats.totalCalls > 0 && (
+        <div className="bg-yellow-50 border border-yellow-200 rounded p-3">
+          <p className="font-semibold text-sm text-yellow-800 mb-2">
+            {language === 'zh' ? 'API 用量统计 (近7天)' : 'API Usage Stats (Last 7 Days)'}
+          </p>
+          <div className="grid grid-cols-2 gap-2 text-xs">
+            <div className="bg-white rounded p-2">
+              <div className="text-gray-500">{language === 'zh' ? '调用次数' : 'API Calls'}</div>
+              <div className="text-lg font-bold text-gray-800">{usageStats.totalCalls}</div>
+            </div>
+            <div className="bg-white rounded p-2">
+              <div className="text-gray-500">{language === 'zh' ? '总 Token 数' : 'Total Tokens'}</div>
+              <div className="text-lg font-bold text-gray-800">{usageStats.totalTokens.toLocaleString()}</div>
+            </div>
+            <div className="bg-white rounded p-2 col-span-2">
+              <div className="text-gray-500">{language === 'zh' ? '预估费用' : 'Est. Cost'}</div>
+              <div className="text-lg font-bold text-green-600">${usageStats.estimatedCost.toFixed(4)}</div>
+            </div>
+          </div>
+          <div className="mt-2 text-xs text-yellow-700">
+            {language === 'zh' 
+              ? '提示: 缓存已开启，同一项目7天内不会重复调用 API'
+              : 'Tip: Cache enabled, same project won\'t call API again within 7 days'}
+          </div>
+        </div>
+      )}
+
       {/* Info */}
       <div className="bg-gray-50 border border-gray-200 rounded p-3 text-xs text-gray-600">
         <p className="font-semibold mb-1">{language === 'zh' ? '获取API密钥：' : 'Get API Keys:'}</p>
@@ -304,10 +366,8 @@ function SettingsTab({ language }: SettingsTabProps) {
           <li>• Claude: <a href="https://console.anthropic.com" target="_blank" rel="noreferrer" className="text-blue-600 hover:underline">console.anthropic.com</a></li>
           <li>• OpenAI: <a href="https://platform.openai.com" target="_blank" rel="noreferrer" className="text-blue-600 hover:underline">platform.openai.com</a></li>
           <li>• DeepSeek 🔥: <a href="https://platform.deepseek.com" target="_blank" rel="noreferrer" className="text-blue-600 hover:underline">platform.deepseek.com</a></li>
-          <li>• Zhipu 💡: <a href="https://open.bigmodel.cn" target="_blank" rel="noreferrer" className="text-blue-600 hover:underline">open.bigmodel.cn</a></li>
-          <li>• Groq 🚀: <a href="https://console.groq.com" target="_blank" rel="noreferrer" className="text-blue-600 hover:underline">console.groq.com</a></li>
-          <li>• LM Studio: <a href="https://lmstudio.ai" target="_blank" rel="noreferrer" className="text-blue-600 hover:underline">lmstudio.ai</a> ({language === 'zh' ? '本地' : 'Local'})</li>
-          <li>• Ollama: <a href="https://ollama.ai" target="_blank" rel="noreferrer" className="text-blue-600 hover:underline">ollama.ai</a> ({language === 'zh' ? '本地' : 'Local'})</li>
+          <li>• Silicon Flow 💎: <a href="https://cloud.siliconflow.cn" target="_blank" rel="noreferrer" className="text-blue-600 hover:underline" onClick={(e) => { e.preventDefault(); window.open('https://cloud.siliconflow.cn/i/vrmTfRTN', '_blank'); }}>cloud.siliconflow.cn</a></li>
+          <li>• Zhipu 💡: <a href="https://open.bigmodel.cn" target="_blank" rel="noreferrer" className="text-blue-600 hover:underline" onClick={(e) => { e.preventDefault(); window.open('https://www.bigmodel.cn/invite?icode=l1vVV6SGlJOOAf2kyoL8fOZLO2QH3C0EBTSr%2BArzMw4%3D', '_blank'); }}>open.bigmodel.cn</a></li>
         </ul>
       </div>
     </div>

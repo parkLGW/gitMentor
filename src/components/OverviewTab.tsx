@@ -27,16 +27,25 @@ function OverviewTab({ repo, language }: OverviewTabProps) {
         const info = await getRepoInfo(repo.owner, repo.name)
         setRepoInfo(info)
         
-        // Try to load AI analysis from cache first
+        // Try to load AI analysis from cache first (7 days expiration)
         const cacheKey = `gitmentor_ai_analysis_${repo.owner}/${repo.name}`
         const cached = localStorage.getItem(cacheKey)
         if (cached) {
           try {
-            setAiAnalysis(JSON.parse(cached))
-            setLoading(false)
-            return // Use cached AI analysis
+            const { data, timestamp } = JSON.parse(cached)
+            const isExpired = Date.now() - timestamp > 7 * 24 * 60 * 60 * 1000 // 7 days
+            if (!isExpired && data) {
+              setAiAnalysis(data)
+              setLoading(false)
+              console.log('[OverviewTab] Loaded from cache')
+              return // Use cached AI analysis
+            } else {
+              console.log('[OverviewTab] Cache expired, will refresh')
+              localStorage.removeItem(cacheKey)
+            }
           } catch (e) {
             console.warn('Failed to parse cached analysis')
+            localStorage.removeItem(cacheKey)
           }
         }
         
@@ -63,8 +72,8 @@ function OverviewTab({ repo, language }: OverviewTabProps) {
             )
             setAiAnalysis(analysis)
             
-            // Cache the result
-            localStorage.setItem(cacheKey, JSON.stringify(analysis))
+            // Cache the result with timestamp
+            localStorage.setItem(cacheKey, JSON.stringify({ data: analysis, timestamp: Date.now() }))
           } catch (aiErr) {
             console.warn('[GitMentor] AI analysis failed, using basic analysis:', aiErr)
             setAiError(aiErr instanceof Error ? aiErr.message : 'AI analysis failed')
@@ -101,9 +110,9 @@ function OverviewTab({ repo, language }: OverviewTabProps) {
       )
       setAiAnalysis(analysis)
 
-      // Cache the result
+      // Cache the result with timestamp
       const cacheKey = `gitmentor_ai_analysis_${repo.owner}/${repo.name}`
-      localStorage.setItem(cacheKey, JSON.stringify(analysis))
+      localStorage.setItem(cacheKey, JSON.stringify({ data: analysis, timestamp: Date.now() }))
     } catch (err) {
       setAiError(err instanceof Error ? err.message : 'Analysis failed')
     } finally {
@@ -128,8 +137,14 @@ function OverviewTab({ repo, language }: OverviewTabProps) {
     return labels[difficulty]?.[language] || difficulty
   }
 
-  const getDifficultyColor = (difficulty: string) => {
-    return difficulty === 'advanced' ? 'red' : difficulty === 'intermediate' ? 'yellow' : 'green'
+  const getDifficultyColorClasses = (difficulty: string): string => {
+    if (difficulty === 'advanced') {
+      return 'bg-red-100 text-red-900'
+    } else if (difficulty === 'intermediate') {
+      return 'bg-yellow-100 text-yellow-900'
+    } else {
+      return 'bg-green-100 text-green-900'
+    }
   }
 
   const coreValue = overview?.coreValue || repoInfo.description
@@ -297,7 +312,7 @@ function OverviewTab({ repo, language }: OverviewTabProps) {
               <p className="text-xs font-semibold text-gray-600 mb-1">
                 {language === 'zh' ? '学习难度' : 'Difficulty'}
               </p>
-              <div className={`inline-block bg-${getDifficultyColor(difficulty)}-100 text-${getDifficultyColor(difficulty)}-900 px-3 py-1 rounded text-xs font-medium`}>
+              <div className={`inline-block ${getDifficultyColorClasses(difficulty)} px-3 py-1 rounded text-xs font-medium`}>
                 {getDifficultyLabel(difficulty)}
               </div>
             </div>
