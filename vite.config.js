@@ -26,9 +26,21 @@ export default {
         'service-worker': path.resolve('./src/background/service-worker.ts'),
       },
       output: {
-        entryFileNames: '[name].js',
+        entryFileNames: (chunkInfo) => {
+          // Keep content-script and service-worker at root
+          if (chunkInfo.name === 'content-script' || chunkInfo.name === 'service-worker') {
+            return '[name].js';
+          }
+          return 'src/popup/[name].js';
+        },
         chunkFileNames: '[name].js',
-        assetFileNames: '[name].[ext]'
+        assetFileNames: (assetInfo) => {
+          // Keep popup.html at the correct path
+          if (assetInfo.name === 'index.html') {
+            return 'src/popup/[name][extname]';
+          }
+          return '[name][extname]';
+        }
       }
     }
   },
