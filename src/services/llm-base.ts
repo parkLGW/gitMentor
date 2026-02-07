@@ -390,26 +390,75 @@ export class DeepSeekProvider extends BaseLLMProvider {
   type: LLMProviderType = 'deepseek'
   name = 'DeepSeek'
 
-  async complete(prompt: string, systemPrompt?: string): Promise<LLMResponse> {
+  private async fetchWithRetry(
+    url: string, 
+    options: RequestInit, 
+    maxRetries: number = 3
+  ): Promise<Response> {
+    let lastError: Error | null = null
+    
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        console.log(`[DeepSeek] Attempt ${attempt}/${maxRetries}...`)
+        const response = await fetch(url, options)
+        
+        // Check if we got a valid response
+        if (response.ok) {
+          return response
+        }
+        
+        // If server error (5xx), retry
+        if (response.status >= 500) {
+          console.log(`[DeepSeek] Server error ${response.status}, will retry...`)
+          lastError = new Error(`HTTP ${response.status}`)
+          // Wait before retry (exponential backoff)
+          await new Promise(resolve => setTimeout(resolve, Math.pow(2, attempt) * 1000))
+          continue
+        }
+        
+        // For client errors (4xx), don't retry
+        return response
+      } catch (error) {
+        lastError = error instanceof Error ? error : new Error(String(error))
+        console.log(`[DeepSeek] Request failed (attempt ${attempt}):`, lastError.message)
+        
+        if (attempt < maxRetries) {
+          // Wait before retry (exponential backoff: 2s, 4s, 8s)
+          const waitTime = Math.pow(2, attempt) * 1000
+          console.log(`[DeepSeek] Waiting ${waitTime}ms before retry...`)
+          await new Promise(resolve => setTimeout(resolve, waitTime))
+        }
+      }
+    }
+    
+    throw lastError || new Error('All retry attempts failed')
+  }
+
+  async complete(prompt: string, systemPrompt?: string, signal?: AbortSignal): Promise<LLMResponse> {
     const config = this.getConfig()
 
     try {
-      const response = await fetch('https://api.deepseek.com/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${config.apiKey}`,
-          'Content-Type': 'application/json',
+      const response = await this.fetchWithRetry(
+        'https://api.deepseek.com/v1/chat/completions',
+        {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${config.apiKey}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            model: config.model || 'deepseek-chat',
+            temperature: config.temperature ?? 0.7,
+            max_tokens: config.maxTokens || 2000,
+            messages: [
+              { role: 'system', content: this.createSystemPrompt(systemPrompt) },
+              { role: 'user', content: prompt },
+            ],
+          }),
+          signal,
         },
-        body: JSON.stringify({
-          model: config.model || 'deepseek-chat',
-          temperature: config.temperature ?? 0.7,
-          max_tokens: config.maxTokens || 2000,
-          messages: [
-            { role: 'system', content: this.createSystemPrompt(systemPrompt) },
-            { role: 'user', content: prompt },
-          ],
-        }),
-      })
+        3 // max retries
+      )
 
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}))
@@ -418,6 +467,7 @@ export class DeepSeekProvider extends BaseLLMProvider {
       }
 
       const data = await response.json()
+      console.log('[DeepSeek] Response received successfully')
       return {
         content: data.choices[0].message.content,
         model: config.model || 'deepseek-chat',
@@ -428,6 +478,9 @@ export class DeepSeekProvider extends BaseLLMProvider {
         },
       }
     } catch (error) {
+      if (error instanceof Error && error.name === 'AbortError') {
+        throw error
+      }
       throw new Error(`DeepSeek error: ${error instanceof Error ? error.message : String(error)}`)
     }
   }

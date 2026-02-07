@@ -14,8 +14,21 @@ const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
 
 manifest.action.default_popup = 'src/popup/index.html';
 
-if (!fs.existsSync(path.join(__dirname, 'dist', 'icons'))) {
+// 复制 icons 目录
+const iconsSrc = path.join(__dirname, 'public', 'icons');
+const iconsDst = path.join(__dirname, 'dist', 'icons');
+if (fs.existsSync(iconsSrc)) {
+  if (!fs.existsSync(iconsDst)) {
+    fs.mkdirSync(iconsDst, { recursive: true });
+  }
+  const iconFiles = fs.readdirSync(iconsSrc);
+  for (const file of iconFiles) {
+    fs.copyFileSync(path.join(iconsSrc, file), path.join(iconsDst, file));
+  }
+  console.log('✓ icons 目录已复制');
+} else {
   delete manifest.icons;
+  console.log('⚠ icons 目录不存在，已从 manifest 中移除');
 }
 
 fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));

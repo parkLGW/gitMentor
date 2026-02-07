@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Privacy Policy - GitMentor</title>
+    <style>
+        :root {
+            --primary: #2563eb;
+            --text: #1f2937;
+            --bg: #ffffff;
+            --border: #e5e7eb;
+        }
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            line-height: 1.6;
+            color: var(--text);
+            background: var(--bg);
+            padding: 2rem;
+            max-width: 800px;
+            margin: 0 auto;
+        }
+        .lang-switch {
+            text-align: right;
+            margin-bottom: 2rem;
+        }
+        .lang-switch button {
+            padding: 0.5rem 1rem;
+            margin-left: 0.5rem;
+            border: 1px solid var(--border);
+            background: white;
+            cursor: pointer;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+        .lang-switch button.active {
+            background: var(--primary);
+            color: white;
+            border-color: var(--primary);
+        }
+        h1 {
+            color: var(--primary);
+            margin-bottom: 0.5rem;
+            font-size: 2rem;
+        }
+        .subtitle {
+            color: #6b7280;
+            margin-bottom: 2rem;
+        }
+        h2 {
+            margin-top: 2rem;
+            margin-bottom: 1rem;
+            color: var(--text);
+            font-size: 1.25rem;
+        }
+        p, li {
+            margin-bottom: 0.75rem;
+        }
+        ul {
+            padding-left: 1.5rem;
+        }
+        .section {
+            margin-bottom: 2rem;
+            padding-bottom: 1rem;
+            border-bottom: 1px solid var(--border);
+        }
+        .highlight {
+            background: #f0f9ff;
+            padding: 1rem;
+            border-radius: 8px;
+            border-left: 4px solid var(--primary);
+            margin: 1rem 0;
+        }
+        .footer {
+            margin-top: 3rem;
+            padding-top: 1rem;
+            border-top: 1px solid var(--border);
+            color: #6b7280;
+            font-size: 0.875rem;
+        }
+        .hidden {
+            display: none;
+        }
+        a {
+            color: var(--primary);
+        }
+    </style>
+</head>
+<body>
+    <div class="lang-switch">
+        <button id="btn-en" class="active" onclick="showLang('en')">English</button>
+        <button id="btn-zh" onclick="showLang('zh')">中文</button>
+    </div>
+
+    <!-- English Version -->
+    <div id="content-en">
+        <h1>Privacy Policy</h1>
+        <p class="subtitle">GitMentor - GitHub Project Learning Assistant</p>
+        <p class="subtitle">Last updated: February 7, 2025</p>
+
+        <div class="section">
+            <h2>1. Overview</h2>
+            <p>GitMentor is an AI-powered Chrome extension that helps developers understand and learn GitHub repositories. We are committed to protecting your privacy and being transparent about how we handle your data.</p>
+            <div class="highlight">
+                <strong>Key Privacy Points:</strong>
+                <ul>
+                    <li>All your data is stored locally in your browser</li>
+                    <li>We do NOT collect personal information</li>
+                    <li>We do NOT track your browsing activity</li>
+                    <li>We do NOT sell or share your data with third parties</li>
+                </ul>
+            </div>
+        </div>
+
+        <div class="section">
+            <h2>2. Data We Store (Locally)</h2>
+            <p>GitMentor stores the following data in your browser's local storage (chrome.storage.local):</p>
+            <ul>
+                <li><strong>API Keys:</strong> Your AI provider API keys (e.g., OpenAI, Claude, DeepSeek). These are stored locally and only sent to your chosen AI provider.</li>
+                <li><strong>Language Preference:</strong> Your selected UI language (English or Chinese).</li>
+                <li><strong>Usage Statistics:</strong> Local token usage estimates for your reference only.</li>
+                <li><strong>Cached Analysis:</strong> Previously analyzed repository data to improve loading speed.</li>
+            </ul>
+            <p>This data never leaves your browser except when making API calls to your configured AI provider.</p>
+        </div>
+
+        <div class="section">
+            <h2>3. Data We Access (But Don't Store)</h2>
+            <p>When you use GitMentor on a GitHub page, we temporarily access:</p>
+            <ul>
+                <li><strong>GitHub Page Content:</strong> Repository name, description, README, file structure, and code content visible on the current page.</li>
+                <li><strong>GitHub API Data:</strong> Public repository metadata (stars, forks, topics, etc.) via GitHub's public API.</li>
+            </ul>
+            <p>This data is processed locally in your browser and sent to your AI provider for analysis. We do not store or transmit this data to any other server.</p>
+        </div>
+
+        <div class="section">
+            <h2>4. Third-Party Services</h2>
+            <p>GitMentor integrates with the following third-party AI providers (based on your choice):</p>
+            <ul>
+                <li>OpenAI (ChatGPT)</li>
+                <li>Anthropic (Claude)</li>
+                <li>DeepSeek</li>
+                <li>Zhipu AI (GLM-4)</li>
+                <li>Silicon Flow</li>
+            </ul>
+            <p>When you configure an AI provider, your repository data and code content are sent to that provider for analysis. Please review each provider's privacy policy for details on how they handle your data.</p>
+        </div>
+
+        <div class="section">
+            <h2>5. Permissions Explained</h2>
+            <ul>
+                <li><strong>storage:</strong> To save your settings and API keys locally in your browser.</li>
+                <li><strong>activeTab:</strong> To read the current GitHub page content for analysis.</li>
+                <li><strong>scripting:</strong> To inject the sidebar UI on GitHub code pages.</li>
+                <li><strong>host_permissions (github.com):</strong> To access GitHub pages and API.</li>
+            </ul>
+        </div>
+
+        <div class="section">
+            <h2>6. Data Security</h2>
+            <ul>
+                <li>All API keys are stored locally using Chrome's secure storage API.</li>
+                <li>No data is transmitted to our servers (we don't have any servers).</li>
+                <li>All API communications use HTTPS encryption.</li>
+            </ul>
+        </div>
+
+        <div class="section">
+            <h2>7. Your Rights</h2>
+            <p>You can:</p>
+            <ul>
+                <li><strong>Delete all data:</strong> Uninstall the extension or clear extension data in Chrome settings.</li>
+                <li><strong>View stored data:</strong> Open Chrome DevTools > Application > Local Storage to see what's stored.</li>
+                <li><strong>Control API usage:</strong> Remove or change your API keys at any time in Settings.</li>
+            </ul>
+        </div>
+
+        <div class="section">
+            <h2>8. Changes to This Policy</h2>
+            <p>We may update this privacy policy from time to time. Any changes will be reflected on this page with an updated "Last updated" date.</p>
+        </div>
+
+        <div class="section">
+            <h2>9. Contact</h2>
+            <p>If you have questions about this privacy policy, please open an issue on our GitHub repository:</p>
+            <p><a href="https://github.com/parkLGW/gitMentor/issues">https://github.com/parkLGW/gitMentor/issues</a></p>
+        </div>
+    </div>
+
+    <!-- Chinese Version -->
+    <div id="content-zh" class="hidden">
+        <h1>隐私政策</h1>
+        <p class="subtitle">GitMentor - GitHub 项目学习助手</p>
+        <p class="subtitle">最后更新：2025年2月7日</p>
+
+        <div class="section">
+            <h2>1. 概述</h2>
+            <p>GitMentor 是一个 AI 驱动的 Chrome 扩展，帮助开发者理解和学习 GitHub 仓库。我们致力于保护您的隐私，并对数据处理方式保持透明。</p>
+            <div class="highlight">
+                <strong>关键隐私要点：</strong>
+                <ul>
+                    <li>所有数据都存储在您的浏览器本地</li>
+                    <li>我们不收集个人信息</li>
+                    <li>我们不追踪您的浏览活动</li>
+                    <li>我们不向第三方出售或分享您的数据</li>
+                </ul>
+            </div>
+        </div>
+
+        <div class="section">
+            <h2>2. 我们存储的数据（本地）</h2>
+            <p>GitMentor 在您浏览器的本地存储中保存以下数据（chrome.storage.local）：</p>
+            <ul>
+                <li><strong>API 密钥：</strong>您的 AI 提供商 API 密钥（如 OpenAI、Claude、DeepSeek）。这些密钥存储在本地，仅发送给您选择的 AI 提供商。</li>
+                <li><strong>语言偏好：</strong>您选择的界面语言（英文或中文）。</li>
+                <li><strong>使用统计：</strong>本地 token 使用量估算，仅供您参考。</li>
+                <li><strong>缓存分析：</strong>之前分析过的仓库数据，用于提高加载速度。</li>
+            </ul>
+            <p>除了向您配置的 AI 提供商发起 API 调用外，这些数据永远不会离开您的浏览器。</p>
+        </div>
+
+        <div class="section">
+            <h2>3. 我们访问的数据（不存储）</h2>
+            <p>当您在 GitHub 页面上使用 GitMentor 时，我们会临时访问：</p>
+            <ul>
+                <li><strong>GitHub 页面内容：</strong>仓库名称、描述、README、文件结构以及当前页面可见的代码内容。</li>
+                <li><strong>GitHub API 数据：</strong>通过 GitHub 公开 API 获取的公开仓库元数据（stars、forks、topics 等）。</li>
+            </ul>
+            <p>这些数据在您的浏览器中本地处理，并发送给您的 AI 提供商进行分析。我们不会将这些数据存储或传输到任何其他服务器。</p>
+        </div>
+
+        <div class="section">
+            <h2>4. 第三方服务</h2>
+            <p>GitMentor 集成以下第三方 AI 提供商（根据您的选择）：</p>
+            <ul>
+                <li>OpenAI (ChatGPT)</li>
+                <li>Anthropic (Claude)</li>
+                <li>DeepSeek（深度求索）</li>
+                <li>智谱 AI (GLM-4)</li>
+                <li>硅基流动 (Silicon Flow)</li>
+            </ul>
+            <p>当您配置 AI 提供商时，您的仓库数据和代码内容会发送给该提供商进行分析。请查阅各提供商的隐私政策，了解他们如何处理您的数据。</p>
+        </div>
+
+        <div class="section">
+            <h2>5. 权限说明</h2>
+            <ul>
+                <li><strong>storage：</strong>用于在浏览器本地保存您的设置和 API 密钥。</li>
+                <li><strong>activeTab：</strong>用于读取当前 GitHub 页面内容进行分析。</li>
+                <li><strong>scripting：</strong>用于在 GitHub 代码页面注入侧边栏 UI。</li>
+                <li><strong>host_permissions (github.com)：</strong>用于访问 GitHub 页面和 API。</li>
+            </ul>
+        </div>
+
+        <div class="section">
+            <h2>6. 数据安全</h2>
+            <ul>
+                <li>所有 API 密钥都使用 Chrome 的安全存储 API 存储在本地。</li>
+                <li>没有数据传输到我们的服务器（我们没有任何服务器）。</li>
+                <li>所有 API 通信都使用 HTTPS 加密。</li>
+            </ul>
+        </div>
+
+        <div class="section">
+            <h2>7. 您的权利</h2>
+            <p>您可以：</p>
+            <ul>
+                <li><strong>删除所有数据：</strong>卸载扩展或在 Chrome 设置中清除扩展数据。</li>
+                <li><strong>查看存储的数据：</strong>打开 Chrome 开发者工具 > 应用程序 > 本地存储，查看存储的内容。</li>
+                <li><strong>控制 API 使用：</strong>随时在设置中删除或更改您的 API 密钥。</li>
+            </ul>
+        </div>
+
+        <div class="section">
+            <h2>8. 政策变更</h2>
+            <p>我们可能会不时更新此隐私政策。任何变更都会在此页面上反映，并更新"最后更新"日期。</p>
+        </div>
+
+        <div class="section">
+            <h2>9. 联系我们</h2>
+            <p>如果您对此隐私政策有疑问，请在我们的 GitHub 仓库中提交 issue：</p>
+            <p><a href="https://github.com/parkLGW/gitMentor/issues">https://github.com/parkLGW/gitMentor/issues</a></p>
+        </div>
+    </div>
+
+    <div class="footer">
+        <p>&copy; 2025 GitMentor. Open source under MIT License.</p>
+        <p><a href="https://github.com/parkLGW/gitMentor">GitHub Repository</a></p>
+    </div>
+
+    <script>
+        function showLang(lang) {
+            document.getElementById('content-en').classList.toggle('hidden', lang !== 'en');
+            document.getElementById('content-zh').classList.toggle('hidden', lang !== 'zh');
+            document.getElementById('btn-en').classList.toggle('active', lang === 'en');
+            document.getElementById('btn-zh').classList.toggle('active', lang === 'zh');
+        }
+        
+        // Auto-detect language
+        if (navigator.language.startsWith('zh')) {
+            showLang('zh');
+        }
+    </script>
+</body>
+</html>

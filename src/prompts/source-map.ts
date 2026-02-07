@@ -163,6 +163,8 @@ function findJSONBoundaries(text: string): { start: number; end: number } | null
 // Parse AI response with robust error handling
 export function parseSourceMapResponse(response: string): SourceMapOutput | null {
   try {
+    console.log('[SourceMap] Parsing response, length:', response.length)
+    
     // Try to extract from markdown code block first
     let jsonStr = extractJSONFromMarkdown(response)
     
@@ -176,61 +178,147 @@ export function parseSourceMapResponse(response: string): SourceMapOutput | null
       }
     }
 
+    console.log('[SourceMap] Extracted JSON length:', jsonStr.length)
+
+    // Pre-process: Fix mermaidDiagram field which often contains unescaped newlines
+    // This regex finds the mermaidDiagram value and escapes newlines within it
+    jsonStr = jsonStr.replace(
+      /("mermaidDiagram"\s*:\s*")([^"]*(?:\\.[^"]*)*)/g,
+      (match, prefix, content) => {
+        // Escape actual newlines (not already escaped \n)
+        const fixed = content
+          .replace(/(?<!\\)\n/g, '\\n')
+          .replace(/(?<!\\)\r/g, '\\r')
+          .replace(/(?<!\\)\t/g, '\\t')
+        return prefix + fixed
+      }
+    )
+
     // Attempt 1: Direct parse
     try {
       const parsed = JSON.parse(jsonStr)
+      console.log('[SourceMap] Direct parse succeeded')
       return normalizeSourceMapOutput(parsed)
     } catch (e) {
       console.log('[SourceMap] Direct parse failed, trying fixes...')
     }
 
-    // Attempt 2: Fix common JSON issues
+    // Attempt 2: Fix common JSON issues - escape all newlines in string values
     try {
+      // More aggressive: escape all newlines that appear after a quote and before the next quote
       let fixed = jsonStr
         // Remove BOM
         .replace(/^\uFEFF/, '')
         // Remove trailing commas
         .replace(/,\s*([}\]])/g, '$1')
-        // Fix unescaped newlines in strings (carefully)
-        .replace(/("(?:[^"\\]|\\.)*")/g, (match) => {
-          return match
-            .replace(/\n/g, '\\n')
-            .replace(/\r/g, '\\r')
-            .replace(/\t/g, '\\t')
-        })
+      
+      // Process string by string - find all strings and escape newlines in them
+      fixed = fixed.replace(/"([^"\\]*(\\.[^"\\]*)*)"/g, (match) => {
+        return match
+          .replace(/\n/g, '\\n')
+          .replace(/\r/g, '\\r')
+          .replace(/\t/g, '\\t')
+      })
 
       const parsed = JSON.parse(fixed)
+      console.log('[SourceMap] Second attempt succeeded')
       return normalizeSourceMapOutput(parsed)
     } catch (e) {
-      console.log('[SourceMap] Second attempt failed, trying aggressive fixes...')
+      console.log('[SourceMap] Second attempt failed, trying line-by-line fix...')
     }
 
-    // Attempt 3: Aggressive cleaning
+    // Attempt 3: Line-by-line processing
     try {
-      let cleaned = jsonStr
-        // Remove control characters except newlines and tabs within strings
-        .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '')
-        // Fix multiple consecutive newlines
-        .replace(/\n+/g, '\\n')
-        // Remove trailing commas more aggressively
-        .replace(/,(\s*[}\]])/g, '$1')
-        // Fix quotes
-        .replace(/"([^"]*)"([^"]*)"([^"]*)"/g, (match, p1, p2, p3) => {
-          // If middle part has special chars, escape it
-          if (p2.match(/[\n\r\t]/)) {
-            return `"${p1}\\${p2.replace(/\n/g, 'n').replace(/\r/g, 'r').replace(/\t/g, 't')}"${p3}"`
+      // Split by lines, rejoin with escaped newlines inside strings
+      const lines = jsonStr.split('\n')
+      let inString = false
+      let result = ''
+      
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i]
+        
+        // Count unescaped quotes to determine if we're in a string
+        let quoteCount = 0
+        for (let j = 0; j < line.length; j++) {
+          if (line[j] === '"' && (j === 0 || line[j-1] !== '\\')) {
+            quoteCount++
           }
-          return match
-        })
-
-      const parsed = JSON.parse(cleaned)
+        }
+        
+        if (inString) {
+          // We're continuing a string from previous line
+          result += '\\n' + line
+        } else {
+          result += (i > 0 ? '\n' : '') + line
+        }
+        
+        // Update inString state
+        if (quoteCount % 2 === 1) {
+          inString = !inString
+        }
+      }
+      
+      // Also fix trailing commas
+      result = result.replace(/,\s*([}\]])/g, '$1')
+      
+      const parsed = JSON.parse(result)
+      console.log('[SourceMap] Line-by-line fix succeeded')
       return normalizeSourceMapOutput(parsed)
     } catch (e) {
-      console.error('[SourceMap] All JSON parse attempts failed')
-      console.error('[SourceMap] Raw response (first 1000 chars):', response.slice(0, 1000))
-      console.error('[SourceMap] Extracted JSON (first 1000 chars):', jsonStr.slice(0, 1000))
-      return null
+      console.log('[SourceMap] Line-by-line fix failed, trying extraction...')
     }
+
+    // Attempt 4: Try to extract partial valid data
+    try {
+      // Try to extract just the essential fields using regex
+      const architectureType = jsonStr.match(/"architectureType"\s*:\s*"([^"]+)"/)
+      const architectureSummary = jsonStr.match(/"architectureSummary"\s*:\s*"([^"]+)"/)
+      const mermaidMatch = jsonStr.match(/"mermaidDiagram"\s*:\s*"((?:[^"\\]|\\.)*)/)
+      
+      if (architectureType) {
+        console.log('[SourceMap] Extracted partial data via regex')
+        
+        // Try to extract coreModules array
+        const coreModulesMatch = jsonStr.match(/"coreModules"\s*:\s*\[([\s\S]*?)\](?=\s*,?\s*"(?:dependencies|learningPath|keyConcepts|$)|\s*})/);
+        let coreModules: any[] = []
+        if (coreModulesMatch) {
+          try {
+            // Clean up the modules string and parse
+            const modulesStr = '[' + coreModulesMatch[1].replace(/\n/g, '\\n') + ']'
+            coreModules = JSON.parse(modulesStr)
+          } catch {
+            // Try to extract individual module objects
+            const moduleMatches = jsonStr.matchAll(/"name"\s*:\s*"([^"]+)"[\s\S]*?"path"\s*:\s*"([^"]+)"[\s\S]*?"responsibility"\s*:\s*"([^"]+)"[\s\S]*?"importance"\s*:\s*"([^"]+)"/g)
+            for (const m of moduleMatches) {
+              coreModules.push({
+                name: m[1],
+                path: m[2],
+                responsibility: m[3],
+                importance: m[4],
+                keyFiles: []
+              })
+            }
+          }
+        }
+        
+        return {
+          architectureType: architectureType[1] as any,
+          architectureSummary: architectureSummary?.[1] || '',
+          mermaidDiagram: mermaidMatch?.[1]?.replace(/\\n/g, '\n').replace(/\\"/g, '"') || '',
+          coreModules: coreModules,
+          dependencies: [],
+          learningPath: [],
+          keyConcepts: []
+        }
+      }
+    } catch (e) {
+      console.error('[SourceMap] Regex extraction failed:', e)
+    }
+
+    console.error('[SourceMap] All JSON parse attempts failed')
+    console.error('[SourceMap] Raw response (first 1000 chars):', response.slice(0, 1000))
+    console.error('[SourceMap] Extracted JSON (first 1000 chars):', jsonStr.slice(0, 1000))
+    return null
   } catch (error) {
     console.error('[SourceMap] Failed to parse response:', error)
     return null
@@ -428,78 +516,278 @@ function generateFallbackDiagram(projectType: string, isZh: boolean): string {
   B --> C`
 }
 
+// 从完整目录树中提取文件路径
+function extractFilesFromTree(fullTree: string, dirPath: string): string[] {
+  const files: string[] = []
+  const lines = fullTree.split('\n')
+  
+  let inTargetDir = false
+  let targetIndent = -1
+  
+  for (const line of lines) {
+    // 计算缩进级别（每级 4 个字符）
+    const indent = line.search(/[^\s│]/)
+    const cleanLine = line.replace(/^[│├└\s─]+/, '').trim()
+    
+    // 检查是否进入目标目录
+    if (cleanLine.includes(`📁 ${dirPath}`) || cleanLine.includes(`📁 ${dirPath.replace('/', '')}`)) {
+      inTargetDir = true
+      targetIndent = indent
+      continue
+    }
+    
+    // 如果在目标目录中
+    if (inTargetDir) {
+      // 检查是否退出目标目录（回到更低的缩进级别）
+      if (indent <= targetIndent && cleanLine.length > 0) {
+        inTargetDir = false
+        continue
+      }
+      
+      // 提取文件（不是目录）
+      if (cleanLine.includes('📄')) {
+        const fileName = cleanLine.replace('📄', '').trim()
+        if (fileName) {
+          files.push(`${dirPath}/${fileName}`.replace(/\/+/g, '/'))
+        }
+      }
+    }
+  }
+  
+  // 如果没找到，尝试从 fullTree 中直接匹配
+  if (files.length === 0) {
+    const regex = new RegExp(`${dirPath}/[^/\\s]+\\.(ts|tsx|js|jsx|py|go|rs)`, 'g')
+    const matches = fullTree.match(regex)
+    if (matches) {
+      files.push(...matches.slice(0, 5))
+    }
+  }
+  
+  return files.slice(0, 5) // 最多返回 5 个文件
+}
+
+// 从 coreFilesPreview 中提取特定目录的文件
+function extractFilesFromPreview(preview: string | undefined, dirName: string): string[] {
+  if (!preview) return []
+  
+  const files: string[] = []
+  const lines = preview.split('\n')
+  
+  let inDir = false
+  for (const line of lines) {
+    if (line.includes(`📁 ${dirName}/`)) {
+      inDir = true
+      continue
+    }
+    if (line.startsWith('📁') && inDir) {
+      inDir = false
+      continue
+    }
+    if (inDir && line.trim().startsWith('-')) {
+      const fileName = line.replace(/^\s*-\s*/, '').trim()
+      if (fileName) {
+        files.push(`${dirName}/${fileName}`)
+      }
+    }
+  }
+  
+  return files.slice(0, 5)
+}
+
 function generateFallbackModules(context: ProjectContext, isZh: boolean): SourceMapOutput['coreModules'] {
   const modules: SourceMapOutput['coreModules'] = []
-  const tree = context.directoryTree.toLowerCase()
+  // 使用完整目录树进行检测
+  const fullTree = context.fullDirectoryTree || context.directoryTree || ''
+  const preview = context.coreFilesPreview || ''
   
-  // 检测常见目录
-  if (tree.includes('src')) {
+  console.log('[SourceMap Fallback] Generating modules from tree:', fullTree.slice(0, 500))
+  
+  // 定义要检测的目录及其描述
+  const dirConfigs: Array<{
+    names: string[]
+    path: string
+    labelZh: string
+    labelEn: string
+    descZh: string
+    descEn: string
+    importance: 'high' | 'medium' | 'low'
+  }> = [
+    {
+      names: ['components'],
+      path: 'src/components',
+      labelZh: '组件',
+      labelEn: 'Components',
+      descZh: 'UI 组件',
+      descEn: 'UI Components',
+      importance: 'high'
+    },
+    {
+      names: ['services'],
+      path: 'src/services',
+      labelZh: '服务',
+      labelEn: 'Services',
+      descZh: '业务逻辑和 API 调用',
+      descEn: 'Business logic and API calls',
+      importance: 'high'
+    },
+    {
+      names: ['hooks'],
+      path: 'src/hooks',
+      labelZh: 'Hooks',
+      labelEn: 'Hooks',
+      descZh: '自定义 React Hooks',
+      descEn: 'Custom React Hooks',
+      importance: 'medium'
+    },
+    {
+      names: ['utils', 'lib', 'helpers'],
+      path: 'src/utils',
+      labelZh: '工具',
+      labelEn: 'Utils',
+      descZh: '通用工具函数',
+      descEn: 'Utility functions',
+      importance: 'low'
+    },
+    {
+      names: ['types'],
+      path: 'src/types',
+      labelZh: '类型',
+      labelEn: 'Types',
+      descZh: 'TypeScript 类型定义',
+      descEn: 'TypeScript type definitions',
+      importance: 'medium'
+    },
+    {
+      names: ['prompts'],
+      path: 'src/prompts',
+      labelZh: '提示词',
+      labelEn: 'Prompts',
+      descZh: 'AI 提示词模板',
+      descEn: 'AI prompt templates',
+      importance: 'medium'
+    },
+    {
+      names: ['pages', 'views', 'screens'],
+      path: 'src/pages',
+      labelZh: '页面',
+      labelEn: 'Pages',
+      descZh: '页面组件',
+      descEn: 'Page components',
+      importance: 'high'
+    },
+    {
+      names: ['api', 'routes'],
+      path: 'src/api',
+      labelZh: 'API',
+      labelEn: 'API',
+      descZh: 'API 路由和接口',
+      descEn: 'API routes and endpoints',
+      importance: 'high'
+    },
+    {
+      names: ['store', 'stores', 'state'],
+      path: 'src/store',
+      labelZh: '状态管理',
+      labelEn: 'State',
+      descZh: '全局状态管理',
+      descEn: 'Global state management',
+      importance: 'medium'
+    },
+    {
+      names: ['content', 'content-script'],
+      path: 'src/content',
+      labelZh: '内容脚本',
+      labelEn: 'Content Script',
+      descZh: '浏览器扩展内容脚本',
+      descEn: 'Browser extension content scripts',
+      importance: 'high'
+    },
+    {
+      names: ['background', 'service-worker'],
+      path: 'src/background',
+      labelZh: '后台服务',
+      labelEn: 'Background',
+      descZh: '后台服务和 Service Worker',
+      descEn: 'Background services and service workers',
+      importance: 'high'
+    },
+    {
+      names: ['popup'],
+      path: 'src/popup',
+      labelZh: '弹出窗口',
+      labelEn: 'Popup',
+      descZh: '扩展弹出窗口 UI',
+      descEn: 'Extension popup UI',
+      importance: 'high'
+    }
+  ]
+  
+  // 检测每个目录
+  for (const config of dirConfigs) {
+    const found = config.names.some(name => 
+      fullTree.toLowerCase().includes(`📁 ${name}`) ||
+      fullTree.toLowerCase().includes(`/${name}`) ||
+      preview.toLowerCase().includes(`📁 ${name}/`)
+    )
+    
+    if (found) {
+      // 尝试从 preview 或 fullTree 中提取实际文件
+      let keyFiles: string[] = []
+      
+      for (const name of config.names) {
+        keyFiles = extractFilesFromPreview(preview, name)
+        if (keyFiles.length === 0) {
+          keyFiles = extractFilesFromTree(fullTree, `src/${name}`)
+        }
+        if (keyFiles.length > 0) break
+      }
+      
+      // 如果还是没有文件，检查顶级目录
+      if (keyFiles.length === 0) {
+        for (const name of config.names) {
+          keyFiles = extractFilesFromTree(fullTree, name)
+          if (keyFiles.length > 0) {
+            // 更新路径为实际找到的路径
+            config.path = name
+            break
+          }
+        }
+      }
+      
+      modules.push({
+        name: isZh ? config.labelZh : config.labelEn,
+        path: config.path,
+        responsibility: isZh ? config.descZh : config.descEn,
+        importance: config.importance,
+        keyFiles
+      })
+    }
+  }
+  
+  // 如果没有检测到任何模块，添加基本的 src 模块
+  if (modules.length === 0 && fullTree.toLowerCase().includes('src')) {
+    const srcFiles = extractFilesFromTree(fullTree, 'src')
     modules.push({
       name: 'src',
       path: 'src/',
       responsibility: isZh ? '源代码目录' : 'Source code directory',
       importance: 'high',
-      keyFiles: []
+      keyFiles: srcFiles
     })
   }
   
-  if (tree.includes('components')) {
+  // 最终回退
+  if (modules.length === 0) {
     modules.push({
-      name: isZh ? '组件' : 'Components',
-      path: 'src/components/',
-      responsibility: isZh ? 'UI 组件' : 'UI Components',
-      importance: 'high',
-      keyFiles: []
-    })
-  }
-  
-  if (tree.includes('services')) {
-    modules.push({
-      name: isZh ? '服务' : 'Services',
-      path: 'src/services/',
-      responsibility: isZh ? '业务逻辑和 API 调用' : 'Business logic and API calls',
-      importance: 'high',
-      keyFiles: []
-    })
-  }
-  
-  if (tree.includes('hooks')) {
-    modules.push({
-      name: 'Hooks',
-      path: 'src/hooks/',
-      responsibility: isZh ? '自定义 React Hooks' : 'Custom React Hooks',
-      importance: 'medium',
-      keyFiles: []
-    })
-  }
-  
-  if (tree.includes('utils') || tree.includes('lib')) {
-    modules.push({
-      name: isZh ? '工具' : 'Utils',
-      path: 'src/utils/',
-      responsibility: isZh ? '通用工具函数' : 'Utility functions',
-      importance: 'low',
-      keyFiles: []
-    })
-  }
-  
-  if (tree.includes('types')) {
-    modules.push({
-      name: isZh ? '类型' : 'Types',
-      path: 'src/types/',
-      responsibility: isZh ? 'TypeScript 类型定义' : 'TypeScript type definitions',
-      importance: 'medium',
-      keyFiles: []
-    })
-  }
-  
-  return modules.length > 0 ? modules : [
-    {
       name: isZh ? '主模块' : 'Main Module',
       path: './',
       responsibility: isZh ? '项目主要代码' : 'Main project code',
       importance: 'high',
       keyFiles: []
-    }
-  ]
+    })
+  }
+  
+  console.log('[SourceMap Fallback] Generated modules:', modules.map(m => ({ name: m.name, files: m.keyFiles?.length })))
+  
+  return modules
 }

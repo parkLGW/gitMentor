@@ -181,7 +181,16 @@ function SourceMapTab({ repo, language, defaultBranch = 'main' }: SourceMapTabPr
         return
       }
       
+      console.log('[SourceMapTab] AI response received, length:', response.content?.length)
+      console.log('[SourceMapTab] AI response preview:', response.content?.slice(0, 500))
+      
       const parsed = parseSourceMapResponse(response.content)
+      console.log('[SourceMapTab] Parsed result:', parsed ? {
+        hasArchitectureType: !!parsed.architectureType,
+        hasMermaidDiagram: !!parsed.mermaidDiagram,
+        modulesCount: parsed.coreModules?.length,
+        firstModule: parsed.coreModules?.[0]
+      } : 'null')
 
       // Check if this is still the current request
       if (requestId !== requestIdRef.current) {
@@ -273,12 +282,22 @@ function SourceMapTab({ repo, language, defaultBranch = 'main' }: SourceMapTabPr
             const prompt = createSourceMapPrompt(context, language)
             const response = await provider.complete(prompt, undefined, signal)
             
+            console.log('[SourceMapTab] Regenerate AI response length:', response.content?.length)
+            console.log('[SourceMapTab] Regenerate AI response preview:', response.content?.slice(0, 500))
+            
             if (signal.aborted) {
               console.log('[SourceMapTab] AI analysis cancelled during regeneration')
               return
             }
             
             const parsed = parseSourceMapResponse(response.content)
+            
+            console.log('[SourceMapTab] Regenerate parsed result:', parsed ? {
+              hasArchitectureType: !!parsed.architectureType,
+              hasMermaidDiagram: !!parsed.mermaidDiagram,
+              modulesCount: parsed.coreModules?.length,
+              firstModuleFiles: parsed.coreModules?.[0]?.keyFiles
+            } : 'null')
             
             if (currentRequestId !== requestIdRef.current) {
               console.log('[SourceMapTab] Request ID mismatch after AI analysis')

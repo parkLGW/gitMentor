@@ -560,13 +560,7 @@ const ENTRY_FILE_PATTERNS = [
 ]
 
 export async function findEntryFile(owner: string, repo: string): Promise<string | null> {
-  // Check package.json main field first
-  const packageJson = await getPackageJson(owner, repo)
-  if (packageJson?.main) {
-    return packageJson.main
-  }
-
-  // Get file lists for root and src directories
+  // Get file lists for root and src directories first
   const rootTree = await getRepoTree(owner, repo, '')
   const srcTree = await getRepoTree(owner, repo, 'src').catch(() => [])
 
@@ -575,7 +569,46 @@ export async function findEntryFile(owner: string, repo: string): Promise<string
     ...(Array.isArray(srcTree) ? srcTree.map((f: any) => ({ ...f, path: `src/${f.name}` })) : [])
   ]
 
-  // Find entry file by priority
+  // Check package.json main field, but only if it points to a source file (not dist/build)
+  const packageJson = await getPackageJson(owner, repo)
+  if (packageJson?.main) {
+    const mainPath = packageJson.main
+    // Skip if main points to dist/, build/, or other build output directories
+    if (!mainPath.startsWith('dist/') && 
+        !mainPath.startsWith('build/') && 
+        !mainPath.startsWith('lib/') &&
+        !mainPath.includes('/dist/') &&
+        !mainPath.includes('/build/')) {
+      // Verify the file actually exists in the repo
+      const exists = allFiles.some((f: any) => f.path === mainPath || f.name === mainPath)
+      if (exists) {
+        return mainPath
+      }
+    }
+    
+    // If main points to dist/, try to find corresponding source file
+    // e.g., dist/index.js -> src/index.ts
+    if (mainPath.startsWith('dist/') || mainPath.startsWith('build/')) {
+      const baseName = mainPath.replace(/^(dist|build)\//, '').replace(/\.js$/, '')
+      const sourcePatterns = [
+        `src/${baseName}.ts`,
+        `src/${baseName}.tsx`,
+        `src/${baseName}.js`,
+        `src/${baseName}.jsx`,
+        `${baseName}.ts`,
+        `${baseName}.tsx`,
+      ]
+      for (const pattern of sourcePatterns) {
+        const found = allFiles.find((f: any) => f.path === pattern)
+        if (found) {
+          console.log(`[findEntryFile] Mapped ${mainPath} to source file: ${found.path}`)
+          return found.path
+        }
+      }
+    }
+  }
+
+  // Find entry file by priority patterns
   for (const pattern of ENTRY_FILE_PATTERNS) {
     const found = allFiles.find((f: any) => f.path === pattern || f.name === pattern)
     if (found) {
