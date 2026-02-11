@@ -594,7 +594,3 @@ Please provide a clear, concise answer. If the question cannot be answered from 
 chrome.runtime.onInstalled.addListener(() => {
   console.log('[GitMentor SW] Extension installed')
 })
-
-chrome.tabs.onActivated.addListener(() => {
-  console.log('[GitMentor SW] Tab activated')
-})

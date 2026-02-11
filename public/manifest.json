@@ -4,9 +4,7 @@
   "version": "0.1.0",
   "description": "Learn GitHub projects smarter: understand, use, and read source code in 5-10 minutes",
   "permissions": [
-    "storage",
-    "activeTab",
-    "scripting"
+    "storage"
   ],
   "host_permissions": [
     "https://github.com/*",
