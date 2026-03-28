@@ -4,6 +4,8 @@ import { analyzeReadme } from '@/services/analysis'
 import { AIAnalysisService, ProjectAnalysis } from '@/services/ai-analysis'
 import { useLLM } from '@/hooks/useLLM'
 import { LoadingSpinner } from './LoadingSpinner'
+import { StorageKeys } from '@/constants/storage'
+import { setJsonCacheWithEviction } from '@/utils/local-cache'
 
 interface OverviewTabProps {
   repo: { owner: string; name: string }
@@ -28,7 +30,7 @@ function OverviewTab({ repo, language }: OverviewTabProps) {
         setRepoInfo(info)
         
         // Try to load AI analysis from cache first (7 days expiration)
-        const cacheKey = `gitmentor_ai_analysis_${repo.owner}/${repo.name}`
+        const cacheKey = StorageKeys.overviewAnalysis(repo)
         const cached = localStorage.getItem(cacheKey)
         if (cached) {
           try {
@@ -73,7 +75,7 @@ function OverviewTab({ repo, language }: OverviewTabProps) {
             setAiAnalysis(analysis)
             
             // Cache the result with timestamp
-            localStorage.setItem(cacheKey, JSON.stringify({ data: analysis, timestamp: Date.now() }))
+            setJsonCacheWithEviction(cacheKey, analysis)
           } catch (aiErr) {
             console.warn('[GitMentor] AI analysis failed, using basic analysis:', aiErr)
             setAiError(aiErr instanceof Error ? aiErr.message : 'AI analysis failed')
@@ -111,8 +113,8 @@ function OverviewTab({ repo, language }: OverviewTabProps) {
       setAiAnalysis(analysis)
 
       // Cache the result with timestamp
-      const cacheKey = `gitmentor_ai_analysis_${repo.owner}/${repo.name}`
-      localStorage.setItem(cacheKey, JSON.stringify({ data: analysis, timestamp: Date.now() }))
+      const cacheKey = StorageKeys.overviewAnalysis(repo)
+      setJsonCacheWithEviction(cacheKey, analysis)
     } catch (err) {
       setAiError(err instanceof Error ? err.message : 'Analysis failed')
     } finally {

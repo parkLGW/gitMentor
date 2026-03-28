@@ -1,5 +1,6 @@
 // Token Usage Tracker Service
 // Tracks API calls and estimated token usage
+import { STORAGE_KEYS } from '@/constants/storage'
 
 export interface UsageRecord {
   timestamp: number
@@ -20,7 +21,7 @@ export interface UsageStats {
   recentRecords: UsageRecord[]
 }
 
-const STORAGE_KEY = 'gitmentor_usage_stats'
+const STORAGE_KEY = STORAGE_KEYS.usageStats
 const MAX_RECORDS = 100
 
 // Rough token estimation (4 chars = 1 token for English, 2 chars = 1 token for Chinese)

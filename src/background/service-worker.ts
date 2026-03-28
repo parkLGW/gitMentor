@@ -1,5 +1,10 @@
 // Service Worker for GitMentor
 declare const chrome: any
+import type { AnalysisEvidence, ConfidenceLevel, DeepFileAnalysisResult, LearningMission } from '@/types/learning'
+import type { SourceMapOutput } from '@/prompts/types'
+import { createLearningMission } from '@/services/learning-mission'
+
+const LLM_CONFIG_KEY = 'gitmentor_llm_config'
 
 console.log('[GitMentor SW] Service worker loaded!')
 
@@ -86,12 +91,15 @@ interface LLMConfig {
   maxTokens?: number
 }
 
+const DEFAULT_LLM_TIMEOUT_MS = 30000
+const CONCEPT_LLM_TIMEOUT_MS = 55000
+
 // Get LLM config from storage
 async function getLLMConfig(): Promise<LLMConfig | null> {
   return new Promise((resolve) => {
     // 使用与 popup 相同的键名
-    chrome.storage.local.get(['gitmentor_llm_config'], (result: any) => {
-      resolve(result.gitmentor_llm_config || null)
+    chrome.storage.local.get([LLM_CONFIG_KEY], (result: any) => {
+      resolve(result[LLM_CONFIG_KEY] || null)
     })
   })
 }
@@ -132,8 +140,41 @@ function safeParseJSON(text: string): any {
   }
 }
 
+function normalizeConfidence(raw: unknown): ConfidenceLevel {
+  const value = String(raw || '').toLowerCase()
+  if (value === 'high' || value === 'medium' || value === 'low') return value
+  return 'low'
+}
+
+function normalizeEvidence(input: unknown): AnalysisEvidence[] {
+  if (!Array.isArray(input)) return []
+  return input
+    .map((item) => {
+      const value = item as Record<string, unknown>
+      const snippet = String(value?.snippet || '').slice(0, 260)
+      const reason = String(value?.reason || '').slice(0, 220)
+      if (!snippet || !reason) return null
+      return {
+        filePath: value?.filePath ? String(value.filePath) : undefined,
+        lineStart: typeof value?.lineStart === 'number' ? value.lineStart : undefined,
+        snippet,
+        reason,
+      } satisfies AnalysisEvidence
+    })
+    .filter(Boolean) as AnalysisEvidence[]
+}
+
+function isAbortError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false
+  return error.name === 'AbortError' || error.message.includes('aborted')
+}
+
 // Call LLM API
-async function callLLM(config: LLMConfig, prompt: string): Promise<string> {
+async function callLLM(
+  config: LLMConfig,
+  prompt: string,
+  options?: { timeoutMs?: number },
+): Promise<string> {
   let apiUrl: string
   let headers: Record<string, string>
   let body: any
@@ -167,7 +208,7 @@ async function callLLM(config: LLMConfig, prompt: string): Promise<string> {
       break
 
     case 'deepseek':
-      apiUrl = 'https://api.deepseek.com/chat/completions'
+      apiUrl = 'https://api.deepseek.com/v1/chat/completions'
       headers = {
         'Content-Type': 'application/json',
         'Authorization': `Bearer ${config.apiKey}`,
@@ -176,6 +217,7 @@ async function callLLM(config: LLMConfig, prompt: string): Promise<string> {
         model: config.model || 'deepseek-chat',
         messages: [{ role: 'user', content: prompt }],
         temperature: 0.3,
+        max_tokens: 600,
       }
       break
 
@@ -189,6 +231,7 @@ async function callLLM(config: LLMConfig, prompt: string): Promise<string> {
         model: config.model || 'Qwen/Qwen2.5-72B-Instruct',
         messages: [{ role: 'user', content: prompt }],
         temperature: 0.3,
+        max_tokens: 600,
       }
       break
 
@@ -202,6 +245,7 @@ async function callLLM(config: LLMConfig, prompt: string): Promise<string> {
         model: config.model || 'glm-4',
         messages: [{ role: 'user', content: prompt }],
         temperature: 0.3,
+        max_tokens: 600,
       }
       break
 
@@ -234,24 +278,40 @@ async function callLLM(config: LLMConfig, prompt: string): Promise<string> {
       throw new Error(`Unknown provider: ${config.provider}`)
   }
 
-  const response = await fetch(apiUrl, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify(body),
-  })
+  const controller = new AbortController()
+  const timeoutMs = options?.timeoutMs ?? DEFAULT_LLM_TIMEOUT_MS
+  const timer = setTimeout(() => {
+    controller.abort()
+  }, timeoutMs)
 
-  if (!response.ok) {
-    const errorText = await response.text()
-    throw new Error(`API error ${response.status}: ${errorText}`)
-  }
+  try {
+    const response = await fetch(apiUrl, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    })
 
-  const data = await response.json()
+    if (!response.ok) {
+      const errorText = await response.text()
+      throw new Error(`API error ${response.status}: ${errorText}`)
+    }
 
-  // Extract content based on provider
-  if (config.provider === 'claude') {
-    return data.content?.[0]?.text || ''
-  } else {
-    return data.choices?.[0]?.message?.content || ''
+    const data = await response.json()
+
+    // Extract content based on provider
+    if (config.provider === 'claude') {
+      return data.content?.[0]?.text || ''
+    } else {
+      return data.choices?.[0]?.message?.content || ''
+    }
+  } catch (error) {
+    if (isAbortError(error)) {
+      throw new Error('REQUEST_TIMEOUT')
+    }
+    throw error
+  } finally {
+    clearTimeout(timer)
   }
 }
 
@@ -355,7 +415,12 @@ function quickAnalyzeFile(fileName: string, fileContent: string, lang: Language 
 }
 
 // Deep file analysis with LLM
-async function deepAnalyzeFile(config: LLMConfig, fileName: string, fileContent: string, lang: Language = 'en'): Promise<string> {
+async function deepAnalyzeFile(
+  config: LLMConfig,
+  fileName: string,
+  fileContent: string,
+  lang: Language = 'en',
+): Promise<DeepFileAnalysisResult> {
   const languageInstruction = lang === 'zh' 
     ? '请用中文回答，所有字段都应该是中文。' 
     : 'Please answer in English.'
@@ -372,14 +437,16 @@ ${languageInstruction}
 
 Please provide analysis in the following JSON format:
 {
-  "purpose": "What this file does (1-2 sentences)",
-  "keyComponents": [
-    {"name": "ComponentName", "type": "function|class|interface|constant", "description": "Brief description"}
+  "summary": "What this file does (1-2 sentences)",
+  "components": [
+    {"name": "ComponentName", "type": "function|class|interface|constant|module", "description": "Brief description"}
   ],
   "dependencies": ["List of key imports/dependencies"],
-  "complexity": "low|medium|high",
+  "evidence": [
+    {"filePath": "${fileName}", "lineStart": 10, "snippet": "exact code snippet", "reason": "why this supports the summary"}
+  ],
   "suggestions": ["Any improvement suggestions"],
-  "summary": "A brief summary paragraph for developers new to this codebase"
+  "confidence": "low|medium|high"
 }
 
 Important: Return ONLY the JSON object, no markdown code blocks or extra text.`
@@ -390,114 +457,38 @@ Important: Return ONLY the JSON object, no markdown code blocks or extra text.`
   if (!analysis) {
     throw new Error('Failed to parse AI response')
   }
-  
-  // Build HTML from analysis
-  let html = `
-    <div style="margin-bottom: 16px;">
-      <h3 style="font-size: 14px; font-weight: 600; margin: 0 0 8px 0; color: #24292e;">${getAnalysisText(lang, 'aiAnalysis')}</h3>
-      <p style="font-size: 13px; color: #444; line-height: 1.5; margin: 0;">${analysis.purpose || 'No purpose detected'}</p>
-    </div>
-  `
-  
-  if (analysis.keyComponents?.length > 0) {
-    html += `
-      <div style="margin-bottom: 16px;">
-        <h4 style="font-size: 13px; font-weight: 600; margin: 0 0 8px 0; color: #24292e;">${getAnalysisText(lang, 'keyComponents')}</h4>
-        <div style="space-y: 8px;">
-          ${analysis.keyComponents.slice(0, 8).map((c: any) => `
-            <div style="padding: 8px; background: #f6f8fa; border-radius: 4px; margin-bottom: 6px;">
-              <div style="display: flex; align-items: center; gap: 6px;">
-                <span style="font-family: monospace; font-size: 12px; font-weight: 500; color: #0366d6;">${c.name}</span>
-                <span style="font-size: 10px; padding: 1px 6px; background: #e1e4e8; border-radius: 3px; color: #666;">${c.type}</span>
-              </div>
-              <p style="font-size: 11px; color: #666; margin: 4px 0 0 0;">${c.description}</p>
-            </div>
-          `).join('')}
-        </div>
-      </div>
-    `
+
+  const summary = String(analysis.summary || analysis.purpose || '').slice(0, 800)
+  const components = Array.isArray(analysis.components)
+    ? analysis.components
+    : Array.isArray(analysis.keyComponents)
+      ? analysis.keyComponents
+      : []
+
+  const normalized: DeepFileAnalysisResult = {
+    summary: summary || (lang === 'zh' ? '未检测到有效摘要' : 'No valid summary detected'),
+    components: components.slice(0, 10).map((item: any) => ({
+      name: String(item?.name || 'unknown'),
+      type: (['function', 'class', 'interface', 'constant', 'module'].includes(String(item?.type))
+        ? item.type
+        : 'module') as DeepFileAnalysisResult['components'][number]['type'],
+      description: String(item?.description || ''),
+    })),
+    dependencies: Array.isArray(analysis.dependencies)
+      ? analysis.dependencies.map((d: unknown) => String(d)).slice(0, 12)
+      : [],
+    suggestions: Array.isArray(analysis.suggestions)
+      ? analysis.suggestions.map((s: unknown) => String(s)).slice(0, 6)
+      : [],
+    evidence: normalizeEvidence(analysis.evidence),
+    confidence: normalizeConfidence(analysis.confidence),
   }
-  
-  if (analysis.dependencies?.length > 0) {
-    html += `
-      <div style="margin-bottom: 16px;">
-        <h4 style="font-size: 13px; font-weight: 600; margin: 0 0 8px 0; color: #24292e;">${getAnalysisText(lang, 'dependencies')}</h4>
-        <div style="display: flex; flex-wrap: wrap; gap: 4px;">
-          ${analysis.dependencies.slice(0, 10).map((d: string) => `<span style="background: #e8f4fd; padding: 2px 8px; border-radius: 4px; font-size: 11px;">${d}</span>`).join('')}
-        </div>
-      </div>
-    `
+
+  if (normalized.evidence.length === 0) {
+    normalized.confidence = 'low'
   }
-  
-  if (analysis.complexity) {
-    const colors: Record<string, string> = {
-      low: '#28a745',
-      medium: '#ffc107',
-      high: '#dc3545',
-    }
-    html += `
-      <div style="margin-bottom: 16px;">
-        <span style="font-size: 12px; color: #666;">${getAnalysisText(lang, 'complexity')}: </span>
-        <span style="font-size: 12px; font-weight: 500; color: ${colors[analysis.complexity] || '#666'};">${analysis.complexity.toUpperCase()}</span>
-      </div>
-    `
-  }
-  
-  if (analysis.summary) {
-    html += `
-      <div style="margin-bottom: 16px; padding: 12px; background: #f0f7ff; border-radius: 6px; border-left: 3px solid #0366d6;">
-        <p style="font-size: 12px; color: #444; line-height: 1.5; margin: 0;">${analysis.summary}</p>
-      </div>
-    `
-  }
-  
-  if (analysis.suggestions?.length > 0) {
-    html += `
-      <div style="margin-bottom: 16px;">
-        <h4 style="font-size: 13px; font-weight: 600; margin: 0 0 8px 0; color: #24292e;">${getAnalysisText(lang, 'suggestions')}</h4>
-        <ul style="margin: 0; padding-left: 16px; font-size: 12px; color: #666; line-height: 1.6;">
-          ${analysis.suggestions.slice(0, 5).map((s: string) => `<li>${s}</li>`).join('')}
-        </ul>
-      </div>
-    `
-  }
-  
-  // Add Q&A section
-  html += `
-    <div style="margin-top: 16px; padding-top: 16px; border-top: 1px solid #e1e4e8;">
-      <h4 style="font-size: 13px; font-weight: 600; margin: 0 0 8px 0; color: #24292e;">${getAnalysisText(lang, 'askQuestion')}</h4>
-      <div style="display: flex; gap: 8px;">
-        <input 
-          type="text" 
-          id="gitmentor-question-input"
-          placeholder="${lang === 'zh' ? '关于此文件提问...' : 'Ask about this file...'}"
-          style="
-            flex: 1;
-            padding: 8px 12px;
-            border: 1px solid #e1e4e8;
-            border-radius: 6px;
-            font-size: 12px;
-            outline: none;
-          "
-        />
-        <button 
-          id="gitmentor-ask-btn"
-          style="
-            padding: 8px 16px;
-            background: #24292e;
-            color: white;
-            border: none;
-            border-radius: 6px;
-            font-size: 12px;
-            cursor: pointer;
-          "
-        >${getAnalysisText(lang, 'askButton')}</button>
-      </div>
-      <div id="gitmentor-qa-response" style="margin-top: 12px;"></div>
-    </div>
-  `
-  
-  return html
+
+  return normalized
 }
 
 // Handle messages from content script
@@ -524,28 +515,20 @@ chrome.runtime.onMessage.addListener((message: any, _sender: any, sendResponse: 
       try {
         const config = await getLLMConfig()
         if (!config) {
-          sendResponse({ 
-            error: 'LLM not configured. Please configure your API key in the GitMentor popup settings.',
-            html: `
-              <div style="padding: 16px; background: #fff8e6; border-radius: 6px; border: 1px solid #ffc107;">
-                <p style="font-size: 13px; color: #856404; margin: 0 0 12px 0; font-weight: 500;">${getAnalysisText(lang, 'llmNotConfigured')}</p>
-                <p style="font-size: 12px; color: #666; margin: 0 0 12px 0;">
-                  ${getAnalysisText(lang, 'configureApiKey')}:
-                </p>
-                <ol style="font-size: 12px; color: #666; margin: 0; padding-left: 16px; line-height: 1.6;">
-                  <li>${getAnalysisText(lang, 'clickExtensionIcon')}</li>
-                  <li>${getAnalysisText(lang, 'goToSettings')}</li>
-                  <li>${getAnalysisText(lang, 'enterApiKey')}</li>
-                  <li>${getAnalysisText(lang, 'saveAndRetry')}</li>
-                </ol>
-              </div>
-            `
+          sendResponse({
+            error:
+              'LLM not configured. Please configure your API key in GitMentor settings.',
           })
           return
         }
-        
-        const html = await deepAnalyzeFile(config, message.fileName, message.fileContent, lang)
-        sendResponse({ html })
+
+        const data = await deepAnalyzeFile(
+          config,
+          message.fileName,
+          message.fileContent,
+          lang,
+        )
+        sendResponse({ data })
       } catch (error) {
         console.error('[GitMentor SW] Deep analysis error:', error)
         sendResponse({ 
@@ -583,6 +566,79 @@ Please provide a clear, concise answer. If the question cannot be answered from 
       } catch (error) {
         console.error('[GitMentor SW] Q&A error:', error)
         sendResponse({ error: error instanceof Error ? error.message : 'Failed to get answer' })
+      }
+    })()
+    return true
+  }
+
+  if (message.action === 'getLearningMission') {
+    try {
+      const sourceMap = message.sourceMap as SourceMapOutput
+      const readmeSummary = String(message.readmeSummary || '')
+      const repoOwner = String(message?.repo?.owner || '')
+      const repoName = String(message?.repo?.name || '')
+      const mission: LearningMission = createLearningMission({
+        repoKey: `${repoOwner}/${repoName}`,
+        sourceMap,
+        readmeSummary,
+        language: lang,
+      })
+      sendResponse({ mission })
+    } catch (error) {
+      sendResponse({
+        error:
+          error instanceof Error
+            ? error.message
+            : 'Failed to build learning mission',
+      })
+    }
+    return true
+  }
+
+  if (message.action === 'explainConceptLite') {
+    ;(async () => {
+      try {
+        const config = await getLLMConfig()
+        if (!config) {
+          sendResponse({ error: 'LLM not configured' })
+          return
+        }
+
+        const concept = String(message.concept || '')
+        const question = String(message.question || '')
+        const prompt = `You are helping a beginner understand one concept in a GitHub project.
+
+Concept: ${concept}
+Question: ${question}
+
+Return only JSON:
+{
+  "answer": "short practical answer for beginner in 2-4 sentences",
+  "confidence": "low|medium|high",
+  "evidence": [
+    {"filePath": "path/to/file", "lineStart": 10, "snippet": "short snippet", "reason": "why this supports the answer"}
+  ]
+}`
+        const response = await callLLM(config, prompt, { timeoutMs: CONCEPT_LLM_TIMEOUT_MS })
+        const parsed = safeParseJSON(response)
+        const fallbackAnswer = lang === 'zh'
+          ? `我暂时无法完整回答「${concept}」，建议先从 README 和入口文件开始查看。`
+          : `I cannot fully answer "${concept}" right now. Start from README and the entry files first.`
+        const answerText = String(parsed?.answer || response || '').trim()
+        const data = {
+          answer: (answerText || fallbackAnswer).slice(0, 1200),
+          confidence: normalizeConfidence(parsed?.confidence),
+          evidence: normalizeEvidence(parsed?.evidence),
+        }
+        if (data.evidence.length === 0) {
+          data.confidence = 'low'
+        }
+        sendResponse({ data })
+      } catch (error) {
+        const messageText = error instanceof Error ? error.message : 'Failed to explain concept'
+        sendResponse({
+          error: messageText === 'REQUEST_TIMEOUT' ? 'REQUEST_TIMEOUT' : messageText,
+        })
       }
     })()
     return true

@@ -1,4 +1,5 @@
 // Prompt 输出类型定义
+import type { ConceptCard } from "@/types/learning";
 
 // 项目上下文 - 传入 prompt 的信息
 export interface ProjectContext {
@@ -101,7 +102,24 @@ export interface SourceMapOutput {
   coreModules: CoreModule[]
   dependencies: ModuleDependency[]
   learningPath: LearningPhase[]
-  keyConcepts: KeyConcept[]
+  keyConcepts: ConceptCard[]
+  quality?: SourceMapQuality
+  completenessScore?: number
+  updatedAt?: number
+  source?: SourceMapSource
+  schemaVersion?: number
+}
+
+export type SourceMapQuality = 'fallback' | 'partial' | 'complete'
+
+export type SourceMapSource = 'fallback' | 'ai' | 'ai-merged'
+
+export interface SourceMapMergeResult {
+  map: SourceMapOutput
+  quality: SourceMapQuality
+  completenessScore: number
+  shouldCacheLongTerm: boolean
+  usedFallbackMerge: boolean
 }
 
 export type ArchitectureType = 
@@ -139,12 +157,7 @@ export interface LearningPhase {
   prerequisites?: string[]
 }
 
-export interface KeyConcept {
-  term: string
-  definition: string
-  relatedFiles: string[]
-  importance: 'essential' | 'important' | 'helpful'
-}
+export type KeyConcept = ConceptCard
 
 // ============================================
 // 代码分析输出类型（用于侧边栏）

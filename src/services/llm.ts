@@ -3,13 +3,14 @@
 import { LLMConfig, LLMProvider, LLMProviderType } from '@/types/llm'
 import { ClaudeProvider, OpenAIProvider, OllamaProvider, DeepSeekProvider, LMStudioProvider, ZhipuProvider, SiliconFlowProvider } from './llm-base'
 import { eventBus, EVENTS } from '@/utils/eventBus'
+import { STORAGE_KEYS } from '@/constants/storage'
 
 export class LLMManager {
   private static instance: LLMManager
   private providers: Map<LLMProviderType, LLMProvider> = new Map()
   private currentProvider: LLMProvider | null = null
-  private configKey = 'gitmentor_llm_config'
-  private multiConfigKey = 'gitmentor_llm_configs_map'
+  private configKey = STORAGE_KEYS.llmConfig
+  private multiConfigKey = STORAGE_KEYS.llmConfigMap
 
   private constructor() {
     this.initializeProviders()

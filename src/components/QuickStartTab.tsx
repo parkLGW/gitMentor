@@ -6,6 +6,8 @@ import { getRepoInfo } from "@/services/github";
 import { AIAnalysisService, QuickStartGuide } from "@/services/ai-analysis";
 import { llmManager } from "@/services/llm";
 import { eventBus, EVENTS } from "@/utils/eventBus";
+import { StorageKeys } from "@/constants/storage";
+import { setJsonCacheWithEviction } from "@/utils/local-cache";
 
 interface QuickStartTabProps {
   repo: { owner: string; name: string };
@@ -85,7 +87,7 @@ function CodeBlock({
 
 // 缓存 key
 function getCacheKey(owner: string, name: string, lang: string): string {
-  return `gitmentor_quickstart_${owner}/${name}_${lang}`;
+  return StorageKeys.quickStart({ owner, name }, lang as "zh" | "en");
 }
 
 function QuickStartTab({ repo, language }: QuickStartTabProps) {
@@ -173,13 +175,7 @@ Description: ${repoInfo.description || "N/A"}`;
 
       // 保存缓存
       try {
-        localStorage.setItem(
-          cacheKey,
-          JSON.stringify({
-            data: result,
-            timestamp: Date.now(),
-          }),
-        );
+        setJsonCacheWithEviction(cacheKey, result);
       } catch (e) {
         console.warn("[QuickStartTab] Cache write error:", e);
       }

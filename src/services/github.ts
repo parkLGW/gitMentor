@@ -1,3 +1,6 @@
+import { StorageKeys } from '@/constants/storage'
+import { setJsonCacheWithEviction } from '@/utils/local-cache'
+
 export interface RepoInfo {
   name: string
   owner: string
@@ -13,7 +16,6 @@ export interface RepoInfo {
   archived: boolean
 }
 
-const CACHE_KEY_PREFIX = 'gitmentor_cache_'
 const CACHE_DURATION = 24 * 60 * 60 * 1000 // 24 hours
 const DEFAULT_TIMEOUT = 10000 // 10 seconds
 
@@ -30,7 +32,7 @@ function isLocalStorageAvailable(): boolean {
 }
 
 function getCacheKey(owner: string, repo: string, type: string): string {
-  return `${CACHE_KEY_PREFIX}${owner}/${repo}/${type}`
+  return StorageKeys.githubCache(owner, repo, type)
 }
 
 function getFromCache<T>(key: string): T | null {
@@ -55,10 +57,7 @@ function setCache<T>(key: string, data: T): void {
   if (!isLocalStorageAvailable()) return
 
   try {
-    localStorage.setItem(key, JSON.stringify({
-      data,
-      timestamp: Date.now(),
-    }))
+    setJsonCacheWithEviction(key, data)
   } catch (error) {
     console.warn('Failed to cache data:', error)
   }

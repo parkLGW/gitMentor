@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { llmManager } from '@/services/llm'
 import { LLMProviderType, LLMConfig } from '@/types/llm'
+import { STORAGE_KEYS } from '@/constants/storage'
 import { usageTracker, UsageStats } from '@/services/usage-tracker'
 
 interface SettingsTabProps {
@@ -77,13 +78,13 @@ function SettingsTab({ language }: SettingsTabProps) {
       try {
         // Use chrome.storage.local for persistence across reloads
         const result = await new Promise<Record<string, any>>((resolve) => {
-          chrome.storage.local.get('gitmentor_llm_config', (data: Record<string, any>) => {
+          chrome.storage.local.get(STORAGE_KEYS.llmConfig, (data: Record<string, any>) => {
             resolve(data)
           })
         })
-        
-        if (result.gitmentor_llm_config) {
-          const config = result.gitmentor_llm_config
+
+        if (result[STORAGE_KEYS.llmConfig]) {
+          const config = result[STORAGE_KEYS.llmConfig]
           console.log('[GitMentor] Loaded saved LLM config:', config.provider)
           setSavedConfig(config)
           setSelectedProvider(config.provider || 'claude')
@@ -183,14 +184,14 @@ function SettingsTab({ language }: SettingsTabProps) {
       
       // Verify config was saved
       const result = await new Promise<Record<string, any>>((resolve) => {
-        chrome.storage.local.get('gitmentor_llm_config', (data: Record<string, any>) => {
+        chrome.storage.local.get(STORAGE_KEYS.llmConfig, (data: Record<string, any>) => {
           resolve(data)
         })
       })
-      
-      if (result.gitmentor_llm_config && result.gitmentor_llm_config.provider === selectedProvider) {
-        console.log('[SettingsTab] Config verified in storage:', result.gitmentor_llm_config)
-        setSavedConfig(result.gitmentor_llm_config)
+
+      if (result[STORAGE_KEYS.llmConfig] && result[STORAGE_KEYS.llmConfig].provider === selectedProvider) {
+        console.log('[SettingsTab] Config verified in storage:', result[STORAGE_KEYS.llmConfig])
+        setSavedConfig(result[STORAGE_KEYS.llmConfig])
         setSaved(true)
         setTimeout(() => setSaved(false), 3000)
       } else {

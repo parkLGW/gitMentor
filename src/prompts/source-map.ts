@@ -1,6 +1,225 @@
 // 源码地图 Prompt 生成器
 
-import { ProjectContext, SourceMapOutput } from "./types";
+import {
+  ProjectContext,
+  SourceMapMergeResult,
+  SourceMapOutput,
+  SourceMapQuality,
+  SourceMapSource,
+} from "./types";
+import { normalizeConceptCard } from "@/services/learning-mission";
+
+export const SOURCE_MAP_SCHEMA_VERSION = 4;
+
+const ARCH_TYPES: ReadonlyArray<SourceMapOutput["architectureType"]> = [
+  "mvc",
+  "component-based",
+  "layered",
+  "microservices",
+  "plugin-based",
+  "event-driven",
+  "monolithic",
+  "other",
+];
+
+function sanitizeText(input: unknown): string {
+  return String(input || "")
+    .replace(/<[^>]+>/g, " ")
+    .replace(/!\[[^\]]*?\]\([^)]+\)/g, " ")
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
+    .replace(/`{1,3}[^`]*`{1,3}/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function normalizePath(path: unknown): string {
+  return String(path || "")
+    .replace(/[`"'<>]/g, "")
+    .replace(/\\/g, "/")
+    .replace(/\/+/g, "/")
+    .replace(/^\.\//, "")
+    .trim();
+}
+
+function normalizePathList(input: unknown, limit = 6): string[] {
+  if (!Array.isArray(input)) return [];
+  const unique = Array.from(
+    new Set(
+      input
+        .map((item) => normalizePath(item))
+        .filter((item) => item.length > 0 && !item.includes("\n") && !item.startsWith("#")),
+    ),
+  );
+  return unique.slice(0, limit);
+}
+
+function normalizeImportance(input: unknown): "high" | "medium" | "low" {
+  const value = String(input || "").toLowerCase();
+  if (value === "high" || value === "medium" || value === "low") return value;
+  return "medium";
+}
+
+function normalizeConceptImportance(
+  input: unknown,
+): "essential" | "important" | "helpful" {
+  const value = String(input || "").toLowerCase();
+  if (value === "essential" || value === "important" || value === "helpful") {
+    return value;
+  }
+  return "important";
+}
+
+function normalizeArchitectureType(raw: unknown): SourceMapOutput["architectureType"] {
+  const value = String(raw || "").toLowerCase() as SourceMapOutput["architectureType"];
+  return ARCH_TYPES.includes(value) ? value : "other";
+}
+
+function normalizeMermaid(input: unknown): string {
+  let mermaidDiagram = String(input || "")
+    .replace(/\\n/g, "\n")
+    .replace(/\\t/g, "\t")
+    .trim();
+
+  if (
+    mermaidDiagram &&
+    !mermaidDiagram.includes("flowchart") &&
+    !mermaidDiagram.includes("graph") &&
+    mermaidDiagram.includes("-->")
+  ) {
+    mermaidDiagram = `flowchart TB\n${mermaidDiagram}`;
+  }
+  return mermaidDiagram;
+}
+
+function computeCompletenessScore(map: SourceMapOutput): number {
+  const modulesScore = Math.min(map.coreModules.length, 4) / 4 * 35;
+  const pathScore = Math.min(map.learningPath.length, 4) / 4 * 25;
+  const conceptScore = Math.min(map.keyConcepts.length, 4) / 4 * 20;
+  const diagramScore = map.mermaidDiagram ? 10 : 0;
+  const summaryScore = map.architectureSummary.length > 16 ? 10 : (map.architectureSummary ? 5 : 0);
+  return Math.round(modulesScore + pathScore + conceptScore + diagramScore + summaryScore);
+}
+
+function classifySourceMapQuality(
+  map: SourceMapOutput,
+  source: SourceMapSource,
+): SourceMapQuality {
+  if (source === "fallback") return "fallback";
+  const score = computeCompletenessScore(map);
+  const isComplete =
+    map.coreModules.length >= 2 &&
+    map.learningPath.length >= 2 &&
+    map.keyConcepts.length >= 3 &&
+    Boolean(map.mermaidDiagram);
+  return isComplete && score >= 68 ? "complete" : "partial";
+}
+
+function withSourceMeta(
+  map: SourceMapOutput,
+  source: SourceMapSource,
+): SourceMapOutput {
+  const completenessScore = computeCompletenessScore(map);
+  const quality = classifySourceMapQuality(map, source);
+  return {
+    ...map,
+    source,
+    quality,
+    completenessScore,
+    updatedAt: Date.now(),
+    schemaVersion: SOURCE_MAP_SCHEMA_VERSION,
+  };
+}
+
+function ensureConceptCards(
+  concepts: SourceMapOutput["keyConcepts"],
+  modules: SourceMapOutput["coreModules"],
+  architectureSummary: string,
+  language: "zh" | "en",
+): SourceMapOutput["keyConcepts"] {
+  const normalizedExisting = concepts
+    .map((concept) => normalizeConceptCard(concept, language))
+    .filter((concept) => concept.term && concept.definition);
+
+  if (normalizedExisting.length >= 3) {
+    return normalizedExisting.slice(0, 6);
+  }
+
+  const isZh = language === "zh";
+  const generated: SourceMapOutput["keyConcepts"] = [];
+  for (const module of modules.slice(0, 4)) {
+    generated.push(
+      normalizeConceptCard(
+        {
+          term: isZh ? `${module.name} 模块` : `${module.name} Module`,
+          definition:
+            module.responsibility ||
+            (isZh ? "负责系统中的关键职责。" : "Handles key responsibilities in the system."),
+          relatedFiles: module.keyFiles || [],
+          importance: generated.length === 0 ? "essential" : "important",
+          beginnerExplanation: isZh
+            ? `先理解 ${module.name}，你会更容易串起系统主流程。`
+            : `Start with ${module.name} to understand the main system flow faster.`,
+          whyItMatters: isZh
+            ? `${module.name} 影响你读代码时的整体理解速度。`
+            : `${module.name} directly affects your overall reading speed.`,
+          whereToFind: module.keyFiles || [module.path],
+        },
+        language,
+      ),
+    );
+  }
+
+  if (architectureSummary) {
+    generated.push(
+      normalizeConceptCard(
+        {
+          term: isZh ? "整体架构" : "Overall Architecture",
+          definition: architectureSummary,
+          relatedFiles: modules.flatMap((item) => item.keyFiles).slice(0, 4),
+          importance: "important",
+          beginnerExplanation: isZh
+            ? "先建立整体架构认知，再看细节代码会更顺。"
+            : "Build architecture-level understanding before diving into details.",
+          whyItMatters: isZh
+            ? "它决定了你如何组织阅读顺序。"
+            : "It defines the order in which you should read files.",
+          whereToFind: ["README.md", ...modules.flatMap((item) => item.keyFiles).slice(0, 3)],
+        },
+        language,
+      ),
+    );
+  }
+
+  const merged = [...normalizedExisting, ...generated];
+  const deduped = Array.from(new Map(merged.map((item) => [item.term, item])).values());
+  while (deduped.length < 3) {
+    const index = deduped.length + 1;
+    deduped.push(
+      normalizeConceptCard(
+        {
+          term: language === "zh" ? `关键概念 ${index}` : `Key Concept ${index}`,
+          definition:
+            language === "zh"
+              ? "帮助你理解项目核心结构的概念。"
+              : "A concept that helps you understand the project's core structure.",
+          relatedFiles: ["README.md"],
+          importance: "helpful",
+          beginnerExplanation:
+            language === "zh"
+              ? "先结合 README 和入口文件建立基本认知。"
+              : "Build a basic understanding from README and entry files first.",
+          whyItMatters:
+            language === "zh"
+              ? "概念清晰后，阅读代码会更快。"
+              : "Clear concepts make code reading faster.",
+          whereToFind: ["README.md", "src/"],
+        },
+        language,
+      ),
+    );
+  }
+  return deduped.slice(0, 6);
+}
 
 export function createSourceMapPrompt(
   context: ProjectContext,
@@ -168,6 +387,7 @@ function findJSONBoundaries(
 // Parse AI response with robust error handling
 export function parseSourceMapResponse(
   response: string,
+  language: "zh" | "en" = "en",
 ): SourceMapOutput | null {
   try {
     console.log("[SourceMap] Parsing response, length:", response.length);
@@ -205,7 +425,7 @@ export function parseSourceMapResponse(
     try {
       const parsed = JSON.parse(jsonStr);
       console.log("[SourceMap] Direct parse succeeded");
-      return normalizeSourceMapOutput(parsed);
+      return normalizeSourceMapOutput(parsed, language);
     } catch (e) {
       console.log("[SourceMap] Direct parse failed, trying fixes...");
     }
@@ -229,7 +449,7 @@ export function parseSourceMapResponse(
 
       const parsed = JSON.parse(fixed);
       console.log("[SourceMap] Second attempt succeeded");
-      return normalizeSourceMapOutput(parsed);
+      return normalizeSourceMapOutput(parsed, language);
     } catch (e) {
       console.log(
         "[SourceMap] Second attempt failed, trying line-by-line fix...",
@@ -272,7 +492,7 @@ export function parseSourceMapResponse(
 
       const parsed = JSON.parse(result);
       console.log("[SourceMap] Line-by-line fix succeeded");
-      return normalizeSourceMapOutput(parsed);
+      return normalizeSourceMapOutput(parsed, language);
     } catch (e) {
       console.log("[SourceMap] Line-by-line fix failed, trying extraction...");
     }
@@ -321,16 +541,19 @@ export function parseSourceMapResponse(
           }
         }
 
-        return {
-          architectureType: architectureType[1] as any,
-          architectureSummary: architectureSummary?.[1] || "",
-          mermaidDiagram:
-            mermaidMatch?.[1]?.replace(/\\n/g, "\n").replace(/\\"/g, '"') || "",
-          coreModules: coreModules,
-          dependencies: [],
-          learningPath: [],
-          keyConcepts: [],
-        };
+        return normalizeSourceMapOutput(
+          {
+            architectureType: architectureType[1],
+            architectureSummary: architectureSummary?.[1] || "",
+            mermaidDiagram:
+              mermaidMatch?.[1]?.replace(/\\n/g, "\n").replace(/\\"/g, '"') || "",
+            coreModules,
+            dependencies: [],
+            learningPath: [],
+            keyConcepts: [],
+          },
+          language,
+        );
       }
     } catch (e) {
       console.error("[SourceMap] Regex extraction failed:", e);
@@ -353,54 +576,196 @@ export function parseSourceMapResponse(
 }
 
 // Normalize the parsed output to ensure all required fields
-function normalizeSourceMapOutput(parsed: any): SourceMapOutput | null {
+function normalizeSourceMapOutput(
+  parsed: any,
+  language: "zh" | "en",
+  source: SourceMapSource = "ai",
+): SourceMapOutput | null {
   if (!parsed || typeof parsed !== "object") {
     console.warn("[SourceMap] Parsed data is not an object");
     return null;
   }
 
-  // Validate required fields
-  if (!parsed.architectureType || !parsed.coreModules || !parsed.learningPath) {
-    console.warn("[SourceMap] Missing required fields:", {
-      hasArchitectureType: !!parsed.architectureType,
-      hasCoreModules: !!parsed.coreModules,
-      hasLearningPath: !!parsed.learningPath,
-    });
+  if (!parsed.architectureType) {
+    console.warn("[SourceMap] Missing architectureType");
     return null;
   }
 
-  // Clean mermaid diagram
-  let mermaidDiagram = parsed.mermaidDiagram || "";
+  const coreModules: SourceMapOutput["coreModules"] = Array.isArray(parsed.coreModules)
+    ? parsed.coreModules
+        .map((module: any, index: number) => {
+          const keyFiles = normalizePathList(module?.keyFiles, 6);
+          const modulePath =
+            normalizePath(module?.path) ||
+            (keyFiles[0]?.split("/").slice(0, -1).join("/") || "src");
+          if (!modulePath && !module?.name) return null;
+          return {
+            name:
+              sanitizeText(module?.name) ||
+              (language === "zh" ? `模块 ${index + 1}` : `Module ${index + 1}`),
+            path: modulePath,
+            responsibility:
+              sanitizeText(module?.responsibility || module?.description) ||
+              (language === "zh" ? "负责一个核心职责。" : "Owns a core responsibility."),
+            importance: normalizeImportance(module?.importance),
+            keyFiles,
+            description: sanitizeText(module?.description || ""),
+          };
+        })
+        .filter(Boolean) as SourceMapOutput["coreModules"]
+    : [];
 
-  // Handle escaped newlines
-  mermaidDiagram = mermaidDiagram
-    .replace(/\\n/g, "\n")
-    .replace(/\\t/g, "\t")
-    .trim();
+  const learningPath: SourceMapOutput["learningPath"] = Array.isArray(parsed.learningPath)
+    ? parsed.learningPath
+        .map((phase: any, index: number) => ({
+          phase: typeof phase?.phase === "number" ? phase.phase : index + 1,
+          title:
+            sanitizeText(phase?.title) ||
+            (language === "zh" ? `阶段 ${index + 1}` : `Phase ${index + 1}`),
+          goal:
+            sanitizeText(phase?.goal) ||
+            (language === "zh" ? "完成当前阶段关键文件阅读。" : "Complete reading key files for this phase."),
+          files: normalizePathList(phase?.files, 5),
+          estimatedMinutes:
+            typeof phase?.estimatedMinutes === "number"
+              ? Math.max(10, Math.min(90, phase.estimatedMinutes))
+              : 20,
+          prerequisites: Array.isArray(phase?.prerequisites)
+            ? phase.prerequisites.map((item: unknown) => sanitizeText(item)).filter(Boolean)
+            : [],
+        }))
+        .filter((phase: { files: string[]; goal: string }) => phase.files.length > 0 || phase.goal.length > 0)
+    : [];
 
-  // Basic validation of mermaid syntax
-  if (
-    mermaidDiagram &&
-    !mermaidDiagram.includes("flowchart") &&
-    !mermaidDiagram.includes("graph")
-  ) {
-    console.warn(
-      "[SourceMap] Mermaid diagram missing flowchart/graph declaration",
-    );
-    // Try to wrap it in flowchart
-    if (mermaidDiagram.includes("-->")) {
-      mermaidDiagram = `flowchart TB\n${mermaidDiagram}`;
-    }
-  }
+  const dependencies: SourceMapOutput["dependencies"] = Array.isArray(parsed.dependencies)
+    ? parsed.dependencies
+        .map((dep: any) => {
+          const from = sanitizeText(dep?.from);
+          const to = sanitizeText(dep?.to);
+          if (!from || !to) return null;
+          return {
+            from,
+            to,
+            type: ["imports", "uses", "extends", "implements", "calls"].includes(String(dep?.type))
+              ? dep.type
+              : "uses",
+            description: sanitizeText(dep?.description || ""),
+          };
+        })
+        .filter(Boolean) as SourceMapOutput["dependencies"]
+    : [];
+
+  const rawConcepts = Array.isArray(parsed.keyConcepts)
+    ? parsed.keyConcepts
+        .map((concept: any) => ({
+          term: sanitizeText(concept?.term),
+          definition: sanitizeText(concept?.definition),
+          relatedFiles: normalizePathList(concept?.relatedFiles, 5),
+          importance: normalizeConceptImportance(concept?.importance),
+          beginnerExplanation: sanitizeText(concept?.beginnerExplanation || ""),
+          whyItMatters: sanitizeText(concept?.whyItMatters || ""),
+          whereToFind: normalizePathList(concept?.whereToFind, 5),
+        }))
+        .filter((concept: { term: string; definition: string }) => concept.term && concept.definition)
+    : [];
+
+  const architectureSummary = sanitizeText(parsed.architectureSummary || "");
+  const map: SourceMapOutput = {
+    architectureType: normalizeArchitectureType(parsed.architectureType),
+    architectureSummary,
+    mermaidDiagram: normalizeMermaid(parsed.mermaidDiagram),
+    coreModules,
+    dependencies,
+    learningPath,
+    keyConcepts: ensureConceptCards(rawConcepts, coreModules, architectureSummary, language),
+  };
+
+  return withSourceMeta(map, source);
+}
+
+export function mergeSourceMapWithFallback(
+  aiMap: SourceMapOutput,
+  fallbackMap: SourceMapOutput,
+  language: "zh" | "en",
+): SourceMapMergeResult {
+  const mergedModules: SourceMapOutput["coreModules"] =
+    aiMap.coreModules.length >= 2
+      ? aiMap.coreModules
+      : Array.from(
+          new Map(
+            [...aiMap.coreModules, ...fallbackMap.coreModules].map((item) => [
+              `${item.path}-${item.name}`,
+              item,
+            ]),
+          ).values(),
+        ).slice(0, 8);
+
+  const defaultFiles = Array.from(
+    new Set(
+      mergedModules
+        .flatMap((module) => module.keyFiles || [])
+        .filter(Boolean),
+    ),
+  ).slice(0, 5);
+
+  const mergedLearningPath = Array.from(
+    new Map(
+      [...aiMap.learningPath, ...fallbackMap.learningPath].map((item) => [
+        String(item.phase),
+        item,
+      ]),
+    ).values(),
+  )
+    .slice(0, 6)
+    .map((phase, index) => {
+      const fallbackPhase = fallbackMap.learningPath.find((item) => item.phase === phase.phase)
+        || fallbackMap.learningPath[index]
+      const files = Array.from(
+        new Set([
+          ...(phase.files || []),
+          ...(fallbackPhase?.files || []),
+          ...defaultFiles,
+        ]),
+      )
+        .filter(Boolean)
+        .slice(0, 5)
+      return {
+        ...phase,
+        files,
+      }
+    })
+    .filter((phase) => phase.files.length > 0)
+
+  const mergedConcepts = ensureConceptCards(
+    [...aiMap.keyConcepts, ...fallbackMap.keyConcepts],
+    mergedModules,
+    aiMap.architectureSummary || fallbackMap.architectureSummary,
+    language,
+  );
+
+  const mergedMap: SourceMapOutput = withSourceMeta(
+    {
+      architectureType: aiMap.architectureType || fallbackMap.architectureType,
+      architectureSummary:
+        aiMap.architectureSummary.length >= 12
+          ? aiMap.architectureSummary
+          : fallbackMap.architectureSummary,
+      mermaidDiagram: aiMap.mermaidDiagram || fallbackMap.mermaidDiagram,
+      coreModules: mergedModules,
+      dependencies:
+        aiMap.dependencies.length > 0 ? aiMap.dependencies : fallbackMap.dependencies,
+      learningPath: mergedLearningPath.length > 0 ? mergedLearningPath : fallbackMap.learningPath,
+      keyConcepts: mergedConcepts,
+    },
+    aiMap.coreModules.length >= 2 && aiMap.learningPath.length >= 2 ? "ai" : "ai-merged",
+  );
 
   return {
-    architectureType: parsed.architectureType,
-    architectureSummary: parsed.architectureSummary || "",
-    mermaidDiagram,
-    coreModules: Array.isArray(parsed.coreModules) ? parsed.coreModules : [],
-    dependencies: Array.isArray(parsed.dependencies) ? parsed.dependencies : [],
-    learningPath: Array.isArray(parsed.learningPath) ? parsed.learningPath : [],
-    keyConcepts: Array.isArray(parsed.keyConcepts) ? parsed.keyConcepts : [],
+    map: mergedMap,
+    quality: mergedMap.quality || "partial",
+    completenessScore: mergedMap.completenessScore || 0,
+    shouldCacheLongTerm: mergedMap.quality === "complete",
+    usedFallbackMerge: mergedMap.source === "ai-merged",
   };
 }
 
@@ -413,64 +778,88 @@ export function createSourceMapFallback(
 
   // 基于项目类型生成通用架构图
   const mermaidDiagram = generateFallbackDiagram(context.projectType, isZh);
+  const coreModules = generateFallbackModules(context, isZh);
+  const moduleFiles = Array.from(
+    new Set(
+      coreModules
+        .flatMap((module) => module.keyFiles || [])
+        .map((file) => normalizePath(file))
+        .filter(Boolean),
+    ),
+  );
+  const entryPatterns = /(\/|^)(main|index|app|lib|mod)\.(ts|tsx|js|jsx|py|go|rs|java|kt|swift|rb|php|c|cpp)$/i;
+  const entryFiles = moduleFiles.filter((file) => entryPatterns.test(file)).slice(0, 3);
+  const phase2Files = (entryFiles.length > 0 ? entryFiles : moduleFiles).slice(0, 3);
+  const phase3Files = moduleFiles
+    .filter((file) => !phase2Files.includes(file))
+    .slice(0, 3);
+  const learningPath: SourceMapOutput["learningPath"] = [
+    {
+      phase: 1,
+      title: isZh ? "了解项目结构" : "Understand Project Structure",
+      goal: isZh
+        ? "熟悉项目的目录结构和主要文件"
+        : "Familiarize with directory structure and main files",
+      files: ["README.md", "package.json"],
+      estimatedMinutes: 15,
+      prerequisites: [],
+    },
+    {
+      phase: 2,
+      title: isZh ? "阅读入口文件" : "Read Entry Files",
+      goal: isZh
+        ? "理解项目的启动流程"
+        : "Understand the project startup flow",
+      files: phase2Files.length > 0 ? phase2Files : ["README.md"],
+      estimatedMinutes: 30,
+      prerequisites: [],
+    },
+    {
+      phase: 3,
+      title: isZh ? "深入核心逻辑" : "Dive into Core Logic",
+      goal: isZh
+        ? "理解核心业务逻辑和数据流"
+        : "Understand core business logic and data flow",
+      files: phase3Files.length > 0 ? phase3Files : (phase2Files.length > 0 ? phase2Files.slice(0, 2) : ["README.md"]),
+      estimatedMinutes: 60,
+      prerequisites: [],
+    },
+  ];
 
-  return {
+  const map: SourceMapOutput = {
     architectureType: detectArchitectureType(context.projectType),
     architectureSummary: isZh
       ? `${context.name} 项目采用 ${context.projectType} 架构`
       : `${context.name} project uses ${context.projectType} architecture`,
     mermaidDiagram,
-    coreModules: generateFallbackModules(context, isZh),
+    coreModules,
     dependencies: [],
-    learningPath: [
-      {
-        phase: 1,
-        title: isZh ? "了解项目结构" : "Understand Project Structure",
-        goal: isZh
-          ? "熟悉项目的目录结构和主要文件"
-          : "Familiarize with directory structure and main files",
-        files: ["README.md", "package.json"],
-        estimatedMinutes: 15,
-        prerequisites: [],
-      },
-      {
-        phase: 2,
-        title: isZh ? "阅读入口文件" : "Read Entry Files",
-        goal: isZh
-          ? "理解项目的启动流程"
-          : "Understand the project startup flow",
-        files: ["src/index.ts", "src/main.ts", "src/app.ts"]
-          .filter((f) =>
-            context.directoryTree.includes(f.split("/").pop() || ""),
-          )
-          .slice(0, 2),
-        estimatedMinutes: 30,
-        prerequisites: [],
-      },
-      {
-        phase: 3,
-        title: isZh ? "深入核心逻辑" : "Dive into Core Logic",
-        goal: isZh
-          ? "理解核心业务逻辑和数据流"
-          : "Understand core business logic and data flow",
-        files: ["src/core/", "src/services/", "src/lib/"].filter((f) =>
-          context.directoryTree.includes(f.replace("/", "")),
-        ),
-        estimatedMinutes: 60,
-        prerequisites: [],
-      },
-    ],
-    keyConcepts: [
-      {
-        term: isZh ? "入口点" : "Entry Point",
-        definition: isZh
-          ? "应用程序的启动文件"
-          : "The application startup file",
-        relatedFiles: ["src/index.ts"],
-        importance: "essential",
-      },
-    ],
+    learningPath,
+    keyConcepts: ensureConceptCards(
+      [
+        {
+          term: isZh ? "入口点" : "Entry Point",
+          definition: isZh ? "应用程序的启动文件" : "The application startup file",
+          relatedFiles: ["src/index.ts"],
+          importance: "essential",
+          beginnerExplanation: isZh
+            ? "先把入口点看明白，你就知道项目怎么启动。"
+            : "Understand the entry point first to know how the project starts.",
+          whyItMatters: isZh
+            ? "入口点串起了后续模块，能帮你建立全局视角。"
+            : "It connects later modules and gives you a global view.",
+          whereToFind: ["src/index.ts", "src/main.ts", "src/app.ts"],
+        },
+      ],
+      coreModules,
+      isZh
+        ? `${context.name} 项目采用 ${context.projectType} 架构`
+        : `${context.name} project uses ${context.projectType} architecture`,
+      language,
+    ),
   };
+
+  return withSourceMeta(map, "fallback");
 }
 
 function detectArchitectureType(

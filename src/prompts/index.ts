@@ -14,5 +14,7 @@ export {
 export { 
   createSourceMapPrompt, 
   parseSourceMapResponse, 
-  createSourceMapFallback 
+  createSourceMapFallback,
+  mergeSourceMapWithFallback,
+  SOURCE_MAP_SCHEMA_VERSION,
 } from './source-map'

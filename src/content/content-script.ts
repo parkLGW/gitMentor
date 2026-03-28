@@ -1,4 +1,10 @@
 // Content script for injecting GitMentor floating widget on GitHub pages
+import type { DeepFileAnalysisResult } from '@/types/learning'
+
+const STORAGE_KEYS = {
+  language: 'gitmentor_language',
+  legacyLanguage: 'language',
+} as const
 
 // Track current file path to detect changes
 let currentFilePath: string | null = null
@@ -8,8 +14,11 @@ let currentLanguage: 'zh' | 'en' = 'en'
 async function getLanguage(): Promise<'zh' | 'en'> {
   try {
     if (!isExtensionContextValid()) return 'en'
-    const result = await chrome.storage.local.get(['gitmentor_language'])
-    return result.gitmentor_language || 'en'
+    const result = await chrome.storage.local.get([
+      STORAGE_KEYS.language,
+      STORAGE_KEYS.legacyLanguage,
+    ])
+    return result[STORAGE_KEYS.language] || result[STORAGE_KEYS.legacyLanguage] || 'en'
   } catch (e) {
     console.warn('[GitMentor] Could not get language:', e)
     return 'en'
@@ -53,7 +62,7 @@ function detectAndSaveLanguage() {
   try {
     if (!isExtensionContextValid()) return
     const language = navigator.language?.startsWith('zh') ? 'zh' : 'en'
-    chrome.storage.local.set({ gitmentor_language: language })
+    chrome.storage.local.set({ [STORAGE_KEYS.language]: language })
     currentLanguage = language
   } catch (e) {
     console.warn('[GitMentor] Could not save language preference:', e)
@@ -269,6 +278,193 @@ async function injectFileSidebar() {
   })
 }
 
+function createSectionTitle(text: string): HTMLHeadingElement {
+  const title = document.createElement('h4')
+  title.style.cssText =
+    'font-size:13px;font-weight:600;margin:0 0 8px 0;color:#24292e;'
+  title.textContent = text
+  return title
+}
+
+function createText(text: string, style = ''): HTMLParagraphElement {
+  const p = document.createElement('p')
+  p.style.cssText = style
+  p.textContent = text
+  return p
+}
+
+function renderDeepAnalysis(
+  container: HTMLElement,
+  analysis: DeepFileAnalysisResult,
+  fileData: { fileName: string; fileContent: string },
+) {
+  container.replaceChildren()
+
+  const wrapper = document.createElement('div')
+  wrapper.style.cssText = 'display:flex;flex-direction:column;gap:12px;'
+
+  const summaryCard = document.createElement('div')
+  summaryCard.style.cssText =
+    'padding:12px;background:#f0f7ff;border-radius:6px;border-left:3px solid #0366d6;'
+  summaryCard.appendChild(createSectionTitle(currentLanguage === 'zh' ? 'AI 分析' : 'AI Analysis'))
+  summaryCard.appendChild(
+    createText(analysis.summary, 'font-size:12px;color:#444;line-height:1.5;margin:0;'),
+  )
+  if (analysis.confidence === 'low') {
+    summaryCard.appendChild(
+      createText(
+        currentLanguage === 'zh'
+          ? '提示：当前分析证据不足，请结合代码手动确认。'
+          : 'Note: Low confidence due to limited evidence. Please verify with source code.',
+        'font-size:11px;color:#b45309;margin-top:8px;',
+      ),
+    )
+  }
+  wrapper.appendChild(summaryCard)
+
+  if (analysis.components.length > 0) {
+    const section = document.createElement('div')
+    section.appendChild(createSectionTitle(currentLanguage === 'zh' ? '关键组件' : 'Key Components'))
+    analysis.components.slice(0, 8).forEach((component) => {
+      const row = document.createElement('div')
+      row.style.cssText = 'padding:8px;background:#f6f8fa;border-radius:4px;margin-bottom:6px;'
+      const heading = document.createElement('div')
+      heading.style.cssText = 'display:flex;align-items:center;gap:6px;'
+      const name = document.createElement('span')
+      name.style.cssText = 'font-family:monospace;font-size:12px;font-weight:500;color:#0366d6;'
+      name.textContent = component.name
+      const kind = document.createElement('span')
+      kind.style.cssText =
+        'font-size:10px;padding:1px 6px;background:#e1e4e8;border-radius:3px;color:#666;'
+      kind.textContent = component.type
+      heading.append(name, kind)
+      row.appendChild(heading)
+      row.appendChild(
+        createText(component.description, 'font-size:11px;color:#666;margin:4px 0 0 0;'),
+      )
+      section.appendChild(row)
+    })
+    wrapper.appendChild(section)
+  }
+
+  if (analysis.dependencies.length > 0) {
+    const section = document.createElement('div')
+    section.appendChild(createSectionTitle(currentLanguage === 'zh' ? '依赖' : 'Dependencies'))
+    const tags = document.createElement('div')
+    tags.style.cssText = 'display:flex;flex-wrap:wrap;gap:4px;'
+    analysis.dependencies.slice(0, 10).forEach((dep) => {
+      const tag = document.createElement('span')
+      tag.style.cssText =
+        'background:#e8f4fd;padding:2px 8px;border-radius:4px;font-size:11px;color:#0f172a;'
+      tag.textContent = dep
+      tags.appendChild(tag)
+    })
+    section.appendChild(tags)
+    wrapper.appendChild(section)
+  }
+
+  if (analysis.evidence.length > 0) {
+    const section = document.createElement('div')
+    section.appendChild(createSectionTitle(currentLanguage === 'zh' ? '证据' : 'Evidence'))
+    analysis.evidence.slice(0, 3).forEach((item) => {
+      const box = document.createElement('div')
+      box.style.cssText = 'padding:8px;background:#f6f8fa;border-radius:4px;margin-bottom:6px;'
+      const fileLine = `${item.filePath || fileData.fileName}${item.lineStart ? `:${item.lineStart}` : ''}`
+      box.appendChild(createText(fileLine, 'font-size:11px;color:#374151;font-family:monospace;margin:0 0 4px 0;'))
+      box.appendChild(createText(item.reason, 'font-size:11px;color:#4b5563;margin:0 0 4px 0;'))
+      const snippet = document.createElement('pre')
+      snippet.style.cssText =
+        'font-size:11px;color:#334155;background:#fff;padding:6px;border-radius:4px;white-space:pre-wrap;word-break:break-word;margin:0;'
+      snippet.textContent = item.snippet
+      box.appendChild(snippet)
+      section.appendChild(box)
+    })
+    wrapper.appendChild(section)
+  }
+
+  if (analysis.suggestions.length > 0) {
+    const section = document.createElement('div')
+    section.appendChild(createSectionTitle(currentLanguage === 'zh' ? '建议' : 'Suggestions'))
+    const list = document.createElement('ul')
+    list.style.cssText = 'margin:0;padding-left:16px;font-size:12px;color:#666;line-height:1.6;'
+    analysis.suggestions.slice(0, 5).forEach((suggestion) => {
+      const li = document.createElement('li')
+      li.textContent = suggestion
+      list.appendChild(li)
+    })
+    section.appendChild(list)
+    wrapper.appendChild(section)
+  }
+
+  const qaSection = document.createElement('div')
+  qaSection.style.cssText = 'margin-top:8px;padding-top:12px;border-top:1px solid #e1e4e8;'
+  qaSection.appendChild(createSectionTitle(currentLanguage === 'zh' ? '提问' : 'Ask a Question'))
+
+  const row = document.createElement('div')
+  row.style.cssText = 'display:flex;gap:8px;'
+  const input = document.createElement('input')
+  input.id = 'gitmentor-question-input'
+  input.placeholder = currentLanguage === 'zh' ? '关于此文件提问...' : 'Ask about this file...'
+  input.style.cssText =
+    'flex:1;padding:8px 12px;border:1px solid #e1e4e8;border-radius:6px;font-size:12px;outline:none;'
+  const askBtn = document.createElement('button')
+  askBtn.id = 'gitmentor-ask-btn'
+  askBtn.textContent = currentLanguage === 'zh' ? '提问' : 'Ask'
+  askBtn.style.cssText =
+    'padding:8px 16px;background:#24292e;color:white;border:none;border-radius:6px;font-size:12px;cursor:pointer;'
+  row.append(input, askBtn)
+  qaSection.appendChild(row)
+
+  const qaResponse = document.createElement('div')
+  qaResponse.id = 'gitmentor-qa-response'
+  qaResponse.style.cssText = 'margin-top:12px;'
+  qaSection.appendChild(qaResponse)
+  wrapper.appendChild(qaSection)
+
+  const handleAsk = () => {
+    const question = input.value.trim()
+    if (!question) return
+    qaResponse.replaceChildren(
+      createText(
+        getText('thinking'),
+        'padding:8px;background:#f0f2f5;border-radius:4px;font-size:12px;color:#666;margin:0;',
+      ),
+    )
+
+    chrome.runtime.sendMessage(
+      {
+        action: 'askQuestion',
+        fileName: fileData.fileName,
+        fileContent: fileData.fileContent,
+        question,
+      },
+      (qaResult: any) => {
+        const errorEl = document.createElement('div')
+        if (qaResult?.error) {
+          errorEl.style.cssText =
+            'color:#d73a49;padding:8px;background:#ffeef0;border-radius:4px;font-size:12px;'
+          errorEl.textContent = qaResult.error
+          qaResponse.replaceChildren(errorEl)
+          return
+        }
+
+        const answer = document.createElement('div')
+        answer.style.cssText =
+          'padding:12px;background:#f6f8fa;border-radius:6px;font-size:12px;line-height:1.6;color:#24292e;white-space:pre-wrap;word-break:break-word;'
+        answer.textContent = String(qaResult?.answer || '')
+        qaResponse.replaceChildren(answer)
+      },
+    )
+  }
+
+  askBtn.addEventListener('click', handleAsk)
+  input.addEventListener('keypress', (e) => {
+    if ((e as KeyboardEvent).key === 'Enter') handleAsk()
+  })
+
+  container.appendChild(wrapper)
+}
+
 async function performDeepAnalysis(contentDiv: HTMLElement, fileData: any) {
   console.log('[GitMentor] Requesting deep analysis...')
   
@@ -297,90 +493,10 @@ async function performDeepAnalysis(contentDiv: HTMLElement, fileData: any) {
     fileContent: fileData.fileContent,
     language: currentLanguage,
   }, (response: any) => {
-    if (response?.error && !response?.html) {
+    if (response?.error && !response?.data) {
       contentDiv.innerHTML = `<div style="color: #d73a49; padding: 12px; background: #ffeef0; border-radius: 4px; font-size: 12px;">${getText('deepAnalysisFailed')}: ${response.error}</div>`
-    } else if (response?.html) {
-      contentDiv.innerHTML = response.html
-      
-      // Attach Q&A event listeners
-      const questionInput = contentDiv.querySelector('#gitmentor-question-input') as HTMLInputElement
-      const askBtn = contentDiv.querySelector('#gitmentor-ask-btn')
-      const qaResponse = contentDiv.querySelector('#gitmentor-qa-response')
-      
-      if (questionInput && askBtn && qaResponse) {
-        const handleAsk = () => {
-          const question = questionInput.value.trim()
-          if (!question) return
-          
-          qaResponse.innerHTML = `<div style="padding: 8px; background: #f0f2f5; border-radius: 4px; font-size: 12px; color: #666;">${getText('thinking')}</div>`
-          
-          chrome.runtime.sendMessage({
-            action: 'askQuestion',
-            fileName: fileData.fileName,
-            fileContent: fileData.fileContent,
-            question,
-          }, (qaResult: any) => {
-            if (qaResult?.error) {
-              qaResponse.innerHTML = `<div style="color: #d73a49; padding: 8px; background: #ffeef0; border-radius: 4px; font-size: 12px;">${qaResult.error}</div>`
-            } else if (qaResult?.answer) {
-              qaResponse.innerHTML = `<div style="padding: 12px; background: #f6f8fa; border-radius: 6px; font-size: 12px; line-height: 1.6; color: #24292e;">${qaResult.answer.replace(/\n/g, '<br>')}</div>`
-            }
-          })
-        }
-        
-        askBtn.addEventListener('click', handleAsk)
-        questionInput.addEventListener('keypress', (e) => {
-          if ((e as KeyboardEvent).key === 'Enter') handleAsk()
-        })
-      }
-      
-      // Re-attach event listener for back to quick analysis button if it exists
-      const backBtn = contentDiv.querySelector('#gitmentor-back-to-quick-btn')
-      if (backBtn) {
-        backBtn.addEventListener('click', () => {
-          // 返回到开始分析界面
-          contentDiv.innerHTML = `
-            <div style="text-align: center; padding: 40px 20px;">
-              <div style="font-size: 48px; margin-bottom: 16px;">🔍</div>
-              <h3 style="font-size: 16px; font-weight: 600; margin: 0 0 8px 0; color: #24292e;">
-                ${getText('readyToAnalyze')}
-              </h3>
-              <p style="font-size: 13px; color: #666; margin: 0 0 20px 0; line-height: 1.5;">
-                ${getText('clickToAnalyze')}
-              </p>
-              <button id="gitmentor-start-analysis-btn" style="
-                width: 100%;
-                padding: 12px 20px;
-                background: #24292e;
-                color: white;
-                border: 1px solid rgba(27, 31, 35, 0.15);
-                border-radius: 6px;
-                font-size: 14px;
-                font-weight: 500;
-                cursor: pointer;
-                transition: background-color 0.2s;
-              ">
-                ${getText('startAnalysis')}
-              </button>
-              <p style="font-size: 11px; color: #999; margin-top: 12px;">
-                ${getText('requiresLLMConfig')}
-              </p>
-            </div>
-          `
-          const startBtn = contentDiv.querySelector('#gitmentor-start-analysis-btn')
-          startBtn?.addEventListener('click', () => {
-            fetchAndAnalyzeFile(
-              {
-                owner: '',
-                repo: '',
-                branch: '',
-                path: fileData.fileName,
-              },
-              contentDiv
-            )
-          })
-        })
-      }
+    } else if (response?.data) {
+      renderDeepAnalysis(contentDiv, response.data as DeepFileAnalysisResult, fileData)
     }
   })
 }
@@ -882,13 +998,23 @@ if (document.readyState === 'loading') {
   injectFileSidebar()
 }
 
+let injectTimer: ReturnType<typeof setTimeout> | null = null
+function scheduleInjection(delay = 120) {
+  if (injectTimer) {
+    clearTimeout(injectTimer)
+  }
+  injectTimer = setTimeout(() => {
+    injectTimer = null
+    if (!document.getElementById('gitmentor-widget')) {
+      injectWidget()
+    }
+    injectFileSidebar()
+  }, delay)
+}
+
 // Reinject if page changes (for SPAs)
 const observer = new MutationObserver(() => {
-  if (!document.getElementById('gitmentor-widget')) {
-    injectWidget()
-  }
-  // Always call injectFileSidebar to check if file changed
-  injectFileSidebar()
+  scheduleInjection(180)
 })
 
 observer.observe(document.body, {
@@ -899,7 +1025,7 @@ observer.observe(document.body, {
 // Also listen for URL changes via popstate (back/forward buttons)
 window.addEventListener('popstate', () => {
   console.log('[GitMentor] URL changed via popstate')
-  injectFileSidebar()
+  scheduleInjection(80)
 })
 
 // Listen for pushState/replaceState calls (GitHub navigation)
@@ -909,11 +1035,11 @@ const originalReplaceState = history.replaceState
 history.pushState = function(...args) {
   originalPushState.apply(this, args)
   console.log('[GitMentor] pushState detected')
-  setTimeout(injectFileSidebar, 100)
+  scheduleInjection(80)
 }
 
 history.replaceState = function(...args) {
   originalReplaceState.apply(this, args)
   console.log('[GitMentor] replaceState detected')
-  setTimeout(injectFileSidebar, 100)
+  scheduleInjection(80)
 }
