@@ -1,7 +1,19 @@
 interface TabNavProps {
-  activeTab: "overview" | "quickstart" | "sourcemap" | "security" | "settings";
+  activeTab:
+    | "overview"
+    | "quickstart"
+    | "sourcemap"
+    | "agent"
+    | "security"
+    | "settings";
   setActiveTab: (
-    tab: "overview" | "quickstart" | "sourcemap" | "security" | "settings",
+    tab:
+      | "overview"
+      | "quickstart"
+      | "sourcemap"
+      | "agent"
+      | "security"
+      | "settings",
   ) => void;
   language: "zh" | "en";
 }
@@ -11,6 +23,7 @@ function TabNav({ activeTab, setActiveTab, language }: TabNavProps) {
     { id: "overview", label: language === "zh" ? "概览" : "Overview" },
     { id: "quickstart", label: language === "zh" ? "快速上手" : "Quick Start" },
     { id: "sourcemap", label: language === "zh" ? "源码地图" : "Source Map" },
+    { id: "agent", label: language === "zh" ? "对话助手" : "Agent" },
     { id: "security", label: language === "zh" ? "安全审计" : "Security" },
     { id: "settings", label: language === "zh" ? "设置" : "Settings" },
   ];
@@ -26,6 +39,7 @@ function TabNav({ activeTab, setActiveTab, language }: TabNavProps) {
                 | "overview"
                 | "quickstart"
                 | "sourcemap"
+                | "agent"
                 | "security"
                 | "settings",
             )

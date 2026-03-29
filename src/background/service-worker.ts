@@ -3,6 +3,7 @@ declare const chrome: any
 import type { AnalysisEvidence, ConfidenceLevel, DeepFileAnalysisResult, LearningMission } from '@/types/learning'
 import type { SourceMapOutput } from '@/prompts/types'
 import { createLearningMission } from '@/services/learning-mission'
+import type { AgentMessage, AgentChatRequestPayload, AgentChatResponsePayload, SessionSummary } from '@/types/agent'
 
 const LLM_CONFIG_KEY = 'gitmentor_llm_config'
 
@@ -93,6 +94,8 @@ interface LLMConfig {
 
 const DEFAULT_LLM_TIMEOUT_MS = 30000
 const CONCEPT_LLM_TIMEOUT_MS = 55000
+const AGENT_LLM_TIMEOUT_MS = 60000
+const AGENT_SUMMARY_TIMEOUT_MS = 45000
 
 // Get LLM config from storage
 async function getLLMConfig(): Promise<LLMConfig | null> {
@@ -164,6 +167,190 @@ function normalizeEvidence(input: unknown): AnalysisEvidence[] {
     .filter(Boolean) as AnalysisEvidence[]
 }
 
+function normalizeStringList(input: unknown, limit: number): string[] {
+  if (!Array.isArray(input)) return []
+  const deduped = Array.from(
+    new Set(
+      input
+        .map((item) => String(item || '').trim())
+        .filter(Boolean),
+    ),
+  )
+  return deduped.slice(0, limit)
+}
+
+function buildHeuristicSummary(
+  messages: AgentMessage[],
+  previousSummary: SessionSummary | null,
+  lang: Language,
+): SessionSummary {
+  const userMessages = messages
+    .filter((item) => item.role === 'user')
+    .map((item) => item.content.trim())
+    .filter(Boolean)
+  const assistantMessages = messages
+    .filter((item) => item.role === 'assistant')
+    .map((item) => item.content.trim())
+    .filter(Boolean)
+  const evidenceFiles = normalizeStringList(
+    messages.flatMap((item) => (item.evidence || []).map((evidence) => evidence.filePath || '')),
+    8,
+  )
+  const unresolved = userMessages
+    .slice(-4)
+    .filter((question) => !assistantMessages.some((answer) => answer.includes(question.slice(0, 10))))
+    .slice(0, 6)
+
+  const brief = lang === 'zh'
+    ? `已讨论 ${userMessages.length} 个问题，最近关注：${userMessages.slice(-3).join('；') || '暂无'}。`
+    : `Discussed ${userMessages.length} questions. Recent focus: ${userMessages.slice(-3).join('; ') || 'N/A'}.`
+
+  return {
+    summary: `${previousSummary?.summary || ''}\n${brief}`.trim().slice(0, 1200),
+    keyConcepts: previousSummary?.keyConcepts?.slice(0, 8) || [],
+    unresolvedQuestions: unresolved,
+    evidenceFiles,
+    updatedAt: Date.now(),
+  }
+}
+
+function buildAgentChatPrompt(payload: AgentChatRequestPayload, lang: Language): string {
+  const historyText = payload.recentMessages
+    .slice(-6)
+    .map((message) => `${message.role.toUpperCase()}: ${String(message.content || '').slice(0, 240)}`)
+    .join('\n')
+
+  const summaryText = payload.sessionSummary
+    ? [
+      String(payload.sessionSummary.summary || '').slice(0, 500),
+      `Key concepts: ${(payload.sessionSummary.keyConcepts || []).slice(0, 6).join(', ')}`,
+      `Unresolved: ${(payload.sessionSummary.unresolvedQuestions || []).slice(0, 4).join(', ')}`,
+      `Evidence files: ${(payload.sessionSummary.evidenceFiles || []).slice(0, 6).join(', ')}`,
+    ].join('\n')
+    : 'None'
+
+  if (lang === 'zh') {
+    return `你是 GitHub 开源学习助手。面向初学者，用简洁中文回答。
+
+仓库：${payload.repo.owner}/${payload.repo.name}
+
+README 摘要：
+${String(payload.readmeSummary || '暂无').slice(0, 900)}
+
+源码地图摘要：
+${String(payload.sourceMapSummary || '暂无').slice(0, 900)}
+
+历史会话摘要：
+${summaryText}
+
+最近对话：
+${historyText || '暂无'}
+
+用户问题：
+${payload.question}
+
+请仅返回 JSON：
+{
+  "answer": "2-6 句可执行建议，不要固定以“先看”开头",
+  "confidence": "low|medium|high",
+  "evidence": [
+    {"filePath": "path/to/file", "lineStart": 1, "snippet": "短片段", "reason": "为什么相关"}
+  ],
+  "suggestedNextSteps": ["下一步 1", "下一步 2"]
+}
+
+规则：
+1) 不确定时明确说不确定，并给保守建议。
+2) 尽量给 evidence；没有证据时 confidence 至少降为 low。
+3) 不要输出 markdown 代码块。`
+  }
+
+  return `You are a beginner-friendly GitHub learning assistant. Answer concisely.
+
+Repository: ${payload.repo.owner}/${payload.repo.name}
+
+README summary:
+${String(payload.readmeSummary || 'N/A').slice(0, 900)}
+
+Source map summary:
+${String(payload.sourceMapSummary || 'N/A').slice(0, 900)}
+
+Session summary:
+${summaryText}
+
+Recent turns:
+${historyText || 'N/A'}
+
+User question:
+${payload.question}
+
+Return JSON only:
+{
+  "answer": "2-6 actionable sentences, avoid starting with \"read first\"",
+  "confidence": "low|medium|high",
+  "evidence": [
+    {"filePath": "path/to/file", "lineStart": 1, "snippet": "short snippet", "reason": "why relevant"}
+  ],
+  "suggestedNextSteps": ["next step 1", "next step 2"]
+}
+
+Rules:
+1) If uncertain, say so and give a conservative suggestion.
+2) Prefer evidence; if no evidence, confidence should be low.
+3) Do not output markdown code fences.`
+}
+
+function buildAgentChatPromptLite(payload: AgentChatRequestPayload, lang: Language): string {
+  if (lang === 'zh') {
+    return `你是 GitHub 学习助手。请用中文简洁回答。
+
+仓库：${payload.repo.owner}/${payload.repo.name}
+问题：${String(payload.question || '').slice(0, 280)}
+
+仅返回 JSON：
+{
+  "answer": "2-4 句直接回答",
+  "confidence": "low|medium|high",
+  "evidence": [],
+  "suggestedNextSteps": ["下一步 1"]
+}`
+  }
+  return `You are a GitHub learning assistant. Answer briefly.
+
+Repository: ${payload.repo.owner}/${payload.repo.name}
+Question: ${String(payload.question || '').slice(0, 280)}
+
+Return JSON only:
+{
+  "answer": "2-4 direct sentences",
+  "confidence": "low|medium|high",
+  "evidence": [],
+  "suggestedNextSteps": ["next step 1"]
+}`
+}
+
+function normalizeAgentResponse(
+  raw: unknown,
+  lang: Language,
+): AgentChatResponsePayload {
+  const value = (raw || {}) as Record<string, unknown>
+  const fallbackAnswer = lang === 'zh'
+    ? '我暂时无法给出完整答案。建议先从 README 与源码地图中的核心模块开始。'
+    : 'I cannot provide a complete answer right now. Start from README and the core modules in the source map.'
+  const answer = String(value.answer || '').trim().slice(0, 1800) || fallbackAnswer
+  const evidence = normalizeEvidence(value.evidence)
+  let confidence = normalizeConfidence(value.confidence)
+  if (evidence.length === 0) confidence = 'low'
+  const suggestedNextSteps = normalizeStringList(value.suggestedNextSteps, 4)
+  return {
+    answer,
+    confidence,
+    evidence,
+    suggestedNextSteps,
+    source: 'ai',
+  }
+}
+
 function isAbortError(error: unknown): boolean {
   if (!(error instanceof Error)) return false
   return error.name === 'AbortError' || error.message.includes('aborted')
@@ -173,11 +360,15 @@ function isAbortError(error: unknown): boolean {
 async function callLLM(
   config: LLMConfig,
   prompt: string,
-  options?: { timeoutMs?: number },
+  options?: { timeoutMs?: number; maxTokens?: number },
 ): Promise<string> {
   let apiUrl: string
   let headers: Record<string, string>
   let body: any
+  const requestedMaxTokens =
+    typeof options?.maxTokens === 'number' && options.maxTokens > 0
+      ? Math.floor(options.maxTokens)
+      : undefined
 
   switch (config.provider) {
     case 'openai':
@@ -190,6 +381,7 @@ async function callLLM(
         model: config.model || 'gpt-4o-mini',
         messages: [{ role: 'user', content: prompt }],
         temperature: 0.3,
+        max_tokens: requestedMaxTokens ?? config.maxTokens ?? 420,
       }
       break
 
@@ -202,7 +394,7 @@ async function callLLM(
       }
       body = {
         model: config.model || 'claude-3-haiku-20240307',
-        max_tokens: 4096,
+        max_tokens: requestedMaxTokens ?? config.maxTokens ?? 700,
         messages: [{ role: 'user', content: prompt }],
       }
       break
@@ -217,7 +409,7 @@ async function callLLM(
         model: config.model || 'deepseek-chat',
         messages: [{ role: 'user', content: prompt }],
         temperature: 0.3,
-        max_tokens: 600,
+        max_tokens: requestedMaxTokens ?? config.maxTokens ?? 420,
       }
       break
 
@@ -231,7 +423,7 @@ async function callLLM(
         model: config.model || 'Qwen/Qwen2.5-72B-Instruct',
         messages: [{ role: 'user', content: prompt }],
         temperature: 0.3,
-        max_tokens: 600,
+        max_tokens: requestedMaxTokens ?? config.maxTokens ?? 420,
       }
       break
 
@@ -245,7 +437,7 @@ async function callLLM(
         model: config.model || 'glm-4',
         messages: [{ role: 'user', content: prompt }],
         temperature: 0.3,
-        max_tokens: 600,
+        max_tokens: requestedMaxTokens ?? config.maxTokens ?? 420,
       }
       break
 
@@ -271,6 +463,7 @@ async function callLLM(
         model: config.model || 'local-model',
         messages: [{ role: 'user', content: prompt }],
         temperature: 0.3,
+        max_tokens: requestedMaxTokens ?? config.maxTokens ?? 420,
       }
       break
 
@@ -495,7 +688,7 @@ Important: Return ONLY the JSON object, no markdown code blocks or extra text.`
 chrome.runtime.onMessage.addListener((message: any, _sender: any, sendResponse: (response: any) => void) => {
   console.log('[GitMentor SW] Received message:', message.action)
   
-  const lang: Language = message.language === 'zh' ? 'zh' : 'en'
+  const lang: Language = message.language === 'zh' || message?.payload?.language === 'zh' ? 'zh' : 'en'
   
   if (message.action === 'analyzeFile') {
     // Quick analysis (no LLM)
@@ -639,6 +832,155 @@ Return only JSON:
         sendResponse({
           error: messageText === 'REQUEST_TIMEOUT' ? 'REQUEST_TIMEOUT' : messageText,
         })
+      }
+    })()
+    return true
+  }
+
+  if (message.action === 'chatWithAgent') {
+    ;(async () => {
+      try {
+        const rawPayload = (message.payload || {}) as Partial<AgentChatRequestPayload>
+        const payload: AgentChatRequestPayload = {
+          repo: {
+            owner: String(rawPayload.repo?.owner || ''),
+            name: String(rawPayload.repo?.name || ''),
+          },
+          language: rawPayload.language === 'zh' ? 'zh' : 'en',
+          question: String(rawPayload.question || ''),
+          sourceMapSummary: String(rawPayload.sourceMapSummary || ''),
+          readmeSummary: String(rawPayload.readmeSummary || ''),
+          sessionSummary: (rawPayload.sessionSummary || null) as SessionSummary | null,
+          recentMessages: Array.isArray(rawPayload.recentMessages)
+            ? rawPayload.recentMessages as AgentMessage[]
+            : [],
+        }
+        const config = await getLLMConfig()
+        if (!config) {
+          sendResponse({ error: 'LLM not configured' })
+          return
+        }
+
+        const prompt = buildAgentChatPrompt(payload, lang)
+        try {
+          const response = await callLLM(config, prompt, {
+            timeoutMs: AGENT_LLM_TIMEOUT_MS,
+            maxTokens: 360,
+          })
+          const parsed = safeParseJSON(response)
+          const normalized = normalizeAgentResponse(parsed || { answer: response }, lang)
+          sendResponse({ data: normalized })
+          return
+        } catch (firstError) {
+          const firstMessage = firstError instanceof Error ? firstError.message : 'Agent chat failed'
+          if (firstMessage !== 'REQUEST_TIMEOUT') {
+            throw firstError
+          }
+        }
+
+        // Timeout fallback: retry once with compact context and smaller token budget.
+        try {
+          const litePrompt = buildAgentChatPromptLite(payload, lang)
+          const retryResponse = await callLLM(config, litePrompt, {
+            timeoutMs: 28000,
+            maxTokens: 220,
+          })
+          const retryParsed = safeParseJSON(retryResponse)
+          const retryData = normalizeAgentResponse(retryParsed || { answer: retryResponse }, lang)
+          sendResponse({
+            data: {
+              ...retryData,
+              downgraded: true,
+              reason: 'timeout_retried_with_compact_prompt',
+            },
+          })
+          return
+        } catch (retryError) {
+          const retryMessage = retryError instanceof Error ? retryError.message : 'Agent chat retry failed'
+          sendResponse({
+            error: retryMessage === 'REQUEST_TIMEOUT' ? 'REQUEST_TIMEOUT' : retryMessage,
+          })
+          return
+        }
+      } catch (error) {
+        const messageText = error instanceof Error ? error.message : 'Agent chat failed'
+        sendResponse({
+          error: messageText === 'REQUEST_TIMEOUT' ? 'REQUEST_TIMEOUT' : messageText,
+        })
+      }
+    })()
+    return true
+  }
+
+  if (message.action === 'summarizeAgentSession') {
+    ;(async () => {
+      const messages = Array.isArray(message.messages) ? message.messages as AgentMessage[] : []
+      const previousSummary = (message.previousSummary || null) as SessionSummary | null
+
+      try {
+        const config = await getLLMConfig()
+        if (!config) {
+          sendResponse({ summary: buildHeuristicSummary(messages, previousSummary, lang) })
+          return
+        }
+
+        const history = messages
+          .slice(-16)
+          .map((item) => `${item.role}: ${item.content}`)
+          .join('\n')
+        const summaryPrompt = lang === 'zh'
+          ? `请把下面会话压缩为 JSON 摘要，便于后续追问。
+
+历史摘要：
+${previousSummary?.summary || '暂无'}
+
+对话：
+${history || '暂无'}
+
+仅输出 JSON：
+{
+  "summary": "120字以内摘要",
+  "keyConcepts": ["概念1", "概念2"],
+  "unresolvedQuestions": ["未解决问题1"],
+  "evidenceFiles": ["path/to/file.ts"]
+}`
+          : `Compress the conversation into a JSON summary for future follow-up.
+
+Previous summary:
+${previousSummary?.summary || 'N/A'}
+
+Conversation:
+${history || 'N/A'}
+
+Return JSON only:
+{
+  "summary": "summary within 80 words",
+  "keyConcepts": ["concept1", "concept2"],
+  "unresolvedQuestions": ["open question 1"],
+  "evidenceFiles": ["path/to/file.ts"]
+}`
+
+        const response = await callLLM(config, summaryPrompt, { timeoutMs: AGENT_SUMMARY_TIMEOUT_MS })
+        const parsed = safeParseJSON(response)
+        if (!parsed) {
+          sendResponse({ summary: buildHeuristicSummary(messages, previousSummary, lang) })
+          return
+        }
+
+        const summary: SessionSummary = {
+          summary: String(parsed.summary || previousSummary?.summary || '').trim().slice(0, 1200),
+          keyConcepts: normalizeStringList(parsed.keyConcepts, 8),
+          unresolvedQuestions: normalizeStringList(parsed.unresolvedQuestions, 6),
+          evidenceFiles: normalizeStringList(parsed.evidenceFiles, 8),
+          updatedAt: Date.now(),
+        }
+        if (!summary.summary) {
+          sendResponse({ summary: buildHeuristicSummary(messages, previousSummary, lang) })
+          return
+        }
+        sendResponse({ summary })
+      } catch {
+        sendResponse({ summary: buildHeuristicSummary(messages, previousSummary, lang) })
       }
     })()
     return true

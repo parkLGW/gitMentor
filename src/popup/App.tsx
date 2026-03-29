@@ -3,6 +3,7 @@ import TabNav from "@/components/TabNav";
 import OverviewTab from "@/components/OverviewTab";
 import QuickStartTab from "@/components/QuickStartTab";
 import SourceMapTab from "@/components/SourceMapTab";
+import AgentTab from "@/components/AgentTab";
 import SettingsTab from "@/components/SettingsTab";
 import SecurityAuditTab from "@/components/SecurityAuditTab";
 import { useRepo } from "@/hooks/useRepo";
@@ -12,6 +13,7 @@ type TabType =
   | "overview"
   | "quickstart"
   | "sourcemap"
+  | "agent"
   | "security"
   | "settings";
 
@@ -95,6 +97,9 @@ function App() {
             )}
             {activeTab === "sourcemap" && (
               <SourceMapTab repo={repo} language={language} />
+            )}
+            {activeTab === "agent" && (
+              <AgentTab repo={repo} language={language} />
             )}
           </div>
         )}

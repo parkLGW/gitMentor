@@ -6,6 +6,8 @@ const EVICTABLE_PREFIXES = [
   STORAGE_PREFIXES.quickStart,
   STORAGE_PREFIXES.sourceMap,
   STORAGE_PREFIXES.securityAudit,
+  STORAGE_PREFIXES.agentSession,
+  STORAGE_PREFIXES.agentSummary,
 ];
 
 function isQuotaExceeded(error: unknown): boolean {

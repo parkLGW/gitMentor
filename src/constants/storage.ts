@@ -20,6 +20,8 @@ export const STORAGE_PREFIXES = {
   learningPath: "gitmentor_learning_progress_",
   learningMission: "gitmentor_learning_mission_",
   securityAudit: "gitmentor_security_audit_",
+  agentSession: "gitmentor_agent_session_v1_",
+  agentSummary: "gitmentor_agent_summary_v1_",
 } as const;
 
 export const StorageKeys = {
@@ -43,5 +45,11 @@ export const StorageKeys = {
   },
   securityAudit(repo: RepoRef, language: "zh" | "en"): string {
     return `${STORAGE_PREFIXES.securityAudit}${repo.owner}/${repo.name}_${language}`;
+  },
+  agentSession(repoKey: string): string {
+    return `${STORAGE_PREFIXES.agentSession}${repoKey}`;
+  },
+  agentSummary(repoKey: string): string {
+    return `${STORAGE_PREFIXES.agentSummary}${repoKey}`;
   },
 } as const;
