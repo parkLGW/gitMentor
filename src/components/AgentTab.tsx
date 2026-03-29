@@ -152,29 +152,20 @@ function stripRelatedFilesLine(text: string): string {
     .trim();
 }
 
-function stripLeadingReadingHint(
-  text: string,
-  language: "zh" | "en",
-  relatedFiles: string[],
-): string {
-  let value = String(text || "").trim();
-  if (!value) return value;
+function hasVisibleContent(text: string): boolean {
+  return /[A-Za-z0-9\u4e00-\u9fff]/.test(String(text || ""));
+}
 
-  const lines = value.split(/\r?\n/);
-  const firstLine = (lines[0] || "").trim();
-  const mentionsKnownFile = relatedFiles.some((path) => firstLine.includes(path));
-  const startsWithReadHint = language === "zh"
-    ? /^(先看|建议先看|先读|先阅读|可以先看|先从)/.test(firstLine)
-    : /^(read first|start with|you can start with|first, read)/i.test(firstLine);
-  if (startsWithReadHint || mentionsKnownFile) {
-    lines.shift();
-    value = lines.join("\n").trim();
-  }
+function sanitizeAssistantBody(text: string, language: "zh" | "en"): string {
+  let value = stripRelatedFilesLine(text)
+    .replace(/[\u200B-\u200D\uFEFF]/g, "")
+    .trim();
+  if (!value) return "";
 
   if (language === "zh") {
-    value = value.replace(/^(先看|建议先看|先读|先阅读|可以先看|先从)[^。！？!\n]{0,120}[。！？!]\s*/u, "").trim();
+    value = value.replace(/^(先看|建议先看|先读|先阅读|可以先看|先从|先看一下)\s*/u, "").trim();
   } else {
-    value = value.replace(/^(read first|start with|you can start with|first, read)[^.?!\n]{0,160}[.?!]\s*/i, "").trim();
+    value = value.replace(/^(read first|start with|you can start with|first, read)\s*/i, "").trim();
   }
 
   return value;
@@ -483,11 +474,13 @@ function AgentTab({ repo, language }: AgentTabProps) {
           language,
         );
         const relatedFiles = extractRelatedFiles(finalAnswer);
-        const sanitizedAnswer = stripLeadingReadingHint(
-          stripRelatedFilesLine(finalAnswer),
-          language,
-          relatedFiles,
-        );
+        const sanitizedAnswer = sanitizeAssistantBody(finalAnswer, language);
+        const fallbackFromAccumulated = sanitizeAssistantBody(accumulated, language);
+        const finalContent = hasVisibleContent(sanitizedAnswer)
+          ? sanitizedAnswer
+          : hasVisibleContent(fallbackFromAccumulated)
+            ? fallbackFromAccumulated
+            : (isZh ? "见相关文件。" : "See related files.");
         const relatedEvidence = relatedFiles.map((filePath) => ({
           filePath,
           snippet: "",
@@ -496,7 +489,7 @@ function AgentTab({ repo, language }: AgentTabProps) {
         let nextSession = upsertAssistantMessage(
           sessionWithUser,
           assistantId,
-          sanitizedAnswer,
+          finalContent,
           accumulated.length > 100 ? "medium" : "low",
           relatedEvidence,
         );
