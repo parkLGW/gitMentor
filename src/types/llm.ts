@@ -1,23 +1,53 @@
-// LLM Provider types and interfaces
+// LLM Provider and protocol types and interfaces
 
-export type LLMProviderType =
-  | 'claude'
-  | 'openai'
-  | 'custom'
-  | 'ollama'
+export type LLMProtocolType = 'openai' | 'claude' | 'local'
+
+export type LLMPresetType =
+  | 'openai-official'
   | 'deepseek'
-  | 'lmstudio'
-  | 'zhipu'
   | 'siliconflow'
+  | 'zhipu'
+  | 'custom-openai'
+  | 'anthropic-official'
+  | 'custom-claude'
+  | 'ollama'
+  | 'lmstudio'
+  | 'custom-local'
 
-export interface LLMConfig {
-  provider: LLMProviderType
+interface LLMConfigSharedFields {
   apiKey: string
   model?: string
   baseUrl?: string
   temperature?: number
   maxTokens?: number
 }
+
+export interface NormalizedLLMConfig extends LLMConfigSharedFields {
+  protocol: LLMProtocolType
+  preset: LLMPresetType
+  localMode?: 'ollama' | 'openai-compatible'
+}
+
+export interface LegacyLLMConfig extends LLMConfigSharedFields {
+  provider:
+    | 'claude'
+    | 'openai'
+    | 'custom'
+    | 'ollama'
+    | 'deepseek'
+    | 'lmstudio'
+    | 'zhipu'
+    | 'siliconflow'
+}
+
+export type LLMProviderType = LegacyLLMConfig['provider']
+
+export type LLMConfig =
+  | LegacyLLMConfig
+  | (NormalizedLLMConfig & {
+      // Transitional compatibility during provider->protocol migration.
+      provider: LLMProviderType
+    })
 
 export interface LLMMessage {
   role: 'user' | 'assistant' | 'system'
