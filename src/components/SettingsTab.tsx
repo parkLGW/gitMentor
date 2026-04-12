@@ -1,15 +1,23 @@
-import { useState, useEffect } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { llmManager } from '@/services/llm'
 import { LLMProviderType, LLMConfig } from '@/types/llm'
 import { STORAGE_KEYS } from '@/constants/storage'
 import { usageTracker, UsageStats } from '@/services/usage-tracker'
+import {
+  getProviderSettings,
+  getVisibleProviderSettings,
+  resolveProviderBaseUrl,
+  shouldRequireApiKey,
+  shouldShowApiKeyInput,
+} from '@/services/llm-provider-config'
 
 interface SettingsTabProps {
   language: 'zh' | 'en'
 }
 
 function SettingsTab({ language }: SettingsTabProps) {
-  const [selectedProvider, setSelectedProvider] = useState<LLMProviderType>('claude')
+  const providerOptions = useMemo(() => getVisibleProviderSettings(), [])
+  const [selectedProvider, setSelectedProvider] = useState<LLMProviderType>('openai')
   const [apiKey, setApiKey] = useState('')
   const [model, setModel] = useState('')
   const [baseUrl, setBaseUrl] = useState('')
@@ -17,121 +25,131 @@ function SettingsTab({ language }: SettingsTabProps) {
   const [testResult, setTestResult] = useState<boolean | null>(null)
   const [saved, setSaved] = useState(false)
   const [usageStats, setUsageStats] = useState<UsageStats | null>(null)
-  const [savedConfig, setSavedConfig] = useState<any>(null)
+  const [savedConfig, setSavedConfig] = useState<LLMConfig | null>(null)
 
   const labels = {
     zh: {
-      settings: '设置',
-      provider: 'AI模型提供商',
-      apiKey: 'API密钥',
+      provider: 'AI 模型提供商',
+      apiKey: 'API 密钥',
+      apiKeyOptional: 'API 密钥（可选）',
       model: '模型',
-      baseUrl: '基础URL',
+      baseUrl: '基础 URL',
       testConnection: '测试连接',
       save: '保存配置',
-      clear: '清空配置',
+      clear: '清空当前提供商配置',
       testing: '测试中...',
       connected: '✓ 连接成功',
       failed: '✗ 连接失败',
       saved: '✓ 已保存',
-      info: '请输入你的API密钥。密钥仅保存在浏览器本地。',
-      claude: 'Claude 3 (Anthropic)',
-      openai: 'GPT-4 (OpenAI)',
-      ollama: 'Ollama (本地)',
-      zhipu: '智谱 AI (Zhipu)',
-      siliconflow: '硅基流动 (Silicon Flow)',
+      info: '支持官方模型、本地模型，以及任意 OpenAI 兼容接口。配置只保存在浏览器本地。',
+      providerDetails: '当前提供商',
+      customHelp: '自定义接口适用于自建网关、反向代理和聚合服务，只要兼容 OpenAI /v1/chat/completions 即可。',
+      enterApiKey: '请输入 API 密钥',
+      enterBaseUrl: '请输入基础 URL',
+      clearConfirm: '确定要清空当前提供商配置吗？',
+      clearSuccess: '当前提供商配置已清空',
+      clearFailed: '清空失败',
+      saveFailed: '保存失败',
+      saveVerifyFailed: '配置保存验证失败，请重试',
+      getApiKeys: '官方入口',
+      noApiKeyNeeded: '当前提供商不需要 API 密钥。',
+      optionalApiKeyHint: '可留空，适用于不要求鉴权的自建接口。',
+      localStorageHint: '配置会保存到浏览器本地存储。',
+      cacheHint: '提示: 缓存已开启，同一项目 7 天内不会重复调用 API',
+      usageTitle: 'API 用量统计（近 7 天）',
+      apiCalls: '调用次数',
+      totalTokens: '总 Token 数',
+      estimatedCost: '预估费用',
+      baseUrlAutoHint: '基础 URL 会按当前提供商自动补齐路径格式。',
     },
     en: {
-      settings: 'Settings',
       provider: 'AI Model Provider',
       apiKey: 'API Key',
+      apiKeyOptional: 'API Key (Optional)',
       model: 'Model',
       baseUrl: 'Base URL',
       testConnection: 'Test Connection',
       save: 'Save Configuration',
-      clear: 'Clear Configuration',
+      clear: 'Clear Current Provider',
       testing: 'Testing...',
       connected: '✓ Connected',
       failed: '✗ Failed',
       saved: '✓ Saved',
-      info: 'Enter your API key. Keys are stored locally in your browser only.',
-      claude: 'Claude 3 (Anthropic)',
-      openai: 'GPT-4 (OpenAI)',
-      ollama: 'Ollama (Local)',
-      zhipu: 'Zhipu AI (ChatGLM)',
-      siliconflow: 'Silicon Flow',
+      info: 'Supports official APIs, local models, and any OpenAI-compatible endpoint. Configuration stays in browser local storage only.',
+      providerDetails: 'Current Provider',
+      customHelp: 'Use this for self-hosted gateways, reverse proxies, and aggregator APIs as long as they expose OpenAI-compatible /v1/chat/completions endpoints.',
+      enterApiKey: 'Please enter an API key',
+      enterBaseUrl: 'Please enter a base URL',
+      clearConfirm: 'Clear configuration for the current provider?',
+      clearSuccess: 'Current provider configuration cleared',
+      clearFailed: 'Clear failed',
+      saveFailed: 'Save failed',
+      saveVerifyFailed: 'Config save verification failed, please try again',
+      getApiKeys: 'Official Links',
+      noApiKeyNeeded: 'This provider does not require an API key.',
+      optionalApiKeyHint: 'You can leave this blank for self-hosted endpoints without auth.',
+      localStorageHint: 'Configuration is stored in browser local storage.',
+      cacheHint: 'Tip: Cache enabled, same project will not call the API again within 7 days',
+      usageTitle: 'API Usage Stats (Last 7 Days)',
+      apiCalls: 'API Calls',
+      totalTokens: 'Total Tokens',
+      estimatedCost: 'Est. Cost',
+      baseUrlAutoHint: 'The base URL is normalized automatically for the selected provider.',
     },
   }
 
   const t = labels[language]
+  const selectedProviderSettings = getProviderSettings(selectedProvider)
 
-  const providerOptions: { value: LLMProviderType; label: string; defaultModel: string; cost?: string }[] = [
-    { value: 'claude', label: t.claude, defaultModel: 'claude-3-sonnet-20240229', cost: '¥' },
-    { value: 'openai', label: t.openai, defaultModel: 'gpt-4', cost: '¥¥' },
-    { value: 'deepseek', label: 'DeepSeek', defaultModel: 'deepseek-chat', cost: '¥ (便宜!)' },
-    { value: 'siliconflow', label: t.siliconflow, defaultModel: 'Qwen/Qwen2.5-72B-Instruct', cost: '$ (便宜)' },
-    { value: 'zhipu', label: t.zhipu, defaultModel: 'glm-4', cost: '¥ (便宜)' },
-  ]
+  const applyConfigToForm = (provider: LLMProviderType, config?: Partial<LLMConfig> | null) => {
+    const settings = getProviderSettings(provider)
+    setModel(config?.model || settings.defaultModel)
+    setBaseUrl(config?.baseUrl || settings.defaultBaseUrl)
+    setApiKey(config?.apiKey || '')
+  }
 
-  // Load saved configuration on component mount
   useEffect(() => {
     const loadConfig = async () => {
       try {
-        // Use chrome.storage.local for persistence across reloads
-        const result = await new Promise<Record<string, any>>((resolve) => {
-          chrome.storage.local.get(STORAGE_KEYS.llmConfig, (data: Record<string, any>) => {
+        const result = await new Promise<Record<string, LLMConfig>>((resolve) => {
+          chrome.storage.local.get(STORAGE_KEYS.llmConfig, (data: Record<string, LLMConfig>) => {
             resolve(data)
           })
         })
 
-        if (result[STORAGE_KEYS.llmConfig]) {
-          const config = result[STORAGE_KEYS.llmConfig]
+        const config = result[STORAGE_KEYS.llmConfig]
+        if (config) {
           console.log('[GitMentor] Loaded saved LLM config:', config.provider)
           setSavedConfig(config)
-          setSelectedProvider(config.provider || 'claude')
-          setModel(config.model || '')
-          setBaseUrl(config.baseUrl || '')
-          // Also populate API key if it was saved
-          if (config.apiKey) {
-            setApiKey(config.apiKey)
-          }
+          setSelectedProvider(config.provider || 'openai')
+          applyConfigToForm(config.provider, config)
+          return
         }
+
+        applyConfigToForm('openai')
       } catch (error) {
         console.warn('Failed to load saved LLM config:', error)
       }
     }
+
     loadConfig()
   }, [])
 
-  // Load usage stats
   useEffect(() => {
     usageTracker.getStats(7).then(setUsageStats)
   }, [])
 
   useEffect(() => {
-    // Reset form when provider changes
-    const option = providerOptions.find(o => o.value === selectedProvider)
-    
     const loadProviderConfig = async () => {
-      // Try to load saved config for this specific provider from the map
-      const savedProviderConfig = await llmManager.getSavedConfig(selectedProvider)
-      
-      if (savedProviderConfig) {
+      const providerConfig = await llmManager.getSavedConfig(selectedProvider)
+
+      if (providerConfig) {
         console.log('[SettingsTab] Found saved config for:', selectedProvider)
-        setModel(savedProviderConfig.model || option?.defaultModel || '')
-        setBaseUrl(savedProviderConfig.baseUrl || '')
-        setApiKey(savedProviderConfig.apiKey || '')
+        applyConfigToForm(selectedProvider, providerConfig)
+      } else if (savedConfig?.provider === selectedProvider) {
+        applyConfigToForm(selectedProvider, savedConfig)
       } else {
-        // Fallback: If this is the currently active provider in legacy storage
-        if (savedConfig && savedConfig.provider === selectedProvider) {
-           setModel(savedConfig.model || option?.defaultModel || '')
-           setBaseUrl(savedConfig.baseUrl || '')
-           setApiKey(savedConfig.apiKey || '')
-        } else {
-          // Use defaults
-          setModel(option?.defaultModel || '')
-          setBaseUrl(selectedProvider === 'ollama' ? 'http://localhost:11434' : selectedProvider === 'lmstudio' ? 'http://localhost:1234' : '')
-          setApiKey('')
-        }
+        applyConfigToForm(selectedProvider)
       }
     }
 
@@ -140,76 +158,86 @@ function SettingsTab({ language }: SettingsTabProps) {
     setTestResult(null)
   }, [selectedProvider, savedConfig])
 
-  const handleTest = async () => {
-    if (!apiKey && !['ollama', 'lmstudio'].includes(selectedProvider)) {
-      alert(language === 'zh' ? '请输入API密钥' : 'Please enter API key')
-      return
+  const buildConfig = (): LLMConfig => {
+    const trimmedApiKey = apiKey.trim()
+    const trimmedModel = model.trim()
+    const trimmedBaseUrl = baseUrl.trim()
+
+    if (shouldRequireApiKey(selectedProvider) && !trimmedApiKey) {
+      throw new Error(t.enterApiKey)
     }
 
+    if (selectedProviderSettings.supportsBaseUrl && !trimmedBaseUrl) {
+      throw new Error(t.enterBaseUrl)
+    }
+
+    return {
+      provider: selectedProvider,
+      apiKey: trimmedApiKey,
+      model: trimmedModel || undefined,
+      baseUrl: selectedProviderSettings.supportsBaseUrl
+        ? resolveProviderBaseUrl(selectedProvider, trimmedBaseUrl) || undefined
+        : undefined,
+    }
+  }
+
+  const handleTest = async () => {
     setTesting(true)
     try {
-      const config: LLMConfig = {
-        provider: selectedProvider,
-        apiKey,
-        model: model || undefined,
-        baseUrl: baseUrl || undefined,
-      }
-
+      const config = buildConfig()
       const success = await llmManager.testProvider(selectedProvider, config)
       setTestResult(success)
     } catch (error) {
       setTestResult(false)
+      alert(error instanceof Error ? error.message : String(error))
     } finally {
       setTesting(false)
     }
   }
 
   const handleSave = async () => {
-    if (!apiKey && !['ollama', 'lmstudio'].includes(selectedProvider)) {
-      alert(language === 'zh' ? '请输入API密钥' : 'Please enter API key')
-      return
-    }
-
     try {
-      const config: LLMConfig = {
+      const config = buildConfig()
+      console.log('[SettingsTab] Saving config:', {
         provider: selectedProvider,
-        apiKey,
-        model: model || undefined,
-        baseUrl: baseUrl || undefined,
-      }
+        model: config.model,
+        hasApiKey: !!config.apiKey,
+        baseUrl: config.baseUrl,
+      })
 
-      console.log('[SettingsTab] Saving config:', { provider: selectedProvider, model, hasApiKey: !!apiKey })
-      
       await llmManager.setCurrentProvider(selectedProvider, config)
-      
-      // Verify config was saved
-      const result = await new Promise<Record<string, any>>((resolve) => {
-        chrome.storage.local.get(STORAGE_KEYS.llmConfig, (data: Record<string, any>) => {
+
+      const result = await new Promise<Record<string, LLMConfig>>((resolve) => {
+        chrome.storage.local.get(STORAGE_KEYS.llmConfig, (data: Record<string, LLMConfig>) => {
           resolve(data)
         })
       })
 
-      if (result[STORAGE_KEYS.llmConfig] && result[STORAGE_KEYS.llmConfig].provider === selectedProvider) {
-        console.log('[SettingsTab] Config verified in storage:', result[STORAGE_KEYS.llmConfig])
+      if (result[STORAGE_KEYS.llmConfig]?.provider === selectedProvider) {
         setSavedConfig(result[STORAGE_KEYS.llmConfig])
         setSaved(true)
         setTimeout(() => setSaved(false), 3000)
       } else {
-        console.error('[SettingsTab] Config NOT found in storage after save!')
-        alert(language === 'zh' ? '配置保存失败，请重试' : 'Config save verification failed, please try again')
+        alert(t.saveVerifyFailed)
       }
     } catch (error) {
       console.error('[SettingsTab] Save failed:', error)
-      alert(`${language === 'zh' ? '保存失败' : 'Save failed'}: ${error}`)
+      alert(`${t.saveFailed}: ${error instanceof Error ? error.message : String(error)}`)
     }
   }
 
-  const handleClear = () => {
-    if (confirm(language === 'zh' ? '确定要清空配置吗？' : 'Clear configuration?')) {
-      llmManager.clearConfig()
-      setApiKey('')
+  const handleClear = async () => {
+    if (!confirm(t.clearConfirm)) return
+
+    try {
+      await llmManager.clearConfig(selectedProvider)
+      setSavedConfig((current) => (current?.provider === selectedProvider ? null : current))
+      applyConfigToForm(selectedProvider)
       setSaved(false)
       setTestResult(null)
+      alert(t.clearSuccess)
+    } catch (error) {
+      alert(`${t.clearFailed}: ${error instanceof Error ? error.message : String(error)}`)
     }
   }
 
@@ -219,7 +247,19 @@ function SettingsTab({ language }: SettingsTabProps) {
         <p className="text-xs text-blue-900">{t.info}</p>
       </div>
 
-      {/* Provider Selection */}
+      <div className="bg-gray-50 border border-gray-200 rounded-lg p-3">
+        <p className="text-xs font-semibold text-gray-600 mb-1">{t.providerDetails}</p>
+        <p className="text-sm font-semibold text-gray-900">
+          {selectedProviderSettings.label[language]}
+        </p>
+        <p className="text-xs text-gray-600 mt-1">
+          {selectedProviderSettings.description[language]}
+        </p>
+        {selectedProvider === 'custom' && (
+          <p className="text-xs text-blue-700 mt-2">{t.customHelp}</p>
+        )}
+      </div>
+
       <div style={{ position: 'relative', zIndex: 1000 }}>
         <label className="text-xs font-semibold text-gray-600 block mb-2">
           {t.provider}
@@ -232,34 +272,38 @@ function SettingsTab({ language }: SettingsTabProps) {
         >
           {providerOptions.map((opt) => (
             <option key={opt.value} value={opt.value}>
-              {opt.label} {opt.cost ? `(${opt.cost})` : ''}
+              {opt.label[language]} {opt.cost ? `(${opt.cost})` : ''}
             </option>
           ))}
         </select>
       </div>
 
-      {/* API Key Input */}
-      {!['ollama', 'lmstudio'].includes(selectedProvider) && (
+      {shouldShowApiKeyInput(selectedProvider) ? (
         <div>
           <label className="text-xs font-semibold text-gray-600 block mb-2">
-            {t.apiKey}
+            {selectedProviderSettings.apiKeyMode === 'optional' ? t.apiKeyOptional : t.apiKey}
           </label>
           <input
             type="password"
             value={apiKey}
             onChange={(e) => setApiKey(e.target.value)}
-            placeholder={`Enter your ${selectedProvider.toUpperCase()} API key`}
+            placeholder={
+              selectedProviderSettings.apiKeyMode === 'optional'
+                ? t.optionalApiKeyHint
+                : `${selectedProviderSettings.label[language]} ${t.apiKey}`
+            }
             className="w-full px-2 py-2 border border-gray-300 rounded text-sm"
           />
           <p className="text-xs text-gray-500 mt-1">
-            {language === 'zh' 
-              ? '✓ API密钥已保存到浏览器本地存储' 
-              : '✓ API key is saved to browser local storage'}
+            {selectedProviderSettings.apiKeyMode === 'optional' ? t.optionalApiKeyHint : t.localStorageHint}
           </p>
+        </div>
+      ) : (
+        <div className="bg-gray-50 border border-gray-200 rounded p-3 text-xs text-gray-600">
+          {t.noApiKeyNeeded}
         </div>
       )}
 
-      {/* Model Input */}
       <div>
         <label className="text-xs font-semibold text-gray-600 block mb-2">
           {t.model}
@@ -268,13 +312,12 @@ function SettingsTab({ language }: SettingsTabProps) {
           type="text"
           value={model}
           onChange={(e) => setModel(e.target.value)}
-          placeholder="e.g., claude-3-sonnet-20240229"
+          placeholder={selectedProviderSettings.modelPlaceholder || selectedProviderSettings.defaultModel}
           className="w-full px-2 py-2 border border-gray-300 rounded text-sm"
         />
       </div>
 
-      {/* Base URL for Local Services */}
-      {['ollama', 'lmstudio'].includes(selectedProvider) && (
+      {selectedProviderSettings.supportsBaseUrl && (
         <div>
           <label className="text-xs font-semibold text-gray-600 block mb-2">
             {t.baseUrl}
@@ -283,25 +326,21 @@ function SettingsTab({ language }: SettingsTabProps) {
             type="text"
             value={baseUrl}
             onChange={(e) => setBaseUrl(e.target.value)}
-            placeholder={selectedProvider === 'ollama' ? 'http://localhost:11434' : 'http://localhost:1234'}
+            placeholder={selectedProviderSettings.baseUrlPlaceholder || selectedProviderSettings.defaultBaseUrl}
             className="w-full px-2 py-2 border border-gray-300 rounded text-sm"
           />
           <p className="text-xs text-gray-500 mt-1">
-            {selectedProvider === 'ollama' 
-              ? 'Ollama default: http://localhost:11434'
-              : 'LM Studio default: http://localhost:1234'}
+            {selectedProviderSettings.baseUrlHint?.[language] || t.baseUrlAutoHint}
           </p>
         </div>
       )}
 
-      {/* Test Result */}
       {testResult !== null && (
         <div className={`p-2 rounded text-sm ${testResult ? 'bg-green-100 text-green-900' : 'bg-red-100 text-red-900'}`}>
           {testResult ? t.connected : t.failed}
         </div>
       )}
 
-      {/* Buttons */}
       <div className="space-y-2">
         <button
           onClick={handleTest}
@@ -332,43 +371,46 @@ function SettingsTab({ language }: SettingsTabProps) {
         </div>
       )}
 
-      {/* Usage Stats */}
       {usageStats && usageStats.totalCalls > 0 && (
         <div className="bg-yellow-50 border border-yellow-200 rounded p-3">
-          <p className="font-semibold text-sm text-yellow-800 mb-2">
-            {language === 'zh' ? 'API 用量统计 (近7天)' : 'API Usage Stats (Last 7 Days)'}
-          </p>
+          <p className="font-semibold text-sm text-yellow-800 mb-2">{t.usageTitle}</p>
           <div className="grid grid-cols-2 gap-2 text-xs">
             <div className="bg-white rounded p-2">
-              <div className="text-gray-500">{language === 'zh' ? '调用次数' : 'API Calls'}</div>
+              <div className="text-gray-500">{t.apiCalls}</div>
               <div className="text-lg font-bold text-gray-800">{usageStats.totalCalls}</div>
             </div>
             <div className="bg-white rounded p-2">
-              <div className="text-gray-500">{language === 'zh' ? '总 Token 数' : 'Total Tokens'}</div>
+              <div className="text-gray-500">{t.totalTokens}</div>
               <div className="text-lg font-bold text-gray-800">{usageStats.totalTokens.toLocaleString()}</div>
             </div>
             <div className="bg-white rounded p-2 col-span-2">
-              <div className="text-gray-500">{language === 'zh' ? '预估费用' : 'Est. Cost'}</div>
+              <div className="text-gray-500">{t.estimatedCost}</div>
               <div className="text-lg font-bold text-green-600">${usageStats.estimatedCost.toFixed(4)}</div>
             </div>
           </div>
-          <div className="mt-2 text-xs text-yellow-700">
-            {language === 'zh' 
-              ? '提示: 缓存已开启，同一项目7天内不会重复调用 API'
-              : 'Tip: Cache enabled, same project won\'t call API again within 7 days'}
-          </div>
+          <div className="mt-2 text-xs text-yellow-700">{t.cacheHint}</div>
         </div>
       )}
 
-      {/* Info */}
       <div className="bg-gray-50 border border-gray-200 rounded p-3 text-xs text-gray-600">
-        <p className="font-semibold mb-1">{language === 'zh' ? '获取API密钥：' : 'Get API Keys:'}</p>
+        <p className="font-semibold mb-2">{t.getApiKeys}</p>
         <ul className="space-y-1">
-          <li>• Claude: <a href="https://console.anthropic.com" target="_blank" rel="noreferrer" className="text-blue-600 hover:underline">console.anthropic.com</a></li>
-          <li>• OpenAI: <a href="https://platform.openai.com" target="_blank" rel="noreferrer" className="text-blue-600 hover:underline">platform.openai.com</a></li>
-          <li>• DeepSeek 🔥: <a href="https://platform.deepseek.com" target="_blank" rel="noreferrer" className="text-blue-600 hover:underline">platform.deepseek.com</a></li>
-          <li>• Silicon Flow 💎: <a href="https://cloud.siliconflow.cn" target="_blank" rel="noreferrer" className="text-blue-600 hover:underline" onClick={(e) => { e.preventDefault(); window.open('https://cloud.siliconflow.cn/i/vrmTfRTN', '_blank'); }}>cloud.siliconflow.cn</a></li>
-          <li>• Zhipu 💡: <a href="https://open.bigmodel.cn" target="_blank" rel="noreferrer" className="text-blue-600 hover:underline" onClick={(e) => { e.preventDefault(); window.open('https://www.bigmodel.cn/invite?icode=l1vVV6SGlJOOAf2kyoL8fOZLO2QH3C0EBTSr%2BArzMw4%3D', '_blank'); }}>open.bigmodel.cn</a></li>
+          {providerOptions
+            .filter((opt) => opt.docsUrl)
+            .map((opt) => (
+              <li key={opt.value}>
+                • {opt.label[language]}:{' '}
+                <a
+                  href={opt.docsUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="text-blue-600 hover:underline"
+                >
+                  {opt.docsUrl?.replace(/^https?:\/\//, '')}
+                </a>
+              </li>
+            ))}
+          <li>• {selectedProviderSettings.label[language]}: {selectedProvider === 'custom' ? t.customHelp : t.localStorageHint}</li>
         </ul>
       </div>
     </div>

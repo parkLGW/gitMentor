@@ -1,7 +1,7 @@
 // LLM Service Manager
 
 import { LLMConfig, LLMProvider, LLMProviderType } from '@/types/llm'
-import { ClaudeProvider, OpenAIProvider, OllamaProvider, DeepSeekProvider, LMStudioProvider, ZhipuProvider, SiliconFlowProvider } from './llm-base'
+import { ClaudeProvider, OpenAIProvider, CustomOpenAIProvider, OllamaProvider, DeepSeekProvider, LMStudioProvider, ZhipuProvider, SiliconFlowProvider } from './llm-base'
 import { eventBus, EVENTS } from '@/utils/eventBus'
 import { STORAGE_KEYS } from '@/constants/storage'
 
@@ -27,6 +27,7 @@ export class LLMManager {
   private initializeProviders(): void {
     this.providers.set('claude', new ClaudeProvider())
     this.providers.set('openai', new OpenAIProvider())
+    this.providers.set('custom', new CustomOpenAIProvider())
     this.providers.set('ollama', new OllamaProvider())
     this.providers.set('deepseek', new DeepSeekProvider())
     this.providers.set('zhipu', new ZhipuProvider())
@@ -130,17 +131,50 @@ export class LLMManager {
     }
   }
 
-  clearConfig(): void {
-    // Emit event before clearing
-    eventBus.emit(EVENTS.LLM_CONFIG_CLEARED)
+  async clearConfig(type?: LLMProviderType): Promise<void> {
+    eventBus.emit(EVENTS.LLM_CONFIG_CLEARED, type)
 
-    // Clear from chrome.storage
-    if (typeof chrome !== 'undefined' && chrome.storage) {
-      chrome.storage.local.remove(this.configKey, () => {
-        console.log('[LLMManager] Config cleared from chrome.storage')
-      })
+    if (typeof chrome === 'undefined' || !chrome.storage) {
+      this.currentProvider = null
+      return
     }
-    this.currentProvider = null
+
+    return new Promise((resolve) => {
+      chrome.storage.local.get(this.multiConfigKey, (data: Record<string, unknown>) => {
+        const map = ((data[this.multiConfigKey] as Record<string, LLMConfig>) || {})
+
+        if (type) {
+          delete map[type]
+        }
+
+        const operations: Record<string, unknown> = { [this.multiConfigKey]: map }
+        chrome.storage.local.set(operations, () => {
+          const finish = () => {
+            console.log('[LLMManager] Config cleared from chrome.storage', type || '(active)')
+            resolve()
+          }
+
+          if (!type) {
+            chrome.storage.local.remove([this.configKey, this.multiConfigKey], () => {
+              this.currentProvider = null
+              finish()
+            })
+            return
+          }
+
+          chrome.storage.local.get(this.configKey, (activeConfig: Record<string, unknown>) => {
+            if ((activeConfig[this.configKey] as LLMConfig | undefined)?.provider === type) {
+              chrome.storage.local.remove(this.configKey, () => {
+                this.currentProvider = null
+                finish()
+              })
+              return
+            }
+            finish()
+          })
+        })
+      })
+    })
   }
 }
 

@@ -3,6 +3,7 @@ declare const chrome: any
 import type { AnalysisEvidence, ConfidenceLevel, DeepFileAnalysisResult, LearningMission } from '@/types/learning'
 import type { SourceMapOutput } from '@/prompts/types'
 import { createLearningMission } from '@/services/learning-mission'
+import { resolveProviderBaseUrl } from '@/services/llm-provider-config'
 import type { AgentMessage, AgentChatRequestPayload, AgentChatResponsePayload, SessionSummary } from '@/types/agent'
 
 const LLM_CONFIG_KEY = 'gitmentor_llm_config'
@@ -84,7 +85,7 @@ function getAnalysisText(lang: Language, key: keyof typeof translations.en, vars
 
 // LLM Configuration stored in chrome.storage
 interface LLMConfig {
-  provider: 'claude' | 'openai' | 'ollama' | 'deepseek' | 'lmstudio' | 'zhipu' | 'siliconflow'
+  provider: 'claude' | 'openai' | 'custom' | 'ollama' | 'deepseek' | 'lmstudio' | 'zhipu' | 'siliconflow'
   apiKey: string
   model?: string
   baseUrl?: string
@@ -385,6 +386,27 @@ async function callLLM(
       }
       break
 
+    case 'custom': {
+      const baseUrl = resolveProviderBaseUrl('custom', config.baseUrl)
+      if (!baseUrl) {
+        throw new Error('Custom provider base URL is required')
+      }
+      apiUrl = `${baseUrl}/chat/completions`
+      headers = {
+        'Content-Type': 'application/json',
+      }
+      if (config.apiKey) {
+        headers.Authorization = `Bearer ${config.apiKey}`
+      }
+      body = {
+        model: config.model || 'gpt-4o-mini',
+        messages: [{ role: 'user', content: prompt }],
+        temperature: 0.3,
+        max_tokens: requestedMaxTokens ?? config.maxTokens ?? 420,
+      }
+      break
+    }
+
     case 'claude':
       apiUrl = 'https://api.anthropic.com/v1/messages'
       headers = {
@@ -442,7 +464,7 @@ async function callLLM(
       break
 
     case 'ollama':
-      apiUrl = config.baseUrl || 'http://localhost:11434/api/chat'
+      apiUrl = `${resolveProviderBaseUrl('ollama', config.baseUrl) || 'http://localhost:11434'}/api/chat`
       headers = {
         'Content-Type': 'application/json',
       }
@@ -454,10 +476,12 @@ async function callLLM(
       break
 
     case 'lmstudio':
-      apiUrl = config.baseUrl || 'http://localhost:1234/v1/chat/completions'
+      apiUrl = `${resolveProviderBaseUrl('lmstudio', config.baseUrl) || 'http://localhost:1234'}/v1/chat/completions`
       headers = {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${config.apiKey}`,
+      }
+      if (config.apiKey) {
+        headers.Authorization = `Bearer ${config.apiKey}`
       }
       body = {
         model: config.model || 'local-model',

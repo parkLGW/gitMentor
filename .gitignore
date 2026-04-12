@@ -12,3 +12,7 @@ build/
 out/
 .turbo/
 .pnpm-debug.log*
+.worktrees/
+.tmp-tests/
+.tmp-tests-fallback/
+.tmp-plan-tests/

@@ -1,6 +1,8 @@
 // Base LLM Provider implementations
 
 import { LLMConfig, LLMProvider, LLMProviderType, LLMResponse } from '@/types/llm'
+import { resolveProviderBaseUrl } from '@/services/llm-provider-config'
+import { shouldFallbackCustomStreaming } from '@/services/custom-openai-utils'
 
 export abstract class BaseLLMProvider implements LLMProvider {
   abstract name: string
@@ -279,6 +281,164 @@ export class OpenAIProvider extends BaseLLMProvider {
           model: config.model || 'gpt-4',
           max_tokens: 10,
           messages: [{ role: 'user', content: 'ok' }],
+        }),
+      })
+      return response.ok
+    } catch {
+      return false
+    }
+  }
+}
+
+// Custom OpenAI-compatible Provider
+export class CustomOpenAIProvider extends BaseLLMProvider {
+  name = 'Custom OpenAI-compatible API'
+  type = 'custom' as const
+
+  private buildHeaders(apiKey: string): Record<string, string> {
+    return apiKey
+      ? {
+          Authorization: `Bearer ${apiKey}`,
+          'Content-Type': 'application/json',
+        }
+      : {
+          'Content-Type': 'application/json',
+        }
+  }
+
+  private getBaseUrl(config: LLMConfig): string {
+    const baseUrl = resolveProviderBaseUrl('custom', config.baseUrl)
+    if (!baseUrl) {
+      throw new Error('Custom provider base URL is required')
+    }
+    return baseUrl
+  }
+
+  async complete(prompt: string, systemPrompt?: string, signal?: AbortSignal): Promise<LLMResponse> {
+    const config = this.getConfig()
+    const baseUrl = this.getBaseUrl(config)
+
+    try {
+      const response = await fetch(`${baseUrl}/chat/completions`, {
+        method: 'POST',
+        headers: this.buildHeaders(config.apiKey),
+        body: JSON.stringify({
+          model: config.model || 'gpt-4o-mini',
+          max_tokens: config.maxTokens || 2000,
+          temperature: config.temperature ?? 0.7,
+          messages: [
+            { role: 'system', content: this.createSystemPrompt(systemPrompt) },
+            { role: 'user', content: prompt },
+          ],
+        }),
+        signal,
+      })
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}))
+        throw new Error(`Custom API error: ${errorData.error?.message || response.statusText}`)
+      }
+
+      const data = await response.json()
+      return {
+        content: data.choices?.[0]?.message?.content || '',
+        model: data.model || config.model || 'gpt-4o-mini',
+        tokensUsed: {
+          prompt: data.usage?.prompt_tokens || 0,
+          completion: data.usage?.completion_tokens || 0,
+          total: data.usage?.total_tokens || 0,
+        },
+      }
+    } catch (error) {
+      if (error instanceof Error && error.name === 'AbortError') {
+        throw error
+      }
+      throw new Error(`Custom provider error: ${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
+
+  async *stream(prompt: string, systemPrompt?: string): AsyncGenerator<string> {
+    const config = this.getConfig()
+    const baseUrl = this.getBaseUrl(config)
+
+    try {
+      const response = await fetch(`${baseUrl}/chat/completions`, {
+        method: 'POST',
+        headers: this.buildHeaders(config.apiKey),
+        body: JSON.stringify({
+          model: config.model || 'gpt-4o-mini',
+          max_tokens: config.maxTokens || 2000,
+          temperature: config.temperature ?? 0.7,
+          stream: true,
+          messages: [
+            { role: 'system', content: this.createSystemPrompt(systemPrompt) },
+            { role: 'user', content: prompt },
+          ],
+        }),
+      })
+
+      if (!response.ok) {
+        if (shouldFallbackCustomStreaming(response.status)) {
+          const fallback = await this.complete(prompt, systemPrompt)
+          if (fallback.content) {
+            yield fallback.content
+          }
+          return
+        }
+        throw new Error(`Custom API error: ${response.statusText}`)
+      }
+
+      const reader = response.body?.getReader()
+      if (!reader) {
+        const fallback = await this.complete(prompt, systemPrompt)
+        if (fallback.content) {
+          yield fallback.content
+        }
+        return
+      }
+
+      const decoder = new TextDecoder()
+      let buffer = ''
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split('\n')
+        buffer = lines.pop() || ''
+
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue
+          const dataStr = line.slice(6)
+          if (dataStr === '[DONE]') continue
+          try {
+            const data = JSON.parse(dataStr)
+            if (data.choices?.[0]?.delta?.content) {
+              yield data.choices[0].delta.content
+            }
+          } catch {
+            // Skip malformed SSE chunks
+          }
+        }
+      }
+    } catch (error) {
+      throw new Error(`Custom provider stream error: ${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
+
+  async testConnection(): Promise<boolean> {
+    try {
+      const config = this.getConfig()
+      const baseUrl = this.getBaseUrl(config)
+      const response = await fetch(`${baseUrl}/chat/completions`, {
+        method: 'POST',
+        headers: this.buildHeaders(config.apiKey),
+        body: JSON.stringify({
+          model: config.model || 'gpt-4o-mini',
+          max_tokens: 1,
+          temperature: 0,
+          messages: [{ role: 'user', content: 'ping' }],
         }),
       })
       return response.ok
