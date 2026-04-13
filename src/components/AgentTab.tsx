@@ -1,7 +1,6 @@
 import { FormEvent, KeyboardEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { LoadingSpinner } from "@/components/LoadingSpinner";
 import { StorageKeys } from "@/constants/storage";
-import { llmManager } from "@/services/llm";
 import {
   appendMessage,
   applyCompressionResult,
@@ -14,7 +13,14 @@ import {
   needsCompression,
   persistAgentSession,
 } from "@/services/agent-session";
+import {
+  buildGithubBlobUrl,
+  buildRetrievalUiNote,
+  getAnalyzedFiles,
+  getFallbackRelatedFiles,
+} from "@/services/agent-chat-view";
 import type {
+  AgentChatResponsePayload,
   AgentMessage,
   AgentSession,
   SessionSummary,
@@ -30,9 +36,13 @@ interface AgentSummaryResponse {
   summary?: SessionSummary;
 }
 
+interface AgentChatRuntimeResponse {
+  data?: AgentChatResponsePayload;
+  error?: string;
+}
+
 const SUMMARY_TIMEOUT_MS = 45000;
-const STREAM_FIRST_TOKEN_TIMEOUT_MS = 45000;
-const STREAM_IDLE_TIMEOUT_MS = 30000;
+const CHAT_REQUEST_TIMEOUT_MS = 75000;
 const MAX_RENDER_MESSAGES = 12;
 
 function buildId(prefix: string): string {
@@ -86,66 +96,6 @@ function formatAssistantAnswer(
   return `${baseAnswer}\n\n${title}:\n${list}`;
 }
 
-function normalizeFilePathToken(input: string): string {
-  const normalized = String(input || "")
-    .trim()
-    .replace(/^[`"'(\[]+/, "")
-    .replace(/[`"')\].,;:]+$/, "")
-    .replace(/\\/g, "/");
-  const withoutTrailingSlash = normalized.replace(/\/+$/g, "");
-  return withoutTrailingSlash || normalized;
-}
-
-function looksLikeFilePath(token: string): boolean {
-  if (!token) return false;
-  if (token.length < 3 || token.length > 180) return false;
-  if (/\s/.test(token)) return false;
-  if (token.includes("/")) {
-    return /[a-zA-Z0-9_\-./]+/.test(token);
-  }
-  if (/^(README|LICENSE|Makefile|Dockerfile)$/i.test(token)) return true;
-  return /^[a-zA-Z0-9_.-]+\.[a-zA-Z0-9_.-]+$/.test(token);
-}
-
-function extractRelatedFiles(text: string): string[] {
-  const files = new Set<string>();
-  const normalizedText = String(text || "");
-
-  const lineMatch = normalizedText.match(
-    /(?:^|\n)\s*(相关文件|参考文件|Relevant files|Files)\s*[:：]\s*([^\n]+)/i,
-  );
-  if (lineMatch?.[2]) {
-    lineMatch[2]
-      .split(/[，,、；;|]/)
-      .map(normalizeFilePathToken)
-      .filter(looksLikeFilePath)
-      .forEach((path) => files.add(path));
-  }
-
-  const backtickPathPattern = /`([^`\n]{1,120})`/g;
-  let match: RegExpExecArray | null;
-  while ((match = backtickPathPattern.exec(normalizedText)) !== null) {
-    const token = normalizeFilePathToken(match[1]);
-    if (looksLikeFilePath(token)) {
-      files.add(token);
-    }
-  }
-
-  const inlinePathPattern =
-    /\b([a-zA-Z0-9_.-]+\/[a-zA-Z0-9_./-]+|[a-zA-Z0-9_.-]+\.(?:ts|tsx|js|jsx|mjs|cjs|py|go|rs|md|json|yaml|yml|toml|java|kt|rb|php|cs|cpp|c|h|hpp|swift|scala|sql))\b/g;
-  while ((match = inlinePathPattern.exec(normalizedText)) !== null) {
-    const token = normalizeFilePathToken(match[1]);
-    if (looksLikeFilePath(token)) {
-      files.add(token);
-    }
-  }
-
-  const canonical = Array.from(
-    new Set(Array.from(files).map((item) => normalizeFilePathToken(item)).filter(Boolean)),
-  );
-  return canonical.slice(0, 6);
-}
-
 function stripRelatedFilesLine(text: string): string {
   return String(text || "")
     .replace(/(?:^|\n)\s*(相关文件|参考文件|Relevant files|Files)\s*[:：]\s*[^\n]+/gi, "")
@@ -171,91 +121,24 @@ function sanitizeAssistantBody(text: string, language: "zh" | "en"): string {
   return value;
 }
 
-function buildAgentStreamPrompt(params: {
-  repo: { owner: string; name: string };
-  question: string;
-  sourceMapSummary: string;
-  readmeSummary: string;
-  sessionSummary: SessionSummary | null;
-  recentMessages: AgentMessage[];
-  language: "zh" | "en";
-}): string {
-  const history = params.recentMessages
-    .slice(-6)
-    .map((message) => `${message.role}: ${String(message.content || "").slice(0, 220)}`)
-    .join("\n");
-  const summary = params.sessionSummary
-    ? [
-      params.sessionSummary.summary,
-      `key concepts: ${(params.sessionSummary.keyConcepts || []).slice(0, 6).join(", ")}`,
-      `open: ${(params.sessionSummary.unresolvedQuestions || []).slice(0, 4).join(", ")}`,
-    ].join("\n")
-    : "";
-
-  if (params.language === "zh") {
-    return `你是 GitHub 新手学习助手，请用中文回答，简洁直接。
-
-仓库：${params.repo.owner}/${params.repo.name}
-用户问题：${params.question}
-
-会话摘要：
-${summary || "暂无"}
-
-最近对话：
-${history || "暂无"}
-
-源码地图摘要：
-${params.sourceMapSummary.slice(0, 800) || "暂无"}
-
-README 摘要：
-${params.readmeSummary.slice(0, 800) || "暂无"}
-
-要求：
-1) 直接回答问题，2-6句。
-2) 不要以“先看”开头；回答正文里不要写路径列表。
-3) 若需给文件路径，请单独一行写：相关文件: path1, path2
-4) 不输出 JSON，不输出代码块。`;
-  }
-
-  return `You are a beginner-focused GitHub learning assistant. Answer briefly.
-
-Repository: ${params.repo.owner}/${params.repo.name}
-Question: ${params.question}
-
-Session summary:
-${summary || "N/A"}
-
-Recent turns:
-${history || "N/A"}
-
-Source map summary:
-${params.sourceMapSummary.slice(0, 800) || "N/A"}
-
-README summary:
-${params.readmeSummary.slice(0, 800) || "N/A"}
-
-Requirements:
-1) Answer directly in 2-6 sentences.
-2) Do not start with "read first"; keep file lists out of answer body.
-3) If file paths are needed, put them in one line: Relevant files: path1, path2
-4) No JSON and no code fences.`;
-}
-
 function upsertAssistantMessage(
   session: AgentSession,
   messageId: string,
-  content: string,
-  confidence: AgentMessage["confidence"] = "low",
-  evidence: AgentMessage["evidence"] = [],
+  payload: {
+    content: string;
+    confidence?: AgentMessage["confidence"];
+    evidence?: AgentMessage["evidence"];
+    retrievedFiles?: AgentMessage["retrievedFiles"];
+    retrievalMode?: AgentMessage["retrievalMode"];
+    retrievalNote?: AgentMessage["retrievalNote"];
+  },
 ): AgentSession {
   const index = session.recentMessages.findIndex((item) => item.id === messageId);
   if (index >= 0) {
     const updated = [...session.recentMessages];
     updated[index] = {
       ...updated[index],
-      content,
-      confidence,
-      evidence,
+      ...payload,
     };
     return {
       ...session,
@@ -267,10 +150,13 @@ function upsertAssistantMessage(
   const next: AgentMessage = {
     id: messageId,
     role: "assistant",
-    content,
+    content: payload.content,
     createdAt: Date.now(),
-    confidence,
-    evidence,
+    confidence: payload.confidence,
+    evidence: payload.evidence,
+    retrievedFiles: payload.retrievedFiles,
+    retrievalMode: payload.retrievalMode,
+    retrievalNote: payload.retrievalNote,
   };
   const recentMessages = [...session.recentMessages, next].slice(-MAX_RENDER_MESSAGES);
   return {
@@ -279,15 +165,6 @@ function upsertAssistantMessage(
     messageCount: Math.max(session.messageCount + 1, recentMessages.length),
     updatedAt: Date.now(),
   };
-}
-
-async function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
-  return await Promise.race<T>([
-    promise,
-    new Promise<T>((_, reject) => {
-      setTimeout(() => reject(new Error("REQUEST_TIMEOUT")), timeoutMs);
-    }),
-  ]);
 }
 
 function AgentTab({ repo, language }: AgentTabProps) {
@@ -429,69 +306,57 @@ function AgentTab({ repo, language }: AgentTabProps) {
       const streamingSession = upsertAssistantMessage(
         sessionWithUser,
         assistantId,
-        isZh ? "思考中..." : "Thinking...",
-        "low",
+        {
+          content: isZh ? "思考中..." : "Thinking...",
+          confidence: "low",
+        },
       );
       setSession(streamingSession);
 
       try {
-        const provider = llmManager.getCurrentProvider();
-        if (!provider || !llmManager.isConfigured()) {
-          throw new Error("LLM not configured");
+        const response = await sendRuntimeMessage<AgentChatRuntimeResponse>(
+          {
+            action: "chatWithAgent",
+            payload: {
+              repo,
+              language,
+              question,
+              sourceMapSummary,
+              readmeSummary,
+              sessionSummary: sessionWithUser.summary,
+              recentMessages: getContextMessages(sessionWithUser),
+            },
+          },
+          CHAT_REQUEST_TIMEOUT_MS,
+        );
+        if (response?.error) {
+          throw new Error(response.error);
         }
-
-        const prompt = buildAgentStreamPrompt({
-          repo,
-          question,
-          sourceMapSummary,
-          readmeSummary,
-          sessionSummary: sessionWithUser.summary,
-          recentMessages: getContextMessages(sessionWithUser),
-          language,
-        });
-
-        let accumulated = "";
-        const iterator = provider.stream(prompt);
-        let hasChunk = false;
-
-        while (true) {
-          const result = await withTimeout(
-            iterator.next(),
-            hasChunk ? STREAM_IDLE_TIMEOUT_MS : STREAM_FIRST_TOKEN_TIMEOUT_MS,
-          );
-          if (result.done) break;
-          const chunk = String(result.value || "");
-          if (!chunk) continue;
-          hasChunk = true;
-          accumulated += chunk;
-          setSession((current) =>
-            upsertAssistantMessage(current, assistantId, accumulated, "medium"));
+        if (!response?.data) {
+          throw new Error("Invalid agent response");
         }
+        const data = response.data;
 
         const finalAnswer = formatAssistantAnswer(
-          accumulated.trim() || (isZh ? "暂无回答。" : "No response."),
-          [],
+          data.answer.trim() || (isZh ? "暂无回答。" : "No response."),
+          data.suggestedNextSteps || [],
           language,
         );
-        const relatedFiles = extractRelatedFiles(finalAnswer);
         const sanitizedAnswer = sanitizeAssistantBody(finalAnswer, language);
-        const fallbackFromAccumulated = sanitizeAssistantBody(accumulated, language);
         const finalContent = hasVisibleContent(sanitizedAnswer)
           ? sanitizedAnswer
-          : hasVisibleContent(fallbackFromAccumulated)
-            ? fallbackFromAccumulated
-            : (isZh ? "见相关文件。" : "See related files.");
-        const relatedEvidence = relatedFiles.map((filePath) => ({
-          filePath,
-          snippet: "",
-          reason: "related_file",
-        }));
+          : (isZh ? "见相关文件。" : "See related files.");
         let nextSession = upsertAssistantMessage(
           sessionWithUser,
           assistantId,
-          finalContent,
-          accumulated.length > 100 ? "medium" : "low",
-          relatedEvidence,
+          {
+            content: finalContent,
+            confidence: data.confidence,
+            evidence: data.evidence,
+            retrievedFiles: data.retrievedFiles,
+            retrievalMode: data.retrievalMode,
+            retrievalNote: data.retrievalNote,
+          },
         );
         nextSession = await summarizeIfNeeded(nextSession);
         setSession(nextSession);
@@ -507,8 +372,10 @@ function AgentTab({ repo, language }: AgentTabProps) {
         const nextSession = upsertAssistantMessage(
           sessionWithUser,
           assistantId,
-          fallbackText,
-          "low",
+          {
+            content: fallbackText,
+            confidence: "low",
+          },
         );
         setSession(nextSession);
         persistAgentSession(nextSession);
@@ -630,110 +497,126 @@ function AgentTab({ repo, language }: AgentTabProps) {
               message.role === "user" && message.id === latestUserMessageId;
             const isEditing = editingMessageId === message.id;
             const isUser = message.role === "user";
+            const analyzedFiles = isUser ? [] : getAnalyzedFiles(message);
+            const relatedFiles = isUser || analyzedFiles.length > 0
+              ? []
+              : getFallbackRelatedFiles(message);
+            const retrievalUiNote = isUser ? null : buildRetrievalUiNote(message, language);
 
             return (
-            <div key={message.id} className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
-            <div
-              className={`max-w-[85%] rounded p-2 text-sm ${
-                isUser
-                  ? "bg-blue-600 text-white"
-                  : "bg-gray-50 text-gray-800 border border-gray-200"
-              }`}
-            >
-              <div className="flex items-start justify-between gap-2">
-                {!isEditing && <p className="whitespace-pre-line flex-1">{message.content}</p>}
-                {isLatestUser && !isEditing && (
-                  <button
-                    onClick={() => handleStartEdit(message)}
-                    disabled={sending}
-                    className={`text-[11px] px-2 py-0.5 rounded disabled:opacity-50 ${
-                      isUser
-                        ? "bg-white/20 hover:bg-white/30 text-white"
-                        : "bg-white/70 hover:bg-white text-blue-700"
-                    }`}
-                  >
-                    {isZh ? "编辑" : "Edit"}
-                  </button>
-                )}
-              </div>
-              {isEditing && (
-                <div className="mt-1 space-y-1">
-                  <textarea
-                    rows={2}
-                    value={editingText}
-                    onChange={(event) => setEditingText(event.target.value)}
-                    className="w-full border border-blue-200 rounded px-2 py-1 text-xs text-gray-800 bg-white resize-none focus:outline-none focus:ring-1 focus:ring-blue-300"
-                  />
-                  <div className="flex items-center justify-end gap-1">
-                    <button
-                      onClick={handleCancelEdit}
-                      className="text-[10px] px-1.5 py-0.5 rounded bg-gray-100 text-gray-700 hover:bg-gray-200"
-                    >
-                      {isZh ? "取消" : "Cancel"}
-                    </button>
-                    <button
-                      onClick={handleResendEditedMessage}
-                      disabled={sending || !editingText.trim()}
-                      className="text-[10px] px-1.5 py-0.5 rounded bg-gray-800 text-white hover:bg-gray-700 disabled:opacity-50"
-                    >
-                      {isZh ? "重新发送" : "Resend"}
-                    </button>
+              <div key={message.id} className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
+                <div
+                  className={`max-w-[85%] rounded p-2 text-sm ${
+                    isUser
+                      ? "bg-blue-600 text-white"
+                      : "bg-gray-50 text-gray-800 border border-gray-200"
+                  }`}
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    {!isEditing && <p className="whitespace-pre-line flex-1">{message.content}</p>}
+                    {isLatestUser && !isEditing && (
+                      <button
+                        onClick={() => handleStartEdit(message)}
+                        disabled={sending}
+                        className={`text-[11px] px-2 py-0.5 rounded disabled:opacity-50 ${
+                          isUser
+                            ? "bg-white/20 hover:bg-white/30 text-white"
+                            : "bg-white/70 hover:bg-white text-blue-700"
+                        }`}
+                      >
+                        {isZh ? "编辑" : "Edit"}
+                      </button>
+                    )}
                   </div>
-                </div>
-              )}
-              {message.evidence && message.evidence.length > 0 && (
-                <div className="mt-2 space-y-1">
-                  {message.evidence.some((item) => item.reason === "related_file" && item.filePath) && (
-                    <p className="text-[11px] text-gray-500">
-                      {isZh ? "相关文件" : "Related files"}
+                  {isEditing && (
+                    <div className="mt-1 space-y-1">
+                      <textarea
+                        rows={2}
+                        value={editingText}
+                        onChange={(event) => setEditingText(event.target.value)}
+                        className="w-full border border-blue-200 rounded px-2 py-1 text-xs text-gray-800 bg-white resize-none focus:outline-none focus:ring-1 focus:ring-blue-300"
+                      />
+                      <div className="flex items-center justify-end gap-1">
+                        <button
+                          onClick={handleCancelEdit}
+                          className="text-[10px] px-1.5 py-0.5 rounded bg-gray-100 text-gray-700 hover:bg-gray-200"
+                        >
+                          {isZh ? "取消" : "Cancel"}
+                        </button>
+                        <button
+                          onClick={handleResendEditedMessage}
+                          disabled={sending || !editingText.trim()}
+                          className="text-[10px] px-1.5 py-0.5 rounded bg-gray-800 text-white hover:bg-gray-700 disabled:opacity-50"
+                        >
+                          {isZh ? "重新发送" : "Resend"}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                  {retrievalUiNote && (
+                    <p className="mt-2 text-[11px] text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1">
+                      {retrievalUiNote}
                     </p>
                   )}
-                  {message.evidence
-                    .filter((item) => item.reason === "related_file" && item.filePath)
-                    .slice(0, 6)
-                    .map((item, index) => (
-                      <button
-                        key={`${message.id}_path_${index}`}
-                        className="inline-block mr-1 mb-1 text-xs px-2 py-0.5 rounded bg-blue-50 text-blue-700 hover:bg-blue-100"
-                        onClick={() => {
-                          if (!item.filePath) return;
-                          window.open(
-                            `https://github.com/${repo.owner}/${repo.name}/blob/main/${item.filePath}`,
-                            "_blank",
-                          );
-                        }}
-                      >
-                        {item.filePath}
-                      </button>
-                    ))}
-                  {message.evidence
-                    .filter((item) => item.reason !== "related_file")
-                    .slice(0, 2)
-                    .map((item, index) => (
-                      <button
-                        key={`${message.id}_${index}`}
-                        className="block text-left text-xs text-blue-700 hover:underline"
-                        onClick={() => {
-                          if (!item.filePath) return;
-                          window.open(
-                            `https://github.com/${repo.owner}/${repo.name}/blob/main/${item.filePath}`,
-                            "_blank",
-                          );
-                        }}
-                      >
-                        {item.filePath || (isZh ? "证据片段" : "Evidence")} · {item.reason}
-                      </button>
-                    ))}
+                  {(analyzedFiles.length > 0 || relatedFiles.length > 0) && (
+                    <div className="mt-2 space-y-1">
+                      <p className="text-[11px] text-gray-500">
+                        {analyzedFiles.length > 0
+                          ? (isZh ? "已分析文件" : "Analyzed files")
+                          : (isZh ? "相关文件" : "Related files")}
+                      </p>
+                      {(analyzedFiles.length > 0 ? analyzedFiles : relatedFiles).map((item, index) => {
+                        const filePath = typeof item === "string" ? item : item.filePath;
+                        const branch = typeof item === "string" ? undefined : item.branch;
+                        return (
+                          <button
+                            key={`${message.id}_path_${index}`}
+                            className="inline-block mr-1 mb-1 text-xs px-2 py-0.5 rounded bg-blue-50 text-blue-700 hover:bg-blue-100"
+                            onClick={() => {
+                              if (!filePath) return;
+                              window.open(
+                                buildGithubBlobUrl(repo, filePath, branch),
+                                "_blank",
+                              );
+                            }}
+                          >
+                            {filePath}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                  {message.evidence && message.evidence.length > 0 && (
+                    <div className="mt-2 space-y-1">
+                      {message.evidence
+                        .filter((item) => item.reason !== "related_file")
+                        .slice(0, 2)
+                        .map((item, index) => (
+                          <button
+                            key={`${message.id}_${index}`}
+                            className="block text-left text-xs text-blue-700 hover:underline"
+                            onClick={() => {
+                              if (!item.filePath) return;
+                              window.open(
+                                buildGithubBlobUrl(repo, item.filePath),
+                                "_blank",
+                              );
+                            }}
+                          >
+                            {item.filePath || (isZh ? "证据片段" : "Evidence")} · {item.reason}
+                          </button>
+                        ))}
+                    </div>
+                  )}
+                  {message.role === "assistant" && message.confidence && (
+                    <p className="text-[11px] text-gray-500 mt-1">
+                      {isZh ? "置信度" : "Confidence"}: {message.confidence}
+                    </p>
+                  )}
                 </div>
-              )}
-              {message.role === "assistant" && message.confidence && (
-                <p className="text-[11px] text-gray-500 mt-1">
-                  {isZh ? "置信度" : "Confidence"}: {message.confidence}
-                </p>
-              )}
-            </div>
-            </div>
-          )})
+              </div>
+            );
+          })
         )}
         {sending && (
           <div className="flex items-center gap-2 text-xs text-gray-500">
@@ -768,8 +651,8 @@ function AgentTab({ repo, language }: AgentTabProps) {
         <div className="flex items-center justify-between">
           <p className="text-xs text-gray-500">
             {isZh
-              ? "默认使用 README + 源码地图 + 会话摘要作为上下文"
-              : "Uses README + source map + session summary context"}
+              ? "默认先使用 README + 源码地图 + 会话摘要；需要时会补充抓取 GitHub 源码"
+              : "Starts with README, source map, and session summary; fetches GitHub code when needed"}
           </p>
           <button
             type="submit"

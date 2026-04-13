@@ -7,6 +7,7 @@ import { answerAgentQuestion } from "../services/agent-chat-runtime.js";
 import type {
   AgentChatRequestPayload,
   AgentChatResponsePayload,
+  RetrievedFileMetadata,
   AgentRetrievalPlan,
   RetrievedFileContext,
 } from "../types/agent.js";
@@ -198,6 +199,73 @@ test("adds a partial retrieval note when some requested files fail but at least 
   });
 
   assert.strictEqual(result.answer, "code answer");
+  assert.strictEqual(result.retrievalMode, "github-code");
+  assert.deepStrictEqual(result.retrievedFiles, retrievedFiles);
+  assert.strictEqual(
+    result.retrievalNote,
+    "Used GitHub code context from 1 of 2 requested files.",
+  );
+});
+
+test("preserves UI-facing answer fields alongside retrieval metadata in code-context responses", async () => {
+  const payload = createPayload();
+  const retrievedFiles: RetrievedFileMetadata[] = [
+    {
+      filePath: "src/request-flow.ts",
+      branch: "release",
+      status: "fetched",
+    },
+    {
+      filePath: "src/http/client.ts",
+      branch: "release",
+      status: "failed",
+      reason: "404",
+    },
+  ];
+
+  const result = await answerAgentQuestion(payload, {
+    planRetriever: async () => ({
+      needsCodeContext: true,
+      targetFiles: retrievedFiles.map((file) => file.filePath),
+      reason: "Need implementation details",
+      confidence: "high",
+    }),
+    fetchFiles: async () => retrievedFiles,
+    answerWithSummary: async () => createAnswer("summary answer"),
+    answerWithCode: async () => ({
+      answer: "code answer",
+      confidence: "high",
+      evidence: [
+        {
+          filePath: "src/request-flow.ts",
+          lineStart: 12,
+          snippet: "runRequestFlow();",
+          reason: "entry point",
+        },
+      ],
+      suggestedNextSteps: ["Inspect the HTTP client retry path."],
+      source: "ai",
+      downgraded: true,
+      reason: "lite_prompt_retry",
+    }),
+  });
+
+  assert.strictEqual(result.answer, "code answer");
+  assert.strictEqual(result.confidence, "high");
+  assert.deepStrictEqual(result.evidence, [
+    {
+      filePath: "src/request-flow.ts",
+      lineStart: 12,
+      snippet: "runRequestFlow();",
+      reason: "entry point",
+    },
+  ]);
+  assert.deepStrictEqual(result.suggestedNextSteps, [
+    "Inspect the HTTP client retry path.",
+  ]);
+  assert.strictEqual(result.source, "ai");
+  assert.strictEqual(result.downgraded, true);
+  assert.strictEqual(result.reason, "lite_prompt_retry");
   assert.strictEqual(result.retrievalMode, "github-code");
   assert.deepStrictEqual(result.retrievedFiles, retrievedFiles);
   assert.strictEqual(
