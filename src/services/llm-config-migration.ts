@@ -24,7 +24,12 @@ export function migrateLegacyLLMConfig(
     maxTokens: config.maxTokens,
   }
 
-  switch (config.provider) {
+  const providerCandidate = (config as { provider?: unknown }).provider
+  if (typeof providerCandidate !== 'string') {
+    throw new Error('Malformed LLM config migration input: provider must be a string')
+  }
+
+  switch (providerCandidate) {
     case 'openai':
       return {
         protocol: 'openai',
@@ -75,5 +80,7 @@ export function migrateLegacyLLMConfig(
         localMode: 'openai-compatible',
         ...commonFields,
       }
+    default:
+      throw new Error(`Unsupported LLM provider in config migration: ${(config as { provider?: unknown }).provider}`)
   }
 }
