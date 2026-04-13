@@ -315,7 +315,7 @@ export const SETTINGS_PROVIDER_ORDER: LLMProviderType[] = [
   'lmstudio',
 ]
 
-function getPresetSettings(type: LLMPresetType): PresetSettings {
+function lookupPresetSettings(type: LLMPresetType): PresetSettings {
   return PRESET_SETTINGS[type]
 }
 
@@ -333,7 +333,7 @@ function clonePresetOption(preset: PresetSettings): PresetOption {
 }
 
 function toProviderSettings(type: LLMProviderType): ProviderSettings {
-  const preset = getPresetSettings(LEGACY_PROVIDER_TO_PRESET[type])
+  const preset = lookupPresetSettings(LEGACY_PROVIDER_TO_PRESET[type])
 
   return {
     value: type,
@@ -371,7 +371,15 @@ export function getProtocolOptions(): ProtocolOption[] {
 }
 
 export function getPresetOptions(protocol: LLMProtocolType): PresetOption[] {
-  return PRESET_ORDER_BY_PROTOCOL[protocol].map((type) => clonePresetOption(getPresetSettings(type)))
+  return PRESET_ORDER_BY_PROTOCOL[protocol].map((type) => clonePresetOption(lookupPresetSettings(type)))
+}
+
+export function getPresetSettings(type: LLMPresetType): PresetOption {
+  return clonePresetOption(lookupPresetSettings(type))
+}
+
+export function getDefaultPresetForProtocol(protocol: LLMProtocolType): LLMPresetType {
+  return PRESET_ORDER_BY_PROTOCOL[protocol][0]
 }
 
 export function normalizeOpenAICompatibleBaseUrl(baseUrl: string): string {

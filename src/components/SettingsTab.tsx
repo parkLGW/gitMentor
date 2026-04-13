@@ -1,23 +1,47 @@
 import { useEffect, useMemo, useState } from 'react'
 import { llmManager } from '@/services/llm'
-import { LLMProviderType, LLMConfig } from '@/types/llm'
+import { LLMConfig, LLMPresetType, LLMProtocolType } from '@/types/llm'
+import { migrateLegacyLLMConfig } from '@/services/llm-config-migration'
+import { normalizeClaudeCompatibleBaseUrl } from '@/services/claude-compatible-utils'
 import { STORAGE_KEYS } from '@/constants/storage'
 import { usageTracker, UsageStats } from '@/services/usage-tracker'
 import {
-  getProviderSettings,
-  getVisibleProviderSettings,
-  resolveProviderBaseUrl,
-  shouldRequireApiKey,
-  shouldShowApiKeyInput,
+  getDefaultPresetForProtocol,
+  getPresetOptions,
+  getPresetSettings,
+  getProtocolOptions,
+  normalizeOpenAICompatibleBaseUrl,
 } from '@/services/llm-provider-config'
 
 interface SettingsTabProps {
   language: 'zh' | 'en'
 }
 
+function resolveBaseUrlForPreset(preset: LLMPresetType, baseUrl: string): string {
+  const trimmed = baseUrl.trim()
+  if (!trimmed) return ''
+
+  switch (preset) {
+    case 'custom-openai':
+    case 'custom-local':
+      return normalizeOpenAICompatibleBaseUrl(trimmed)
+    case 'custom-claude':
+      return normalizeClaudeCompatibleBaseUrl(trimmed)
+    default:
+      return trimmed.replace(/\/+$/, '')
+  }
+}
+
 function SettingsTab({ language }: SettingsTabProps) {
-  const providerOptions = useMemo(() => getVisibleProviderSettings(), [])
-  const [selectedProvider, setSelectedProvider] = useState<LLMProviderType>('openai')
+  const protocolOptions = useMemo(() => getProtocolOptions(), [])
+  const allPresetOptions = useMemo(
+    () => ['openai', 'claude', 'local'].flatMap((protocol) => getPresetOptions(protocol as LLMProtocolType)),
+    [],
+  )
+  const [selectedProtocol, setSelectedProtocol] = useState<LLMProtocolType>('openai')
+  const [selectedPreset, setSelectedPreset] = useState<LLMPresetType>(
+    getDefaultPresetForProtocol('openai'),
+  )
   const [apiKey, setApiKey] = useState('')
   const [model, setModel] = useState('')
   const [baseUrl, setBaseUrl] = useState('')
@@ -29,83 +53,101 @@ function SettingsTab({ language }: SettingsTabProps) {
 
   const labels = {
     zh: {
-      provider: 'AI 模型提供商',
+      connectionType: '连接类型',
+      presetTemplate: '模板预设',
       apiKey: 'API 密钥',
       apiKeyOptional: 'API 密钥（可选）',
       model: '模型',
       baseUrl: '基础 URL',
       testConnection: '测试连接',
       save: '保存配置',
-      clear: '清空当前提供商配置',
+      clear: '清空当前配置',
       testing: '测试中...',
       connected: '✓ 连接成功',
       failed: '✗ 连接失败',
       saved: '✓ 已保存',
-      info: '支持官方模型、本地模型，以及任意 OpenAI 兼容接口。配置只保存在浏览器本地。',
-      providerDetails: '当前提供商',
-      customHelp: '自定义接口适用于自建网关、反向代理和聚合服务，只要兼容 OpenAI /v1/chat/completions 即可。',
+      info: '先选择协议类型，再选择模板预设。支持官方接口、自建兼容网关和本地模型服务，配置只保存在浏览器本地。',
+      selectionDetails: '当前选择',
+      selectedProtocol: '连接类型',
+      selectedPreset: '模板预设',
+      customHelp: '自定义模板适用于自建网关、反向代理和聚合服务。保存时会按对应协议自动规范化地址。',
       enterApiKey: '请输入 API 密钥',
       enterBaseUrl: '请输入基础 URL',
-      clearConfirm: '确定要清空当前提供商配置吗？',
-      clearSuccess: '当前提供商配置已清空',
+      clearConfirm: '确定要清空当前配置吗？',
+      clearSuccess: '当前配置已清空',
       clearFailed: '清空失败',
       saveFailed: '保存失败',
       saveVerifyFailed: '配置保存验证失败，请重试',
       getApiKeys: '官方入口',
-      noApiKeyNeeded: '当前提供商不需要 API 密钥。',
-      optionalApiKeyHint: '可留空，适用于不要求鉴权的自建接口。',
+      noApiKeyNeeded: '当前预设不需要 API 密钥。',
+      optionalApiKeyHint: '可留空，适用于不要求鉴权的兼容接口。',
       localStorageHint: '配置会保存到浏览器本地存储。',
       cacheHint: '提示: 缓存已开启，同一项目 7 天内不会重复调用 API',
       usageTitle: 'API 用量统计（近 7 天）',
       apiCalls: '调用次数',
       totalTokens: '总 Token 数',
       estimatedCost: '预估费用',
-      baseUrlAutoHint: '基础 URL 会按当前提供商自动补齐路径格式。',
+      baseUrlAutoHint: '基础 URL 会按当前协议自动规范化。',
     },
     en: {
-      provider: 'AI Model Provider',
+      connectionType: 'Connection Type',
+      presetTemplate: 'Preset Template',
       apiKey: 'API Key',
       apiKeyOptional: 'API Key (Optional)',
       model: 'Model',
       baseUrl: 'Base URL',
       testConnection: 'Test Connection',
       save: 'Save Configuration',
-      clear: 'Clear Current Provider',
+      clear: 'Clear Current Configuration',
       testing: 'Testing...',
       connected: '✓ Connected',
       failed: '✗ Failed',
       saved: '✓ Saved',
-      info: 'Supports official APIs, local models, and any OpenAI-compatible endpoint. Configuration stays in browser local storage only.',
-      providerDetails: 'Current Provider',
-      customHelp: 'Use this for self-hosted gateways, reverse proxies, and aggregator APIs as long as they expose OpenAI-compatible /v1/chat/completions endpoints.',
+      info: 'Choose a protocol first, then a preset template. Supports official APIs, self-hosted compatible gateways, and local model services. Configuration stays in browser local storage only.',
+      selectionDetails: 'Current Selection',
+      selectedProtocol: 'Connection Type',
+      selectedPreset: 'Preset Template',
+      customHelp: 'Custom presets are for self-hosted gateways, reverse proxies, and aggregator APIs. The base URL is normalized according to the selected protocol when you save.',
       enterApiKey: 'Please enter an API key',
       enterBaseUrl: 'Please enter a base URL',
-      clearConfirm: 'Clear configuration for the current provider?',
-      clearSuccess: 'Current provider configuration cleared',
+      clearConfirm: 'Clear configuration for the current selection?',
+      clearSuccess: 'Current configuration cleared',
       clearFailed: 'Clear failed',
       saveFailed: 'Save failed',
       saveVerifyFailed: 'Config save verification failed, please try again',
       getApiKeys: 'Official Links',
-      noApiKeyNeeded: 'This provider does not require an API key.',
-      optionalApiKeyHint: 'You can leave this blank for self-hosted endpoints without auth.',
+      noApiKeyNeeded: 'This preset does not require an API key.',
+      optionalApiKeyHint: 'You can leave this blank for compatible endpoints without auth.',
       localStorageHint: 'Configuration is stored in browser local storage.',
       cacheHint: 'Tip: Cache enabled, same project will not call the API again within 7 days',
       usageTitle: 'API Usage Stats (Last 7 Days)',
       apiCalls: 'API Calls',
       totalTokens: 'Total Tokens',
       estimatedCost: 'Est. Cost',
-      baseUrlAutoHint: 'The base URL is normalized automatically for the selected provider.',
+      baseUrlAutoHint: 'The base URL is normalized automatically for the selected protocol.',
     },
   }
 
   const t = labels[language]
-  const selectedProviderSettings = getProviderSettings(selectedProvider)
+  const presetOptions = useMemo(() => getPresetOptions(selectedProtocol), [selectedProtocol])
+  const selectedProtocolOption = protocolOptions.find((option) => option.value === selectedProtocol) || protocolOptions[0]
+  const selectedPresetSettings = getPresetSettings(selectedPreset)
 
-  const applyConfigToForm = (provider: LLMProviderType, config?: Partial<LLMConfig> | null) => {
-    const settings = getProviderSettings(provider)
+  const applySelectionDefaults = (preset: LLMPresetType, config?: Partial<LLMConfig> | null) => {
+    const settings = getPresetSettings(preset)
     setModel(config?.model || settings.defaultModel)
     setBaseUrl(config?.baseUrl || settings.defaultBaseUrl)
     setApiKey(config?.apiKey || '')
+  }
+
+  const transitionPreset = (nextPreset: LLMPresetType, previousPreset: LLMPresetType) => {
+    const previousSettings = getPresetSettings(previousPreset)
+    const nextSettings = getPresetSettings(nextPreset)
+
+    setModel((current) => (!current || current === previousSettings.defaultModel ? nextSettings.defaultModel : current))
+    setBaseUrl((current) =>
+      !current || current === previousSettings.defaultBaseUrl ? nextSettings.defaultBaseUrl : current,
+    )
   }
 
   useEffect(() => {
@@ -119,15 +161,17 @@ function SettingsTab({ language }: SettingsTabProps) {
 
         const config = result[STORAGE_KEYS.llmConfig]
         if (config) {
-          console.log('[GitMentor] Loaded saved LLM config:', config.provider)
-          const provider = config.provider || 'openai'
+          const normalized = migrateLegacyLLMConfig(config)
           setSavedConfig(config)
-          setSelectedProvider(provider)
-          applyConfigToForm(provider, config)
+          setSelectedProtocol(normalized.protocol)
+          setSelectedPreset(normalized.preset)
+          applySelectionDefaults(normalized.preset, config)
           return
         }
 
-        applyConfigToForm('openai')
+        const initialPreset = getDefaultPresetForProtocol('openai')
+        setSelectedPreset(initialPreset)
+        applySelectionDefaults(initialPreset)
       } catch (error) {
         console.warn('Failed to load saved LLM config:', error)
       }
@@ -141,52 +185,76 @@ function SettingsTab({ language }: SettingsTabProps) {
   }, [])
 
   useEffect(() => {
-    const loadProviderConfig = async () => {
-      const providerConfig = await llmManager.getSavedConfig(selectedProvider)
+    let cancelled = false
 
-      if (providerConfig) {
-        console.log('[SettingsTab] Found saved config for:', selectedProvider)
-        applyConfigToForm(selectedProvider, providerConfig)
-      } else if (savedConfig?.provider === selectedProvider) {
-        applyConfigToForm(selectedProvider, savedConfig)
-      } else {
-        applyConfigToForm(selectedProvider)
+    const loadSelectionConfig = async () => {
+      const selectionConfig = await llmManager.getSavedConfigForSelection(selectedProtocol, selectedPreset)
+      if (cancelled) return
+
+      if (selectionConfig) {
+        applySelectionDefaults(selectedPreset, selectionConfig)
+        return
+      }
+
+      if (savedConfig) {
+        const normalized = migrateLegacyLLMConfig(savedConfig)
+        if (normalized.protocol === selectedProtocol && normalized.preset === selectedPreset) {
+          applySelectionDefaults(selectedPreset, savedConfig)
+        }
       }
     }
 
-    loadProviderConfig()
+    void loadSelectionConfig()
     setSaved(false)
     setTestResult(null)
-  }, [selectedProvider, savedConfig])
+
+    return () => {
+      cancelled = true
+    }
+  }, [selectedProtocol, selectedPreset, savedConfig])
 
   const buildConfig = (): LLMConfig => {
-    const trimmedApiKey = apiKey.trim()
+    const trimmedApiKey = selectedPresetSettings.apiKeyMode === 'none' ? '' : apiKey.trim()
     const trimmedModel = model.trim()
     const trimmedBaseUrl = baseUrl.trim()
 
-    if (shouldRequireApiKey(selectedProvider) && !trimmedApiKey) {
+    if (selectedPresetSettings.apiKeyMode === 'required' && !trimmedApiKey) {
       throw new Error(t.enterApiKey)
     }
 
-    if (selectedProviderSettings.supportsBaseUrl && !trimmedBaseUrl) {
+    if (selectedPresetSettings.supportsBaseUrl && !trimmedBaseUrl) {
       throw new Error(t.enterBaseUrl)
     }
 
     return {
-      provider: selectedProvider,
+      protocol: selectedProtocol,
+      preset: selectedPreset,
+      localMode: selectedPresetSettings.localMode,
       apiKey: trimmedApiKey,
       model: trimmedModel || undefined,
-      baseUrl: selectedProviderSettings.supportsBaseUrl
-        ? resolveProviderBaseUrl(selectedProvider, trimmedBaseUrl) || undefined
+      baseUrl: selectedPresetSettings.supportsBaseUrl
+        ? resolveBaseUrlForPreset(selectedPreset, trimmedBaseUrl) || undefined
         : undefined,
     }
+  }
+
+  const handleProtocolChange = (protocol: LLMProtocolType) => {
+    const nextPreset = getDefaultPresetForProtocol(protocol)
+    transitionPreset(nextPreset, selectedPreset)
+    setSelectedProtocol(protocol)
+    setSelectedPreset(nextPreset)
+  }
+
+  const handlePresetChange = (preset: LLMPresetType) => {
+    transitionPreset(preset, selectedPreset)
+    setSelectedPreset(preset)
   }
 
   const handleTest = async () => {
     setTesting(true)
     try {
       const config = buildConfig()
-      const success = await llmManager.testProvider(selectedProvider, config)
+      const success = await llmManager.testConfig(config)
       setTestResult(success)
     } catch (error) {
       setTestResult(false)
@@ -200,13 +268,14 @@ function SettingsTab({ language }: SettingsTabProps) {
     try {
       const config = buildConfig()
       console.log('[SettingsTab] Saving config:', {
-        provider: selectedProvider,
+        protocol: selectedProtocol,
+        preset: selectedPreset,
         model: config.model,
         hasApiKey: !!config.apiKey,
         baseUrl: config.baseUrl,
       })
 
-      await llmManager.setCurrentProvider(selectedProvider, config)
+      await llmManager.setCurrentConfig(config)
 
       const result = await new Promise<Record<string, LLMConfig>>((resolve) => {
         chrome.storage.local.get(STORAGE_KEYS.llmConfig, (data: Record<string, LLMConfig>) => {
@@ -214,13 +283,18 @@ function SettingsTab({ language }: SettingsTabProps) {
         })
       })
 
-      if (result[STORAGE_KEYS.llmConfig]?.provider === selectedProvider) {
-        setSavedConfig(result[STORAGE_KEYS.llmConfig])
-        setSaved(true)
-        setTimeout(() => setSaved(false), 3000)
-      } else {
-        alert(t.saveVerifyFailed)
+      const activeConfig = result[STORAGE_KEYS.llmConfig]
+      if (activeConfig) {
+        const normalized = migrateLegacyLLMConfig(activeConfig)
+        if (normalized.protocol === selectedProtocol && normalized.preset === selectedPreset) {
+          setSavedConfig(activeConfig)
+          setSaved(true)
+          setTimeout(() => setSaved(false), 3000)
+          return
+        }
       }
+
+      alert(t.saveVerifyFailed)
     } catch (error) {
       console.error('[SettingsTab] Save failed:', error)
       alert(`${t.saveFailed}: ${error instanceof Error ? error.message : String(error)}`)
@@ -231,9 +305,13 @@ function SettingsTab({ language }: SettingsTabProps) {
     if (!confirm(t.clearConfirm)) return
 
     try {
-      await llmManager.clearConfig(selectedProvider)
-      setSavedConfig((current) => (current?.provider === selectedProvider ? null : current))
-      applyConfigToForm(selectedProvider)
+      await llmManager.clearConfig({ protocol: selectedProtocol, preset: selectedPreset })
+      setSavedConfig((current) => {
+        if (!current) return null
+        const normalized = migrateLegacyLLMConfig(current)
+        return normalized.protocol === selectedProtocol && normalized.preset === selectedPreset ? null : current
+      })
+      applySelectionDefaults(selectedPreset)
       setSaved(false)
       setTestResult(null)
       alert(t.clearSuccess)
@@ -249,29 +327,51 @@ function SettingsTab({ language }: SettingsTabProps) {
       </div>
 
       <div className="bg-gray-50 border border-gray-200 rounded-lg p-3">
-        <p className="text-xs font-semibold text-gray-600 mb-1">{t.providerDetails}</p>
+        <p className="text-xs font-semibold text-gray-600 mb-1">{t.selectionDetails}</p>
         <p className="text-sm font-semibold text-gray-900">
-          {selectedProviderSettings.label[language]}
+          {selectedPresetSettings.label[language]}
         </p>
         <p className="text-xs text-gray-600 mt-1">
-          {selectedProviderSettings.description[language]}
+          {selectedPresetSettings.description[language]}
         </p>
-        {selectedProvider === 'custom' && (
+        <div className="mt-2 space-y-1 text-xs text-gray-500">
+          <p>{t.selectedProtocol}: {selectedProtocolOption.label[language]}</p>
+          <p>{t.selectedPreset}: {selectedPresetSettings.label[language]}</p>
+        </div>
+        {(selectedPreset === 'custom-openai' || selectedPreset === 'custom-claude' || selectedPreset === 'custom-local') && (
           <p className="text-xs text-blue-700 mt-2">{t.customHelp}</p>
         )}
       </div>
 
       <div style={{ position: 'relative', zIndex: 1000 }}>
         <label className="text-xs font-semibold text-gray-600 block mb-2">
-          {t.provider}
+          {t.connectionType}
         </label>
         <select
-          value={selectedProvider}
-          onChange={(e) => setSelectedProvider(e.target.value as LLMProviderType)}
+          value={selectedProtocol}
+          onChange={(e) => handleProtocolChange(e.target.value as LLMProtocolType)}
           className="w-full px-2 py-2 border border-gray-300 rounded text-sm"
           style={{ position: 'relative', zIndex: 1001 }}
         >
-          {providerOptions.map((opt) => (
+          {protocolOptions.map((opt) => (
+            <option key={opt.value} value={opt.value}>
+              {opt.label[language]}
+            </option>
+          ))}
+        </select>
+      </div>
+
+      <div style={{ position: 'relative', zIndex: 999 }}>
+        <label className="text-xs font-semibold text-gray-600 block mb-2">
+          {t.presetTemplate}
+        </label>
+        <select
+          value={selectedPreset}
+          onChange={(e) => handlePresetChange(e.target.value as LLMPresetType)}
+          className="w-full px-2 py-2 border border-gray-300 rounded text-sm"
+          style={{ position: 'relative', zIndex: 1000 }}
+        >
+          {presetOptions.map((opt) => (
             <option key={opt.value} value={opt.value}>
               {opt.label[language]} {opt.cost ? `(${opt.cost})` : ''}
             </option>
@@ -279,24 +379,24 @@ function SettingsTab({ language }: SettingsTabProps) {
         </select>
       </div>
 
-      {shouldShowApiKeyInput(selectedProvider) ? (
+      {selectedPresetSettings.apiKeyMode !== 'none' ? (
         <div>
           <label className="text-xs font-semibold text-gray-600 block mb-2">
-            {selectedProviderSettings.apiKeyMode === 'optional' ? t.apiKeyOptional : t.apiKey}
+            {selectedPresetSettings.apiKeyMode === 'optional' ? t.apiKeyOptional : t.apiKey}
           </label>
           <input
             type="password"
             value={apiKey}
             onChange={(e) => setApiKey(e.target.value)}
             placeholder={
-              selectedProviderSettings.apiKeyMode === 'optional'
+              selectedPresetSettings.apiKeyMode === 'optional'
                 ? t.optionalApiKeyHint
-                : `${selectedProviderSettings.label[language]} ${t.apiKey}`
+                : `${selectedPresetSettings.label[language]} ${t.apiKey}`
             }
             className="w-full px-2 py-2 border border-gray-300 rounded text-sm"
           />
           <p className="text-xs text-gray-500 mt-1">
-            {selectedProviderSettings.apiKeyMode === 'optional' ? t.optionalApiKeyHint : t.localStorageHint}
+            {selectedPresetSettings.apiKeyMode === 'optional' ? t.optionalApiKeyHint : t.localStorageHint}
           </p>
         </div>
       ) : (
@@ -313,12 +413,12 @@ function SettingsTab({ language }: SettingsTabProps) {
           type="text"
           value={model}
           onChange={(e) => setModel(e.target.value)}
-          placeholder={selectedProviderSettings.modelPlaceholder || selectedProviderSettings.defaultModel}
+          placeholder={selectedPresetSettings.modelPlaceholder || selectedPresetSettings.defaultModel}
           className="w-full px-2 py-2 border border-gray-300 rounded text-sm"
         />
       </div>
 
-      {selectedProviderSettings.supportsBaseUrl && (
+      {selectedPresetSettings.supportsBaseUrl && (
         <div>
           <label className="text-xs font-semibold text-gray-600 block mb-2">
             {t.baseUrl}
@@ -327,11 +427,11 @@ function SettingsTab({ language }: SettingsTabProps) {
             type="text"
             value={baseUrl}
             onChange={(e) => setBaseUrl(e.target.value)}
-            placeholder={selectedProviderSettings.baseUrlPlaceholder || selectedProviderSettings.defaultBaseUrl}
+            placeholder={selectedPresetSettings.baseUrlPlaceholder || selectedPresetSettings.defaultBaseUrl}
             className="w-full px-2 py-2 border border-gray-300 rounded text-sm"
           />
           <p className="text-xs text-gray-500 mt-1">
-            {selectedProviderSettings.baseUrlHint?.[language] || t.baseUrlAutoHint}
+            {selectedPresetSettings.baseUrlHint?.[language] || t.baseUrlAutoHint}
           </p>
         </div>
       )}
@@ -396,7 +496,7 @@ function SettingsTab({ language }: SettingsTabProps) {
       <div className="bg-gray-50 border border-gray-200 rounded p-3 text-xs text-gray-600">
         <p className="font-semibold mb-2">{t.getApiKeys}</p>
         <ul className="space-y-1">
-          {providerOptions
+          {allPresetOptions
             .filter((opt) => opt.docsUrl)
             .map((opt) => (
               <li key={opt.value}>
@@ -411,7 +511,7 @@ function SettingsTab({ language }: SettingsTabProps) {
                 </a>
               </li>
             ))}
-          <li>• {selectedProviderSettings.label[language]}: {selectedProvider === 'custom' ? t.customHelp : t.localStorageHint}</li>
+          <li>• {selectedPresetSettings.label[language]}: {selectedPresetSettings.apiKeyMode === 'optional' ? t.customHelp : t.localStorageHint}</li>
         </ul>
       </div>
     </div>

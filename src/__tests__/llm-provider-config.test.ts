@@ -39,6 +39,14 @@ runTest('lists vendor presets under openai protocol instead of top-level provide
   )
 })
 
+runTest('returns local presets for local protocol', () => {
+  const presets = getPresetOptions('local')
+  assert.deepEqual(
+    presets.map((entry) => entry.value),
+    ['ollama', 'lmstudio', 'custom-local'],
+  )
+})
+
 runTest('exposes preset defaults and API key metadata for settings rendering', () => {
   const customOpenAI = getPresetOptions('openai').find((entry) => entry.value === 'custom-openai')
   const [lmStudio] = getPresetOptions('local').filter((entry) => entry.value === 'lmstudio')
