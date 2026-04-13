@@ -50,6 +50,10 @@ export function normalizeCandidatePath(input: string): string {
   return normalized;
 }
 
+export function normalizeGithubFilePath(input: string): string {
+  return normalizeCandidatePath(input);
+}
+
 export function parseRetrievalPlan(input: RetrievalPlanInput): AgentRetrievalPlan {
   const targetFiles = (input.targetFiles ?? [])
     .map(normalizeCandidatePath)
@@ -100,4 +104,104 @@ export function buildRetrievedFileEvidence(
   files: RetrievedFileContext[]
 ): RetrievedFileContext[] {
   return files.slice(0, MAX_TARGET_FILES);
+}
+
+export function resolveBranchCandidates(defaultBranch?: string): string[] {
+  const candidates: string[] = [];
+
+  const pushUnique = (branch: string | undefined) => {
+    const value = branch?.trim();
+    if (!value) return;
+    if (candidates.includes(value)) return;
+    candidates.push(value);
+  };
+
+  pushUnique(defaultBranch);
+  pushUnique("main");
+  pushUnique("master");
+
+  return candidates;
+}
+
+export function buildRawGithubUrl(
+  owner: string,
+  repo: string,
+  branch: string,
+  filePath: string
+): string {
+  const normalized = normalizeGithubFilePath(filePath);
+  if (!normalized) return "";
+
+  const encodedPath = normalized
+    .split("/")
+    .filter(Boolean)
+    .map((segment) => encodeURIComponent(segment))
+    .join("/");
+
+  return `https://raw.githubusercontent.com/${encodeURIComponent(
+    owner
+  )}/${encodeURIComponent(repo)}/${encodeURIComponent(branch)}/${encodedPath}`;
+}
+
+export interface PromptTruncationResult {
+  prompt: string;
+  snippet: string;
+  wasTruncated: boolean;
+}
+
+const TRUNCATION_MARKER = "\n\n... [TRUNCATED FOR PROMPT] ...\n\n";
+const DEFAULT_SNIPPET_LIMIT = 260;
+
+export function truncateFileForPrompt(
+  filePath: string,
+  content: string,
+  maxChars: number
+): PromptTruncationResult {
+  const max = Number.isFinite(maxChars) ? Math.max(0, Math.floor(maxChars)) : 0;
+  const header = `File: ${filePath}\n`;
+
+  if (max <= header.length) {
+    const prompt = header.slice(0, max);
+    return {
+      prompt,
+      snippet: prompt.slice(0, DEFAULT_SNIPPET_LIMIT),
+      wasTruncated: content.length > 0,
+    };
+  }
+
+  const available = max - header.length;
+  if (content.length <= available) {
+    return {
+      prompt: header + content,
+      snippet: content.slice(0, DEFAULT_SNIPPET_LIMIT),
+      wasTruncated: false,
+    };
+  }
+
+  const marker = TRUNCATION_MARKER;
+  if (available <= marker.length + 2) {
+    const prompt = header + marker.slice(0, available);
+    return {
+      prompt,
+      snippet: prompt.slice(0, DEFAULT_SNIPPET_LIMIT),
+      wasTruncated: true,
+    };
+  }
+
+  const remainingForContent = available - marker.length;
+  let headLen = Math.ceil(remainingForContent / 2);
+  let tailLen = Math.floor(remainingForContent / 2);
+  if (headLen <= 0) headLen = 1;
+  if (tailLen <= 0) tailLen = 1;
+
+  const head = content.slice(0, headLen);
+  const tail = content.slice(Math.max(0, content.length - tailLen));
+  const body = head + marker + tail;
+  const prompt = header + body;
+
+  return {
+    prompt,
+    snippet: body.slice(0, DEFAULT_SNIPPET_LIMIT),
+    wasTruncated: true,
+  };
 }

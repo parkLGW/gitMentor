@@ -1,11 +1,13 @@
-import { StorageKeys } from '@/constants/storage'
-import { setJsonCacheWithEviction } from '@/utils/local-cache'
+import { StorageKeys } from '../constants/storage.js'
+import { setJsonCacheWithEviction } from '../utils/local-cache.js'
+import { buildRawGithubUrl, normalizeGithubFilePath } from './agent-code-context.js'
 
 export interface RepoInfo {
   name: string
   owner: string
   description: string
   url: string
+  defaultBranch: string
   stars: number
   forks: number
   openIssues: number
@@ -88,7 +90,11 @@ async function fetchWithTimeout(
   }
 }
 
-export async function getRepoInfo(owner: string, repo: string): Promise<RepoInfo> {
+export async function getRepoInfo(
+  owner: string,
+  repo: string,
+  options?: { timeoutMs?: number }
+): Promise<RepoInfo> {
   const cacheKey = getCacheKey(owner, repo, 'info')
   const cached = getFromCache<RepoInfo>(cacheKey)
   if (cached) return cached
@@ -97,7 +103,7 @@ export async function getRepoInfo(owner: string, repo: string): Promise<RepoInfo
     const response = await fetchWithTimeout(
       `https://api.github.com/repos/${owner}/${repo}`,
       {},
-      5000
+      options?.timeoutMs ?? 5000
     )
 
     if (!response.ok) {
@@ -111,6 +117,7 @@ export async function getRepoInfo(owner: string, repo: string): Promise<RepoInfo
       owner: data.owner.login,
       description: data.description || '',
       url: data.html_url,
+      defaultBranch: data.default_branch || '',
       stars: data.stargazers_count,
       forks: data.forks_count,
       openIssues: data.open_issues_count,
@@ -126,6 +133,54 @@ export async function getRepoInfo(owner: string, repo: string): Promise<RepoInfo
   } catch (error) {
     console.error('Failed to fetch repo info:', error)
     throw error
+  }
+}
+
+export async function getDefaultBranch(
+  owner: string,
+  repo: string,
+  options?: { timeoutMs?: number }
+): Promise<string> {
+  const info = await getRepoInfo(owner, repo, options)
+  return info.defaultBranch || 'main'
+}
+
+export interface RawFileFetchOptions {
+  timeoutMs?: number
+}
+
+export async function getRawFileContent(
+  owner: string,
+  repo: string,
+  branch: string,
+  filePath: string,
+  options: RawFileFetchOptions = {}
+): Promise<string | null> {
+  const normalizedPath = normalizeGithubFilePath(filePath)
+  if (!normalizedPath) {
+    return null
+  }
+
+  const cacheKey = getCacheKey(owner, repo, `raw_${branch}_${normalizedPath}`)
+  const cached = getFromCache<string>(cacheKey)
+  if (cached) return cached
+
+  try {
+    const url = buildRawGithubUrl(owner, repo, branch, normalizedPath)
+    if (!url) {
+      return null
+    }
+    const response = await fetchWithTimeout(url, {}, options.timeoutMs ?? DEFAULT_TIMEOUT)
+    if (!response.ok) {
+      return null
+    }
+
+    const content = await response.text()
+    setCache(cacheKey, content)
+    return content
+  } catch (error) {
+    console.debug(`Failed to fetch raw file ${filePath}:`, error)
+    return null
   }
 }
 
