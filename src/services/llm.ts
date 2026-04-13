@@ -1,13 +1,14 @@
 // LLM Service Manager
 
-import { LLMConfig, LLMProvider, LLMProviderType } from '@/types/llm'
-import { ClaudeProvider, OpenAIProvider, CustomOpenAIProvider, OllamaProvider, DeepSeekProvider, LMStudioProvider, ZhipuProvider, SiliconFlowProvider } from './llm-base'
+import { LLMConfig, LLMProtocolType, LLMProvider, LLMProviderType } from '@/types/llm'
+import { migrateLegacyLLMConfig } from '@/services/llm-config-migration'
+import { ClaudeCompatibleProvider, LocalProvider, OpenAICompatibleProvider } from './llm-base'
 import { eventBus, EVENTS } from '@/utils/eventBus'
 import { STORAGE_KEYS } from '@/constants/storage'
 
 export class LLMManager {
   private static instance: LLMManager
-  private providers: Map<LLMProviderType, LLMProvider> = new Map()
+  private providers: Map<LLMProtocolType, LLMProvider> = new Map()
   private currentProvider: LLMProvider | null = null
   private configKey = STORAGE_KEYS.llmConfig
   private multiConfigKey = STORAGE_KEYS.llmConfigMap
@@ -25,14 +26,9 @@ export class LLMManager {
   }
 
   private initializeProviders(): void {
-    this.providers.set('claude', new ClaudeProvider())
-    this.providers.set('openai', new OpenAIProvider())
-    this.providers.set('custom', new CustomOpenAIProvider())
-    this.providers.set('ollama', new OllamaProvider())
-    this.providers.set('deepseek', new DeepSeekProvider())
-    this.providers.set('zhipu', new ZhipuProvider())
-    this.providers.set('lmstudio', new LMStudioProvider())
-    this.providers.set('siliconflow', new SiliconFlowProvider())
+    this.providers.set('openai', new OpenAICompatibleProvider())
+    this.providers.set('claude', new ClaudeCompatibleProvider())
+    this.providers.set('local', new LocalProvider())
   }
 
   private loadSavedConfig(): void {
@@ -42,8 +38,21 @@ export class LLMManager {
         try {
           if (data[this.configKey]) {
             const config = data[this.configKey]
-            console.log('[LLMManager] Loaded saved config from chrome.storage:', config.provider)
-            this.setCurrentProvider(config.provider, config)
+            const providerCandidate = (config as { provider?: unknown }).provider
+            const provider = typeof providerCandidate === 'string'
+              ? (providerCandidate as LLMProviderType)
+              : (() => {
+                  const normalized = migrateLegacyLLMConfig(config)
+                  // Best-effort fallback when storage is already protocolized.
+                  if (normalized.protocol === 'claude') return 'claude'
+                  if (normalized.protocol === 'local') {
+                    return normalized.preset === 'lmstudio' ? 'lmstudio' : 'ollama'
+                  }
+                  return normalized.preset === 'custom-openai' ? 'custom' : 'openai'
+                })()
+
+            console.log('[LLMManager] Loaded saved config from chrome.storage:', provider)
+            this.setCurrentProvider(provider, config)
           }
         } catch (error) {
           console.warn('Failed to load saved LLM config from chrome.storage:', error)
@@ -52,13 +61,28 @@ export class LLMManager {
     }
   }
 
+  private createProtocolProvider(protocol: LLMProtocolType): LLMProvider {
+    switch (protocol) {
+      case 'openai':
+        return new OpenAICompatibleProvider()
+      case 'claude':
+        return new ClaudeCompatibleProvider()
+      case 'local':
+        return new LocalProvider()
+      default:
+        throw new Error(`Unknown protocol: ${protocol}`)
+    }
+  }
+
   async setCurrentProvider(type: LLMProviderType, config: LLMConfig): Promise<void> {
-    const provider = this.providers.get(type)
+    const normalized = migrateLegacyLLMConfig(config)
+    const provider = this.providers.get(normalized.protocol)
     if (!provider) {
-      throw new Error(`Unknown provider: ${type}`)
+      throw new Error(`Unknown protocol: ${normalized.protocol}`)
     }
 
-    await provider.configure(config)
+    // Keep legacy `provider` field for mid-migration UI flows, while routing by protocol.
+    await provider.configure({ ...normalized, provider: type } as LLMConfig)
     this.currentProvider = provider
 
     // Emit event to notify listeners
@@ -68,9 +92,14 @@ export class LLMManager {
     if (typeof chrome !== 'undefined' && chrome.storage) {
       const configToSave = {
         provider: type,
-        model: config.model,
-        baseUrl: config.baseUrl,
-        apiKey: config.apiKey,
+        protocol: normalized.protocol,
+        preset: normalized.preset,
+        localMode: normalized.localMode,
+        apiKey: normalized.apiKey,
+        model: normalized.model,
+        baseUrl: normalized.baseUrl,
+        temperature: normalized.temperature,
+        maxTokens: normalized.maxTokens,
       }
 
       // Use promise-based wrapper to ensure config is saved before returning
@@ -110,22 +139,21 @@ export class LLMManager {
     return this.currentProvider?.isConfigured() ?? false
   }
 
-  getProvider(type: LLMProviderType): LLMProvider | undefined {
-    return this.providers.get(type)
+  getProvider(protocol: LLMProtocolType): LLMProvider | undefined {
+    return this.providers.get(protocol)
   }
 
-  getAvailableProviders(): LLMProviderType[] {
+  getAvailableProviders(): LLMProtocolType[] {
     return Array.from(this.providers.keys())
   }
 
   async testProvider(type: LLMProviderType, config: LLMConfig): Promise<boolean> {
-    const provider = this.providers.get(type)
-    if (!provider) return false
+    const normalized = migrateLegacyLLMConfig(config)
+    const provider = this.createProtocolProvider(normalized.protocol)
 
     try {
-      const tempConfig = { ...config }
-      await provider.configure(tempConfig)
-      return await provider.testConnection()
+      await provider.configure({ ...normalized, provider: type } as LLMConfig)
+      return provider.isConfigured()
     } catch {
       return false
     }

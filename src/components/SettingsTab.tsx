@@ -120,9 +120,10 @@ function SettingsTab({ language }: SettingsTabProps) {
         const config = result[STORAGE_KEYS.llmConfig]
         if (config) {
           console.log('[GitMentor] Loaded saved LLM config:', config.provider)
+          const provider = config.provider || 'openai'
           setSavedConfig(config)
-          setSelectedProvider(config.provider || 'openai')
-          applyConfigToForm(config.provider, config)
+          setSelectedProvider(provider)
+          applyConfigToForm(provider, config)
           return
         }
 

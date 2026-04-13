@@ -46,7 +46,7 @@ export type LLMConfig =
   | LegacyLLMConfig
   | (NormalizedLLMConfig & {
       // Transitional compatibility during provider->protocol migration.
-      provider: LLMProviderType
+      provider?: LLMProviderType
     })
 
 export interface LLMMessage {
@@ -66,7 +66,7 @@ export interface LLMResponse {
 
 export interface LLMProvider {
   name: string
-  type: LLMProviderType
+  type: LLMProtocolType
   
   // Configure provider with API key and settings
   configure(config: LLMConfig): Promise<void>
@@ -93,7 +93,7 @@ export interface AnalysisPrompts {
 export interface AnalysisResult {
   type: 'project' | 'quickstart' | 'sourcemap'
   content: string
-  provider: LLMProviderType
+  provider: LLMProtocolType
   model: string
   timestamp: number
   tokensUsed?: number
