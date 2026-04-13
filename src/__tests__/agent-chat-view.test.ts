@@ -39,10 +39,10 @@ test("getAnalyzedFiles returns deduped fetched files and buildGithubBlobUrl pres
   assert.equal(
     buildGithubBlobUrl(
       { owner: "acme", name: "widgets" },
-      "src/request-flow.ts",
-      "release",
+      "docs/README #1.md",
+      "release/candidate",
     ),
-    "https://github.com/acme/widgets/blob/release/src/request-flow.ts",
+    "https://github.com/acme/widgets/blob/release%2Fcandidate/docs/README%20%231.md",
   );
 });
 

@@ -22,6 +22,7 @@ test("parseRetrievalPlan caps target files and normalizes paths", () => {
     needsCodeContext: true,
     targetFiles: [
       "./src/features/alpha.ts",
+      "./src/features/alpha.ts",
       ".\\src\\widgets\\beta.ts",
       "docs/guide.md",
       "./src/features/gamma.ts",

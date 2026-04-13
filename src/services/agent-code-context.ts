@@ -79,10 +79,13 @@ export function normalizeGithubFilePath(input: string): string {
 }
 
 export function parseRetrievalPlan(input: RetrievalPlanInput): AgentRetrievalPlan {
-  const targetFiles = (input.targetFiles ?? [])
-    .map(normalizeCandidatePath)
-    .filter(Boolean)
-    .slice(0, MAX_TARGET_FILES);
+  const targetFiles = Array.from(
+    new Set(
+      (input.targetFiles ?? [])
+        .map(normalizeCandidatePath)
+        .filter(Boolean),
+    ),
+  ).slice(0, MAX_TARGET_FILES);
 
   return {
     needsCodeContext: Boolean(input.needsCodeContext),

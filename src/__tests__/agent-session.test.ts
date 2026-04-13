@@ -61,6 +61,12 @@ test("persistAgentSession and loadAgentSession round-trip normalized retrieval m
           reason: "duplicate",
         },
         {
+          filePath: "src/request-flow.ts",
+          branch: "main",
+          status: "fetched",
+          reason: "same file different branch",
+        },
+        {
           filePath: "",
           status: "failed",
           reason: "invalid",
@@ -81,6 +87,12 @@ test("persistAgentSession and loadAgentSession round-trip normalized retrieval m
         branch: "release",
         status: "fetched",
         reason: "relevant",
+      },
+      {
+        filePath: "src/request-flow.ts",
+        branch: "main",
+        status: "fetched",
+        reason: "same file different branch",
       },
     ]);
     assert.equal(loaded.recentMessages[0].retrievalMode, "github-code");

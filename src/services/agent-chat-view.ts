@@ -1,3 +1,4 @@
+import { normalizeGithubFilePath } from "@/services/agent-code-context";
 import type { AgentMessage } from "@/types/agent";
 
 export function buildGithubBlobUrl(
@@ -5,7 +6,14 @@ export function buildGithubBlobUrl(
   filePath: string,
   branch?: string,
 ): string {
-  return `https://github.com/${repo.owner}/${repo.name}/blob/${branch || "main"}/${filePath}`;
+  const normalizedPath = normalizeGithubFilePath(filePath);
+  const encodedPath = normalizedPath
+    .split("/")
+    .filter(Boolean)
+    .map((segment) => encodeURIComponent(segment))
+    .join("/");
+  const encodedBranch = encodeURIComponent(branch || "main");
+  return `https://github.com/${encodeURIComponent(repo.owner)}/${encodeURIComponent(repo.name)}/blob/${encodedBranch}/${encodedPath}`;
 }
 
 export function getAnalyzedFiles(

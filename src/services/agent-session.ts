@@ -123,16 +123,16 @@ function normalizeRetrievedFiles(input: unknown): RetrievedFileMetadata[] | unde
       const status = normalizeRetrievedFileStatus(value?.status);
       if (!filePath || !status) return null;
 
-      const key = `${filePath}::${status}`;
-      if (seen.has(key)) return null;
-      seen.add(key);
-
       const branch = String(value?.branch || "")
         .trim()
         .slice(0, MAX_RETRIEVED_FILE_BRANCH_LENGTH);
       const reason = String(value?.reason || "")
         .trim()
         .slice(0, MAX_RETRIEVED_FILE_REASON_LENGTH);
+
+      const key = `${filePath}::${branch || "main"}::${status}`;
+      if (seen.has(key)) return null;
+      seen.add(key);
 
       return {
         filePath,
