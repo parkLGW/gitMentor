@@ -19,6 +19,30 @@ export interface SelectionBudget {
   maxCharsPerFile?: number;
 }
 
+export interface GithubFileRetrievalRequest {
+  owner: string;
+  repo: string;
+  targetFiles: string[];
+  timeoutMs?: number;
+  maxFiles?: number;
+  maxCharsPerFile?: number;
+}
+
+export interface GithubFileRetrievalDependencies {
+  getDefaultBranch: (
+    owner: string,
+    repo: string,
+    options?: { timeoutMs?: number }
+  ) => Promise<string>;
+  getRawFileContent: (
+    owner: string,
+    repo: string,
+    branch: string,
+    filePath: string,
+    options?: { timeoutMs?: number }
+  ) => Promise<string | null>;
+}
+
 const MAX_TARGET_FILES = 5;
 const WRAPPING_PUNCTUATION = /^[`"'()[\]{}<>,;:!?]+|[`"'()[\]{}<>,;:!?]+$/g;
 
@@ -104,6 +128,57 @@ export function buildRetrievedFileEvidence(
   files: RetrievedFileContext[]
 ): RetrievedFileContext[] {
   return files.slice(0, MAX_TARGET_FILES);
+}
+
+export async function fetchRetrievedGithubFiles(
+  request: GithubFileRetrievalRequest,
+  deps: GithubFileRetrievalDependencies
+): Promise<RetrievedFileContext[]> {
+  let defaultBranch: string | undefined;
+  try {
+    defaultBranch = await deps.getDefaultBranch(request.owner, request.repo, {
+      timeoutMs: request.timeoutMs,
+    });
+  } catch {
+    defaultBranch = undefined;
+  }
+
+  const branchCandidates = resolveBranchCandidates(defaultBranch);
+  const maxFiles = request.maxFiles ?? MAX_TARGET_FILES;
+  const maxCharsPerFile = request.maxCharsPerFile ?? Number.POSITIVE_INFINITY;
+
+  const retrievedFiles = await Promise.all(
+    request.targetFiles.slice(0, maxFiles).map(async (filePath) => {
+      for (const branch of branchCandidates) {
+        const content = await deps.getRawFileContent(
+          request.owner,
+          request.repo,
+          branch,
+          filePath,
+          { timeoutMs: request.timeoutMs }
+        );
+        if (!content) {
+          continue;
+        }
+
+        const truncated = truncateFileForPrompt(filePath, content, maxCharsPerFile);
+        return {
+          filePath,
+          branch,
+          status: "fetched" as const,
+          snippet: truncated.prompt,
+        };
+      }
+
+      return {
+        filePath,
+        status: "failed" as const,
+        reason: "content_unavailable",
+      };
+    })
+  );
+
+  return buildRetrievedFileEvidence(retrievedFiles);
 }
 
 export function resolveBranchCandidates(defaultBranch?: string): string[] {

@@ -15,6 +15,14 @@ export interface AgentRetrievalPlan {
   confidence: ConfidenceLevel;
 }
 
+export type AgentRetrievalMode = "summary-only" | "github-code";
+
+export interface AgentRetrievalMetadata {
+  retrievedFiles?: RetrievedFileContext[];
+  retrievalMode?: AgentRetrievalMode;
+  retrievalNote?: string;
+}
+
 export type AgentRole = "user" | "assistant" | "system";
 
 export interface AgentMessage {
@@ -25,7 +33,7 @@ export interface AgentMessage {
   evidence?: AnalysisEvidence[];
   confidence?: ConfidenceLevel;
   retrievedFiles?: RetrievedFileContext[];
-  retrievalMode?: "summary-only" | "github-code";
+  retrievalMode?: AgentRetrievalMode;
   retrievalNote?: string;
 }
 
@@ -57,7 +65,7 @@ export interface AgentChatRequestPayload {
   recentMessages: AgentMessage[];
 }
 
-export interface AgentChatResponsePayload {
+export interface AgentChatResponsePayload extends AgentRetrievalMetadata {
   answer: string;
   confidence: ConfidenceLevel;
   evidence: AnalysisEvidence[];
