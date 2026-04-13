@@ -64,6 +64,19 @@ runTest('migrates claude legacy provider to claude protocol preset', () => {
   assert.equal(migrated.model, 'claude-3-5-sonnet')
 })
 
+runTest('keeps custom base URL when migrating custom provider', () => {
+  const migrated = migrateLegacyLLMConfig({
+    provider: 'custom',
+    apiKey: 'sk-test',
+    model: 'gpt-4o-mini',
+    baseUrl: 'https://gateway.example.com/v1',
+  })
+
+  assert.equal(migrated.protocol, 'openai')
+  assert.equal(migrated.preset, 'custom-openai')
+  assert.equal(migrated.baseUrl, 'https://gateway.example.com/v1')
+})
+
 runTest('throws on unknown provider instead of returning undefined', () => {
   assert.throws(
     () =>
