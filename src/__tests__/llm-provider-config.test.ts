@@ -1,7 +1,8 @@
 import assert from 'node:assert/strict'
 
 import {
-  getProviderSettings,
+  getPresetOptions,
+  getProtocolOptions,
   normalizeOpenAICompatibleBaseUrl,
 } from '../services/llm-provider-config.js'
 
@@ -24,19 +25,29 @@ runTest('preserves existing /v1 suffix for OpenAI-compatible base URLs', () => {
   )
 })
 
-runTest('custom provider settings require a base URL and allow an optional API key', () => {
-  const settings = getProviderSettings('custom')
-
-  assert.equal(settings.apiKeyMode, 'optional')
-  assert.equal(settings.supportsBaseUrl, true)
-  assert.equal(settings.defaultBaseUrl, '')
-  assert.equal(settings.defaultModel, 'gpt-4o-mini')
+runTest('lists Claude-compatible as a top-level protocol', () => {
+  const protocols = getProtocolOptions()
+  assert.equal(protocols.some((entry) => entry.value === 'claude'), true)
 })
 
-runTest('ollama settings expose a local default base URL without requiring an API key', () => {
-  const settings = getProviderSettings('ollama')
+runTest('lists vendor presets under openai protocol instead of top-level providers', () => {
+  const presets = getPresetOptions('openai')
+  assert.deepEqual(
+    presets.map((entry) => entry.value),
+    ['openai-official', 'deepseek', 'siliconflow', 'zhipu', 'custom-openai'],
+  )
+})
 
-  assert.equal(settings.apiKeyMode, 'none')
-  assert.equal(settings.supportsBaseUrl, true)
-  assert.equal(settings.defaultBaseUrl, 'http://localhost:11434')
+runTest('exposes preset defaults and API key metadata for settings rendering', () => {
+  const [customOpenAI] = getPresetOptions('openai').slice(-1)
+  const [lmStudio] = getPresetOptions('local').filter((entry) => entry.value === 'lmstudio')
+
+  assert.equal(customOpenAI.defaultModel, 'gpt-4o-mini')
+  assert.equal(customOpenAI.defaultBaseUrl, '')
+  assert.equal(customOpenAI.apiKeyMode, 'optional')
+  assert.equal(customOpenAI.docsUrl, undefined)
+
+  assert.equal(lmStudio.defaultBaseUrl, 'http://localhost:1234')
+  assert.equal(lmStudio.apiKeyMode, 'none')
+  assert.equal(lmStudio.localMode, 'openai-compatible')
 })

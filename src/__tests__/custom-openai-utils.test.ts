@@ -7,10 +7,10 @@ function runTest(name: string, fn: () => void) {
   console.log(`PASS ${name}`)
 }
 
-runTest('falls back to non-streaming for bad gateway responses', () => {
+runTest('falls back to non-streaming for OpenAI-compatible protocol gateway responses', () => {
   assert.equal(shouldFallbackCustomStreaming(502), true)
 })
 
-runTest('does not treat normal client errors as stream fallback cases', () => {
+runTest('does not treat normal client errors as OpenAI-compatible stream fallback cases', () => {
   assert.equal(shouldFallbackCustomStreaming(400), false)
 })
