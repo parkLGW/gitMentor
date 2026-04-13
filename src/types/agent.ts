@@ -1,4 +1,19 @@
-import type { AnalysisEvidence, ConfidenceLevel } from "@/types/learning";
+import type { AnalysisEvidence, ConfidenceLevel } from "./learning.js";
+
+export interface RetrievedFileContext {
+  filePath: string;
+  branch?: string;
+  status: "fetched" | "failed" | "skipped";
+  snippet?: string;
+  reason?: string;
+}
+
+export interface AgentRetrievalPlan {
+  needsCodeContext: boolean;
+  targetFiles: string[];
+  reason: string;
+  confidence: ConfidenceLevel;
+}
 
 export type AgentRole = "user" | "assistant" | "system";
 
@@ -9,6 +24,9 @@ export interface AgentMessage {
   createdAt: number;
   evidence?: AnalysisEvidence[];
   confidence?: ConfidenceLevel;
+  retrievedFiles?: RetrievedFileContext[];
+  retrievalMode?: "summary-only" | "github-code";
+  retrievalNote?: string;
 }
 
 export interface SessionSummary {
