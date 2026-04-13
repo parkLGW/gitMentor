@@ -1,4 +1,4 @@
-import { STORAGE_PREFIXES } from "@/constants/storage";
+import { STORAGE_PREFIXES } from "../constants/storage.js";
 
 const EVICTABLE_PREFIXES = [
   STORAGE_PREFIXES.githubCache,

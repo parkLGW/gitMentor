@@ -4,7 +4,17 @@ import type { AnalysisEvidence, ConfidenceLevel, DeepFileAnalysisResult, Learnin
 import type { SourceMapOutput } from '@/prompts/types'
 import { createLearningMission } from '@/services/learning-mission'
 import { resolveProviderBaseUrl } from '@/services/llm-provider-config'
-import type { AgentMessage, AgentChatRequestPayload, AgentChatResponsePayload, SessionSummary } from '@/types/agent'
+import { fetchRetrievedGithubFiles, parseRetrievalPlan } from '@/services/agent-code-context'
+import { answerAgentQuestion } from '@/services/agent-chat-runtime'
+import { getDefaultBranch, getRawFileContent } from '@/services/github'
+import type {
+  AgentMessage,
+  AgentChatRequestPayload,
+  AgentChatResponsePayload,
+  AgentRetrievalPlan,
+  RetrievedFileContext,
+  SessionSummary,
+} from '@/types/agent'
 
 const LLM_CONFIG_KEY = 'gitmentor_llm_config'
 
@@ -97,6 +107,11 @@ const DEFAULT_LLM_TIMEOUT_MS = 30000
 const CONCEPT_LLM_TIMEOUT_MS = 55000
 const AGENT_LLM_TIMEOUT_MS = 60000
 const AGENT_SUMMARY_TIMEOUT_MS = 45000
+const AGENT_PLANNER_TIMEOUT_MS = 22000
+const AGENT_CODE_FETCH_TIMEOUT_MS = 7000
+const AGENT_CODE_CONTEXT_FILES_LIMIT = 5
+const AGENT_CODE_CONTEXT_CHARS_PER_FILE = 2200
+const AGENT_CODE_CONTEXT_CHARS_PER_FILE_LITE = 1000
 
 // Get LLM config from storage
 async function getLLMConfig(): Promise<LLMConfig | null> {
@@ -350,6 +365,323 @@ function normalizeAgentResponse(
     suggestedNextSteps,
     source: 'ai',
   }
+}
+
+function buildAgentRetrievalPlannerPrompt(payload: AgentChatRequestPayload, lang: Language): string {
+  const historyText = payload.recentMessages
+    .slice(-6)
+    .map((message) => `${message.role.toUpperCase()}: ${String(message.content || '').slice(0, 220)}`)
+    .join('\n')
+
+  const summaryText = payload.sessionSummary
+    ? [
+      String(payload.sessionSummary.summary || '').slice(0, 500),
+      `Key concepts: ${(payload.sessionSummary.keyConcepts || []).slice(0, 6).join(', ')}`,
+      `Unresolved: ${(payload.sessionSummary.unresolvedQuestions || []).slice(0, 4).join(', ')}`,
+      `Evidence files: ${(payload.sessionSummary.evidenceFiles || []).slice(0, 6).join(', ')}`,
+    ].join('\n')
+    : 'None'
+
+  if (lang === 'zh') {
+    return `你要先判断是否真的需要读取 GitHub 源码文件才能回答问题。
+
+仓库：${payload.repo.owner}/${payload.repo.name}
+
+README 摘要：
+${String(payload.readmeSummary || '暂无').slice(0, 900)}
+
+源码地图摘要：
+${String(payload.sourceMapSummary || '暂无').slice(0, 900)}
+
+历史会话摘要：
+${summaryText}
+
+最近对话：
+${historyText || '暂无'}
+
+用户问题：
+${payload.question}
+
+仅返回 JSON：
+{
+  "needsCodeContext": true,
+  "targetFiles": ["src/path/file.ts"],
+  "reason": "为什么需要或不需要源码",
+  "confidence": "low|medium|high"
+}
+
+规则：
+1) 只有在 README、源码地图、会话摘要不足以回答时，才把 needsCodeContext 设为 true。
+2) targetFiles 只写最相关的仓库相对路径，最多 5 个；不确定时返回空数组。
+3) 不要输出 markdown 代码块。`
+  }
+
+  return `Decide whether GitHub source files are actually needed to answer the user's question.
+
+Repository: ${payload.repo.owner}/${payload.repo.name}
+
+README summary:
+${String(payload.readmeSummary || 'N/A').slice(0, 900)}
+
+Source map summary:
+${String(payload.sourceMapSummary || 'N/A').slice(0, 900)}
+
+Session summary:
+${summaryText}
+
+Recent turns:
+${historyText || 'N/A'}
+
+User question:
+${payload.question}
+
+Return JSON only:
+{
+  "needsCodeContext": true,
+  "targetFiles": ["src/path/file.ts"],
+  "reason": "why code is or is not needed",
+  "confidence": "low|medium|high"
+}
+
+Rules:
+1) Set needsCodeContext to true only when summaries are not enough.
+2) targetFiles must be repo-relative paths, max 5; return [] when unsure.
+3) Do not output markdown code fences.`
+}
+
+function buildAgentCodePrompt(
+  payload: AgentChatRequestPayload,
+  plan: AgentRetrievalPlan,
+  retrievedFiles: RetrievedFileContext[],
+  lang: Language,
+  options?: { maxFiles?: number; maxCharsPerFile?: number },
+): string {
+  const fetchedFiles = retrievedFiles
+    .filter((file) => file.status === 'fetched' && file.snippet)
+    .slice(0, options?.maxFiles ?? AGENT_CODE_CONTEXT_FILES_LIMIT)
+
+  const codeContext = fetchedFiles
+    .map((file) => String(file.snippet || '').slice(0, options?.maxCharsPerFile ?? AGENT_CODE_CONTEXT_CHARS_PER_FILE))
+    .join('\n\n')
+
+  const failedFiles = retrievedFiles
+    .filter((file) => file.status !== 'fetched')
+    .map((file) => `${file.filePath}${file.reason ? ` (${file.reason})` : ''}`)
+    .join(', ')
+
+  const historyText = payload.recentMessages
+    .slice(-6)
+    .map((message) => `${message.role.toUpperCase()}: ${String(message.content || '').slice(0, 220)}`)
+    .join('\n')
+
+  const summaryText = payload.sessionSummary
+    ? [
+      String(payload.sessionSummary.summary || '').slice(0, 500),
+      `Key concepts: ${(payload.sessionSummary.keyConcepts || []).slice(0, 6).join(', ')}`,
+      `Unresolved: ${(payload.sessionSummary.unresolvedQuestions || []).slice(0, 4).join(', ')}`,
+    ].join('\n')
+    : 'None'
+
+  if (lang === 'zh') {
+    return `你是 GitHub 开源学习助手。面向初学者，用简洁中文回答，并优先依据给定源码片段。
+
+仓库：${payload.repo.owner}/${payload.repo.name}
+
+检索原因：${plan.reason || '需要补充源码上下文'}
+目标文件：${plan.targetFiles.join(', ') || '暂无'}
+
+历史会话摘要：
+${summaryText}
+
+最近对话：
+${historyText || '暂无'}
+
+用户问题：
+${payload.question}
+
+README 摘要：
+${String(payload.readmeSummary || '暂无').slice(0, 700)}
+
+源码地图摘要：
+${String(payload.sourceMapSummary || '暂无').slice(0, 700)}
+
+已获取源码上下文：
+${codeContext || '暂无'}
+
+未成功获取的文件：
+${failedFiles || '无'}
+
+请仅返回 JSON：
+{
+  "answer": "2-6 句可执行建议，不要固定以“先看”开头",
+  "confidence": "low|medium|high",
+  "evidence": [
+    {"filePath": "path/to/file", "lineStart": 1, "snippet": "短片段", "reason": "为什么相关"}
+  ],
+  "suggestedNextSteps": ["下一步 1", "下一步 2"]
+}
+
+规则：
+1) 优先使用已获取源码上下文回答；如果仍不确定，要明确说明。
+2) evidence 优先引用已获取文件。
+3) 不要输出 markdown 代码块。`
+  }
+
+  return `You are a beginner-friendly GitHub learning assistant. Answer concisely and ground your answer in the provided code context.
+
+Repository: ${payload.repo.owner}/${payload.repo.name}
+
+Retrieval reason: ${plan.reason || 'Need additional code context'}
+Target files: ${plan.targetFiles.join(', ') || 'N/A'}
+
+Session summary:
+${summaryText}
+
+Recent turns:
+${historyText || 'N/A'}
+
+User question:
+${payload.question}
+
+README summary:
+${String(payload.readmeSummary || 'N/A').slice(0, 700)}
+
+Source map summary:
+${String(payload.sourceMapSummary || 'N/A').slice(0, 700)}
+
+Retrieved code context:
+${codeContext || 'N/A'}
+
+Files that could not be retrieved:
+${failedFiles || 'None'}
+
+Return JSON only:
+{
+  "answer": "2-6 actionable sentences, avoid starting with \"read first\"",
+  "confidence": "low|medium|high",
+  "evidence": [
+    {"filePath": "path/to/file", "lineStart": 1, "snippet": "short snippet", "reason": "why relevant"}
+  ],
+  "suggestedNextSteps": ["next step 1", "next step 2"]
+}
+
+Rules:
+1) Use the retrieved code context as your primary grounding.
+2) Prefer evidence from fetched files.
+3) Do not output markdown code fences.`
+}
+
+async function runAgentPromptWithFallback(params: {
+  config: LLMConfig
+  lang: Language
+  prompt: string
+  litePrompt: string
+  retryReason: string
+}): Promise<AgentChatResponsePayload> {
+  try {
+    const response = await callLLM(params.config, params.prompt, {
+      timeoutMs: AGENT_LLM_TIMEOUT_MS,
+      maxTokens: 360,
+    })
+    const parsed = safeParseJSON(response)
+    return normalizeAgentResponse(parsed || { answer: response }, params.lang)
+  } catch (firstError) {
+    const firstMessage = firstError instanceof Error ? firstError.message : 'Agent chat failed'
+    if (firstMessage !== 'REQUEST_TIMEOUT') {
+      throw firstError
+    }
+  }
+
+  const retryResponse = await callLLM(params.config, params.litePrompt, {
+    timeoutMs: 28000,
+    maxTokens: 220,
+  })
+  const retryParsed = safeParseJSON(retryResponse)
+  const retryData = normalizeAgentResponse(retryParsed || { answer: retryResponse }, params.lang)
+  return {
+    ...retryData,
+    downgraded: true,
+    reason: params.retryReason,
+  }
+}
+
+async function planAgentRetrieval(
+  config: LLMConfig,
+  payload: AgentChatRequestPayload,
+  lang: Language,
+): Promise<AgentRetrievalPlan> {
+  try {
+    const prompt = buildAgentRetrievalPlannerPrompt(payload, lang)
+    const response = await callLLM(config, prompt, {
+      timeoutMs: AGENT_PLANNER_TIMEOUT_MS,
+      maxTokens: 220,
+    })
+    return parseRetrievalPlan(safeParseJSON(response) || {})
+  } catch (error) {
+    console.warn('[GitMentor SW] Agent retrieval planner fallback:', error)
+    return parseRetrievalPlan({
+      needsCodeContext: false,
+      targetFiles: [],
+      reason: 'planner_fallback_summary_only',
+      confidence: 'low',
+    })
+  }
+}
+
+async function fetchAgentRetrievedFiles(
+  payload: AgentChatRequestPayload,
+  targetFiles: string[],
+): Promise<RetrievedFileContext[]> {
+  return await fetchRetrievedGithubFiles(
+    {
+      owner: payload.repo.owner,
+      repo: payload.repo.name,
+      targetFiles,
+      timeoutMs: AGENT_CODE_FETCH_TIMEOUT_MS,
+      maxFiles: AGENT_CODE_CONTEXT_FILES_LIMIT,
+      maxCharsPerFile: AGENT_CODE_CONTEXT_CHARS_PER_FILE,
+    },
+    {
+      getDefaultBranch,
+      getRawFileContent,
+    },
+  )
+}
+
+async function answerAgentWithSummary(
+  config: LLMConfig,
+  payload: AgentChatRequestPayload,
+  lang: Language,
+): Promise<AgentChatResponsePayload> {
+  return await runAgentPromptWithFallback({
+    config,
+    lang,
+    prompt: buildAgentChatPrompt(payload, lang),
+    litePrompt: buildAgentChatPromptLite(payload, lang),
+    retryReason: 'timeout_retried_with_compact_prompt',
+  })
+}
+
+async function answerAgentWithCode(
+  config: LLMConfig,
+  payload: AgentChatRequestPayload,
+  plan: AgentRetrievalPlan,
+  retrievedFiles: RetrievedFileContext[],
+  lang: Language,
+): Promise<AgentChatResponsePayload> {
+  return await runAgentPromptWithFallback({
+    config,
+    lang,
+    prompt: buildAgentCodePrompt(payload, plan, retrievedFiles, lang, {
+      maxFiles: AGENT_CODE_CONTEXT_FILES_LIMIT,
+      maxCharsPerFile: AGENT_CODE_CONTEXT_CHARS_PER_FILE,
+    }),
+    litePrompt: buildAgentCodePrompt(payload, plan, retrievedFiles, lang, {
+      maxFiles: 2,
+      maxCharsPerFile: AGENT_CODE_CONTEXT_CHARS_PER_FILE_LITE,
+    }),
+    retryReason: 'timeout_retried_with_compact_code_prompt',
+  })
 }
 
 function isAbortError(error: unknown): boolean {
@@ -885,47 +1217,15 @@ Return only JSON:
           return
         }
 
-        const prompt = buildAgentChatPrompt(payload, lang)
-        try {
-          const response = await callLLM(config, prompt, {
-            timeoutMs: AGENT_LLM_TIMEOUT_MS,
-            maxTokens: 360,
-          })
-          const parsed = safeParseJSON(response)
-          const normalized = normalizeAgentResponse(parsed || { answer: response }, lang)
-          sendResponse({ data: normalized })
-          return
-        } catch (firstError) {
-          const firstMessage = firstError instanceof Error ? firstError.message : 'Agent chat failed'
-          if (firstMessage !== 'REQUEST_TIMEOUT') {
-            throw firstError
-          }
-        }
-
-        // Timeout fallback: retry once with compact context and smaller token budget.
-        try {
-          const litePrompt = buildAgentChatPromptLite(payload, lang)
-          const retryResponse = await callLLM(config, litePrompt, {
-            timeoutMs: 28000,
-            maxTokens: 220,
-          })
-          const retryParsed = safeParseJSON(retryResponse)
-          const retryData = normalizeAgentResponse(retryParsed || { answer: retryResponse }, lang)
-          sendResponse({
-            data: {
-              ...retryData,
-              downgraded: true,
-              reason: 'timeout_retried_with_compact_prompt',
-            },
-          })
-          return
-        } catch (retryError) {
-          const retryMessage = retryError instanceof Error ? retryError.message : 'Agent chat retry failed'
-          sendResponse({
-            error: retryMessage === 'REQUEST_TIMEOUT' ? 'REQUEST_TIMEOUT' : retryMessage,
-          })
-          return
-        }
+        const data = await answerAgentQuestion(payload, {
+          planRetriever: async (runtimePayload) => await planAgentRetrieval(config, runtimePayload, lang),
+          fetchFiles: async (runtimePayload, targetFiles) => await fetchAgentRetrievedFiles(runtimePayload, targetFiles),
+          answerWithSummary: async (runtimePayload) => await answerAgentWithSummary(config, runtimePayload, lang),
+          answerWithCode: async ({ payload: runtimePayload, plan, retrievedFiles }) =>
+            await answerAgentWithCode(config, runtimePayload, plan, retrievedFiles, lang),
+        })
+        sendResponse({ data })
+        return
       } catch (error) {
         const messageText = error instanceof Error ? error.message : 'Agent chat failed'
         sendResponse({

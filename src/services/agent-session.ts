@@ -1,7 +1,10 @@
 import { StorageKeys } from "@/constants/storage";
 import type {
+  AgentRetrievalMode,
   AgentMessage,
   AgentSession,
+  RetrievedFileMetadata,
+  RetrievedFileStatus,
   SessionSummary,
 } from "@/types/agent";
 import { estimateTokens } from "@/services/usage-tracker";
@@ -14,6 +17,11 @@ const COMPRESSION_MESSAGE_THRESHOLD = 14;
 const COMPRESSION_TOKEN_THRESHOLD = 5200;
 const MAX_QUESTION_LENGTH = 1200;
 const MAX_ANSWER_LENGTH = 3000;
+const MAX_RETRIEVED_FILES = 5;
+const MAX_RETRIEVAL_NOTE_LENGTH = 220;
+const MAX_RETRIEVED_FILE_PATH_LENGTH = 260;
+const MAX_RETRIEVED_FILE_BRANCH_LENGTH = 120;
+const MAX_RETRIEVED_FILE_REASON_LENGTH = 160;
 
 export function getRepoKey(repo: { owner: string; name: string }): string {
   return `${repo.owner}/${repo.name}`;
@@ -52,7 +60,10 @@ export function loadAgentSession(repoKey: string): AgentSession {
     return {
       ...data,
       recentMessages: Array.isArray(data.recentMessages)
-        ? data.recentMessages.slice(-MAX_RECENT_MESSAGES)
+        ? data.recentMessages
+          .map((message) => normalizeAgentMessage(message))
+          .filter((message) => Boolean(message.content))
+          .slice(-MAX_RECENT_MESSAGES)
         : [],
       messageCount: typeof data.messageCount === "number"
         ? data.messageCount
@@ -68,7 +79,10 @@ export function persistAgentSession(session: AgentSession): boolean {
     ...session,
     schemaVersion: AGENT_SESSION_SCHEMA_VERSION,
     updatedAt: Date.now(),
-    recentMessages: session.recentMessages.slice(-MAX_RECENT_MESSAGES),
+    recentMessages: session.recentMessages
+      .map((message) => normalizeAgentMessage(message))
+      .filter((message) => Boolean(message.content))
+      .slice(-MAX_RECENT_MESSAGES),
   };
   return setJsonCacheWithEviction(
     getAgentSessionStorageKey(session.repoKey),
@@ -83,17 +97,76 @@ function normalizeMessageContent(content: string, role: AgentMessage["role"]): s
   return trimmed.slice(0, limit);
 }
 
+function normalizeRetrievedFileStatus(input: unknown): RetrievedFileStatus | undefined {
+  if (input === "fetched" || input === "failed" || input === "skipped") {
+    return input;
+  }
+  return undefined;
+}
+
+function normalizeRetrievalMode(input: unknown): AgentRetrievalMode | undefined {
+  if (input === "summary-only" || input === "github-code") return input;
+  return undefined;
+}
+
+function normalizeRetrievedFiles(input: unknown): RetrievedFileMetadata[] | undefined {
+  if (!Array.isArray(input)) return undefined;
+
+  const seen = new Set<string>();
+  const normalized = input
+    .map((item) => {
+      const value = item as Partial<RetrievedFileMetadata>;
+      const filePath = String(value?.filePath || "")
+        .trim()
+        .replace(/\\/g, "/")
+        .slice(0, MAX_RETRIEVED_FILE_PATH_LENGTH);
+      const status = normalizeRetrievedFileStatus(value?.status);
+      if (!filePath || !status) return null;
+
+      const branch = String(value?.branch || "")
+        .trim()
+        .slice(0, MAX_RETRIEVED_FILE_BRANCH_LENGTH);
+      const reason = String(value?.reason || "")
+        .trim()
+        .slice(0, MAX_RETRIEVED_FILE_REASON_LENGTH);
+
+      const key = `${filePath}::${branch || "main"}::${status}`;
+      if (seen.has(key)) return null;
+      seen.add(key);
+
+      return {
+        filePath,
+        status,
+        ...(branch ? { branch } : {}),
+        ...(reason ? { reason } : {}),
+      } satisfies RetrievedFileMetadata;
+    })
+    .filter(Boolean) as RetrievedFileMetadata[];
+
+  return normalized.length ? normalized.slice(0, MAX_RETRIEVED_FILES) : undefined;
+}
+
+function normalizeRetrievalNote(input: unknown): string | undefined {
+  const trimmed = String(input || "").trim();
+  return trimmed ? trimmed.slice(0, MAX_RETRIEVAL_NOTE_LENGTH) : undefined;
+}
+
+function normalizeAgentMessage(message: AgentMessage): AgentMessage {
+  return {
+    ...message,
+    content: normalizeMessageContent(message.content, message.role),
+    retrievedFiles: normalizeRetrievedFiles(message.retrievedFiles),
+    retrievalMode: normalizeRetrievalMode(message.retrievalMode),
+    retrievalNote: normalizeRetrievalNote(message.retrievalNote),
+  };
+}
+
 export function appendMessage(
   session: AgentSession,
   message: AgentMessage,
 ): AgentSession {
-  const content = normalizeMessageContent(message.content, message.role);
-  if (!content) return session;
-
-  const normalizedMessage: AgentMessage = {
-    ...message,
-    content,
-  };
+  const normalizedMessage = normalizeAgentMessage(message);
+  if (!normalizedMessage.content) return session;
 
   return {
     ...session,
