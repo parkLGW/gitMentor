@@ -2,6 +2,8 @@ import assert from 'node:assert/strict'
 
 import {
   getProviderSettings,
+  getPresetOptions,
+  getProtocolOptions,
   normalizeOpenAICompatibleBaseUrl,
 } from '../services/llm-provider-config.js'
 
@@ -24,19 +26,63 @@ runTest('preserves existing /v1 suffix for OpenAI-compatible base URLs', () => {
   )
 })
 
-runTest('custom provider settings require a base URL and allow an optional API key', () => {
-  const settings = getProviderSettings('custom')
-
-  assert.equal(settings.apiKeyMode, 'optional')
-  assert.equal(settings.supportsBaseUrl, true)
-  assert.equal(settings.defaultBaseUrl, '')
-  assert.equal(settings.defaultModel, 'gpt-4o-mini')
+runTest('lists Claude-compatible as a top-level protocol', () => {
+  const protocols = getProtocolOptions()
+  assert.equal(protocols.some((entry) => entry.value === 'claude'), true)
 })
 
-runTest('ollama settings expose a local default base URL without requiring an API key', () => {
-  const settings = getProviderSettings('ollama')
+runTest('lists vendor presets under openai protocol instead of top-level providers', () => {
+  const presets = getPresetOptions('openai')
+  assert.deepEqual(
+    presets.map((entry) => entry.value),
+    ['openai-official', 'deepseek', 'siliconflow', 'zhipu', 'custom-openai'],
+  )
+})
 
-  assert.equal(settings.apiKeyMode, 'none')
-  assert.equal(settings.supportsBaseUrl, true)
-  assert.equal(settings.defaultBaseUrl, 'http://localhost:11434')
+runTest('returns local presets for local protocol', () => {
+  const presets = getPresetOptions('local')
+  assert.deepEqual(
+    presets.map((entry) => entry.value),
+    ['ollama', 'lmstudio', 'custom-local'],
+  )
+})
+
+runTest('exposes preset defaults and API key metadata for settings rendering', () => {
+  const customOpenAI = getPresetOptions('openai').find((entry) => entry.value === 'custom-openai')
+  const [lmStudio] = getPresetOptions('local').filter((entry) => entry.value === 'lmstudio')
+
+  assert.ok(customOpenAI)
+  assert.equal(customOpenAI.defaultModel, 'gpt-4o-mini')
+  assert.equal(customOpenAI.defaultBaseUrl, '')
+  assert.equal(customOpenAI.apiKeyMode, 'optional')
+  assert.equal(customOpenAI.docsUrl, undefined)
+
+  assert.equal(lmStudio.defaultBaseUrl, 'http://localhost:1234')
+  assert.equal(lmStudio.apiKeyMode, 'none')
+  assert.equal(lmStudio.localMode, 'openai-compatible')
+})
+
+runTest('returns defensive copies for protocol and preset metadata', () => {
+  const [protocol] = getProtocolOptions()
+  const [preset] = getPresetOptions('openai')
+
+  protocol.label.zh = 'changed'
+  preset.label.en = 'changed'
+
+  assert.equal(getProtocolOptions()[0].label.zh, 'OpenAI 兼容协议')
+  assert.equal(getPresetOptions('openai')[0].label.en, 'OpenAI')
+})
+
+runTest('keeps legacy provider settings for existing callers', () => {
+  const custom = getProviderSettings('custom')
+  const claude = getProviderSettings('claude')
+
+  assert.equal(custom.value, 'custom')
+  assert.equal(custom.defaultModel, 'gpt-4o-mini')
+  assert.equal(custom.apiKeyMode, 'optional')
+  assert.equal(custom.supportsBaseUrl, true)
+
+  assert.equal(claude.value, 'claude')
+  assert.equal(claude.defaultModel, 'claude-3-sonnet-20240229')
+  assert.equal(claude.docsUrl, 'https://console.anthropic.com')
 })

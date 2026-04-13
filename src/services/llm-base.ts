@@ -1,12 +1,14 @@
 // Base LLM Provider implementations
 
-import { LLMConfig, LLMProvider, LLMProviderType, LLMResponse } from '@/types/llm'
-import { resolveProviderBaseUrl } from '@/services/llm-provider-config'
+import { LLMConfig, LLMProtocolType, LLMProvider, LLMResponse } from '@/types/llm'
+import { migrateLegacyLLMConfig } from '@/services/llm-config-migration'
+import { normalizeOpenAICompatibleBaseUrl, resolveProviderBaseUrl } from '@/services/llm-provider-config'
+import { resolveClaudeCompatibleMessagesUrl } from '@/services/claude-compatible-utils'
 import { shouldFallbackCustomStreaming } from '@/services/custom-openai-utils'
 
 export abstract class BaseLLMProvider implements LLMProvider {
   abstract name: string
-  abstract type: LLMProviderType
+  abstract type: LLMProtocolType
   
   protected config: LLMConfig | null = null
   protected isConfiguredFlag = false
@@ -293,7 +295,7 @@ export class OpenAIProvider extends BaseLLMProvider {
 // Custom OpenAI-compatible Provider
 export class CustomOpenAIProvider extends BaseLLMProvider {
   name = 'Custom OpenAI-compatible API'
-  type = 'custom' as const
+  type = 'openai' as const
 
   private buildHeaders(apiKey: string): Record<string, string> {
     return apiKey
@@ -451,7 +453,7 @@ export class CustomOpenAIProvider extends BaseLLMProvider {
 // Ollama Provider (local)
 export class OllamaProvider extends BaseLLMProvider {
   name = 'Ollama (Local)'
-  type = 'ollama' as const
+  type = 'local' as const
 
   async complete(prompt: string, systemPrompt?: string): Promise<LLMResponse> {
     const config = this.getConfig()
@@ -547,7 +549,7 @@ export class OllamaProvider extends BaseLLMProvider {
 
 // DeepSeek Provider - 超便宜的中文LLM
 export class DeepSeekProvider extends BaseLLMProvider {
-  type: LLMProviderType = 'deepseek'
+  type: LLMProtocolType = 'openai'
   name = 'DeepSeek'
 
   private async fetchWithRetry(
@@ -723,7 +725,7 @@ export class DeepSeekProvider extends BaseLLMProvider {
 
 // LM Studio Provider - 本地免费运行，兼容OpenAI API
 export class LMStudioProvider extends BaseLLMProvider {
-  type: LLMProviderType = 'lmstudio'
+  type: LLMProtocolType = 'local'
   name = 'LM Studio'
 
   async complete(prompt: string, systemPrompt?: string): Promise<LLMResponse> {
@@ -836,7 +838,7 @@ export class LMStudioProvider extends BaseLLMProvider {
 
 // Zhipu (ChatGLM) Provider
 export class ZhipuProvider extends BaseLLMProvider {
-  type: LLMProviderType = 'zhipu'
+  type: LLMProtocolType = 'openai'
   name = 'Zhipu AI (ChatGLM)'
 
   async complete(prompt: string, systemPrompt?: string): Promise<LLMResponse> {
@@ -958,7 +960,7 @@ export class ZhipuProvider extends BaseLLMProvider {
 
 // Silicon Flow Provider - 硅基流动
 export class SiliconFlowProvider extends BaseLLMProvider {
-  type: LLMProviderType = 'siliconflow'
+  type: LLMProtocolType = 'openai'
   name = 'Silicon Flow (硅基流动)'
 
   async complete(prompt: string, systemPrompt?: string, signal?: AbortSignal): Promise<LLMResponse> {
@@ -1074,6 +1076,604 @@ export class SiliconFlowProvider extends BaseLLMProvider {
         headers: {
           'Authorization': `Bearer ${config.apiKey}`,
         },
+      })
+      return response.ok
+    } catch {
+      return false
+    }
+  }
+}
+
+export class OpenAICompatibleProvider extends BaseLLMProvider {
+  name = 'OpenAI-Compatible Protocol'
+  type: LLMProtocolType = 'openai'
+
+  private resolveApiUrl(config: LLMConfig): string {
+    const normalized = migrateLegacyLLMConfig(config)
+
+    switch (normalized.preset) {
+      case 'openai-official':
+        return 'https://api.openai.com/v1/chat/completions'
+      case 'deepseek':
+        return 'https://api.deepseek.com/v1/chat/completions'
+      case 'siliconflow':
+        return 'https://api.siliconflow.cn/v1/chat/completions'
+      case 'zhipu':
+        return 'https://open.bigmodel.cn/api/paas/v4/chat/completions'
+      case 'custom-openai': {
+        const baseUrl = normalizeOpenAICompatibleBaseUrl(normalized.baseUrl || '')
+        if (!baseUrl) {
+          throw new Error('Custom provider base URL is required')
+        }
+        return `${baseUrl}/chat/completions`
+      }
+      default:
+        // Should not happen: migrateLegacyLLMConfig maps all current legacy providers.
+        throw new Error(`Unsupported OpenAI-compatible preset: ${normalized.preset}`)
+    }
+  }
+
+  private buildHeaders(config: LLMConfig): Record<string, string> {
+    const normalized = migrateLegacyLLMConfig(config)
+    const apiKey = normalized.apiKey || ''
+    const isCustom = normalized.preset === 'custom-openai'
+
+    const headers: Record<string, string> = {
+      'Content-Type': 'application/json',
+    }
+
+    if (!isCustom || apiKey) {
+      headers.Authorization = `Bearer ${apiKey}`
+    }
+
+    return headers
+  }
+
+  async complete(prompt: string, systemPrompt?: string, signal?: AbortSignal): Promise<LLMResponse> {
+    const config = this.getConfig()
+    const normalized = migrateLegacyLLMConfig(config)
+    const apiUrl = this.resolveApiUrl(config)
+
+    try {
+      const response = await fetch(apiUrl, {
+        method: 'POST',
+        headers: this.buildHeaders(config),
+        body: JSON.stringify({
+          model:
+            normalized.model ||
+            (normalized.preset === 'deepseek'
+              ? 'deepseek-chat'
+              : normalized.preset === 'siliconflow'
+                ? 'Qwen/Qwen2.5-72B-Instruct'
+                : normalized.preset === 'zhipu'
+                  ? 'glm-4'
+                  : normalized.preset === 'custom-openai'
+                    ? 'gpt-4o-mini'
+                    : 'gpt-4o-mini'),
+          max_tokens: normalized.maxTokens || 2000,
+          temperature: normalized.temperature ?? 0.7,
+          messages: [
+            { role: 'system', content: this.createSystemPrompt(systemPrompt) },
+            { role: 'user', content: prompt },
+          ],
+        }),
+        signal,
+      })
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}))
+        const message = errorData.error?.message || response.statusText || `HTTP ${response.status}`
+        throw new Error(message)
+      }
+
+      const data = await response.json()
+      return {
+        content: data.choices?.[0]?.message?.content || '',
+        model: data.model || normalized.model,
+        tokensUsed: {
+          prompt: data.usage?.prompt_tokens || 0,
+          completion: data.usage?.completion_tokens || 0,
+          total: data.usage?.total_tokens || 0,
+        },
+      }
+    } catch (error) {
+      if (error instanceof Error && error.name === 'AbortError') {
+        throw error
+      }
+      throw new Error(`OpenAI-compatible error: ${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
+
+  async *stream(prompt: string, systemPrompt?: string): AsyncGenerator<string> {
+    const config = this.getConfig()
+    const normalized = migrateLegacyLLMConfig(config)
+    const apiUrl = this.resolveApiUrl(config)
+
+    try {
+      const response = await fetch(apiUrl, {
+        method: 'POST',
+        headers: this.buildHeaders(config),
+        body: JSON.stringify({
+          model:
+            normalized.model ||
+            (normalized.preset === 'deepseek'
+              ? 'deepseek-chat'
+              : normalized.preset === 'siliconflow'
+                ? 'Qwen/Qwen2.5-72B-Instruct'
+                : normalized.preset === 'zhipu'
+                  ? 'glm-4'
+                  : normalized.preset === 'custom-openai'
+                    ? 'gpt-4o-mini'
+                    : 'gpt-4o-mini'),
+          max_tokens: normalized.maxTokens || 2000,
+          temperature: normalized.temperature ?? 0.7,
+          stream: true,
+          messages: [
+            { role: 'system', content: this.createSystemPrompt(systemPrompt) },
+            { role: 'user', content: prompt },
+          ],
+        }),
+      })
+
+      if (!response.ok) {
+        if (normalized.preset === 'custom-openai' && shouldFallbackCustomStreaming(response.status)) {
+          const fallback = await this.complete(prompt, systemPrompt)
+          if (fallback.content) yield fallback.content
+          return
+        }
+        throw new Error(`OpenAI-compatible API error: ${response.statusText}`)
+      }
+
+      const reader = response.body?.getReader()
+      if (!reader) {
+        const fallback = await this.complete(prompt, systemPrompt)
+        if (fallback.content) yield fallback.content
+        return
+      }
+
+      const decoder = new TextDecoder()
+      let buffer = ''
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split('\n')
+        buffer = lines.pop() || ''
+
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue
+          const dataStr = line.slice(6)
+          if (dataStr === '[DONE]') continue
+          try {
+            const data = JSON.parse(dataStr)
+            const chunk = data.choices?.[0]?.delta?.content
+            if (chunk) yield chunk
+          } catch {
+            // Skip malformed SSE chunks
+          }
+        }
+      }
+    } catch (error) {
+      throw new Error(`OpenAI-compatible stream error: ${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
+
+  async testConnection(): Promise<boolean> {
+    try {
+      const config = this.getConfig()
+      const apiUrl = this.resolveApiUrl(config)
+      const normalized = migrateLegacyLLMConfig(config)
+
+      const response = await fetch(apiUrl, {
+        method: 'POST',
+        headers: this.buildHeaders(config),
+        body: JSON.stringify({
+          model:
+            normalized.model ||
+            (normalized.preset === 'deepseek'
+              ? 'deepseek-chat'
+              : normalized.preset === 'siliconflow'
+                ? 'Qwen/Qwen2.5-72B-Instruct'
+                : normalized.preset === 'zhipu'
+                  ? 'glm-4'
+                  : normalized.preset === 'custom-openai'
+                    ? 'gpt-4o-mini'
+                    : 'gpt-4o-mini'),
+          max_tokens: 1,
+          temperature: 0,
+          messages: [{ role: 'user', content: 'ping' }],
+        }),
+      })
+
+      return response.ok
+    } catch {
+      return false
+    }
+  }
+}
+
+export class ClaudeCompatibleProvider extends BaseLLMProvider {
+  name = 'Claude-Compatible Protocol'
+  type: LLMProtocolType = 'claude'
+
+  private resolveApiUrl(config: LLMConfig): string {
+    const normalized = migrateLegacyLLMConfig(config)
+    if (normalized.preset === 'anthropic-official') {
+      return 'https://api.anthropic.com/v1/messages'
+    }
+    if (normalized.preset === 'custom-claude') {
+      const url = resolveClaudeCompatibleMessagesUrl(normalized.baseUrl)
+      if (!url) throw new Error('Claude-compatible base URL is required')
+      return url
+    }
+    throw new Error(`Unsupported Claude-compatible preset: ${normalized.preset}`)
+  }
+
+  private buildHeaders(config: LLMConfig): Record<string, string> {
+    const normalized = migrateLegacyLLMConfig(config)
+    const headers: Record<string, string> = {
+      'anthropic-version': '2023-06-01',
+      'content-type': 'application/json',
+    }
+    if (normalized.apiKey) {
+      headers['x-api-key'] = normalized.apiKey
+    }
+    return headers
+  }
+
+  async complete(prompt: string, systemPrompt?: string, signal?: AbortSignal): Promise<LLMResponse> {
+    const config = this.getConfig()
+    const normalized = migrateLegacyLLMConfig(config)
+    const apiUrl = this.resolveApiUrl(config)
+
+    try {
+      const response = await fetch(apiUrl, {
+        method: 'POST',
+        headers: this.buildHeaders(config),
+        body: JSON.stringify({
+          model: normalized.model || 'claude-3-sonnet-20240229',
+          max_tokens: normalized.maxTokens || 2000,
+          system: this.createSystemPrompt(systemPrompt),
+          messages: [{ role: 'user', content: prompt }],
+        }),
+        signal,
+      })
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}))
+        const message = errorData.error?.message || response.statusText || `HTTP ${response.status}`
+        throw new Error(message)
+      }
+
+      const data = await response.json()
+      return {
+        content: data.content?.[0]?.text || '',
+        model: data.model || normalized.model,
+        tokensUsed: {
+          prompt: data.usage?.input_tokens || 0,
+          completion: data.usage?.output_tokens || 0,
+          total: (data.usage?.input_tokens || 0) + (data.usage?.output_tokens || 0),
+        },
+      }
+    } catch (error) {
+      if (error instanceof Error && error.name === 'AbortError') {
+        throw error
+      }
+      throw new Error(`Claude-compatible error: ${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
+
+  async *stream(prompt: string, systemPrompt?: string): AsyncGenerator<string> {
+    const config = this.getConfig()
+    const normalized = migrateLegacyLLMConfig(config)
+    const apiUrl = this.resolveApiUrl(config)
+
+    try {
+      const response = await fetch(apiUrl, {
+        method: 'POST',
+        headers: this.buildHeaders(config),
+        body: JSON.stringify({
+          model: normalized.model || 'claude-3-sonnet-20240229',
+          max_tokens: normalized.maxTokens || 2000,
+          system: this.createSystemPrompt(systemPrompt),
+          messages: [{ role: 'user', content: prompt }],
+          stream: true,
+        }),
+      })
+
+      if (!response.ok) {
+        throw new Error(`Claude API error: ${response.statusText}`)
+      }
+
+      const reader = response.body?.getReader()
+      if (!reader) throw new Error('No response body')
+
+      const decoder = new TextDecoder()
+      let buffer = ''
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split('\n')
+        buffer = lines.pop() || ''
+
+        for (const line of lines) {
+          if (!line.startsWith('data: ')) continue
+          try {
+            const data = JSON.parse(line.slice(6))
+            if (data.type === 'content_block_delta' && data.delta?.type === 'text_delta') {
+              yield data.delta.text
+            }
+          } catch {
+            // Skip invalid JSON lines
+          }
+        }
+      }
+    } catch (error) {
+      throw new Error(`Claude stream error: ${error instanceof Error ? error.message : String(error)}`)
+    }
+  }
+
+  async testConnection(): Promise<boolean> {
+    try {
+      const config = this.getConfig()
+      const normalized = migrateLegacyLLMConfig(config)
+      const apiUrl = this.resolveApiUrl(config)
+
+      const response = await fetch(apiUrl, {
+        method: 'POST',
+        headers: this.buildHeaders(config),
+        body: JSON.stringify({
+          model: normalized.model || 'claude-3-sonnet-20240229',
+          max_tokens: 20,
+          messages: [{ role: 'user', content: 'Say "ok"' }],
+        }),
+      })
+
+      return response.ok
+    } catch {
+      return false
+    }
+  }
+}
+
+export class LocalProvider extends BaseLLMProvider {
+  name = 'Local Protocol'
+  type: LLMProtocolType = 'local'
+
+  private isOllama(config: LLMConfig): boolean {
+    const normalized = migrateLegacyLLMConfig(config)
+    return normalized.localMode === 'ollama' || normalized.preset === 'ollama'
+  }
+
+  async complete(prompt: string, systemPrompt?: string, signal?: AbortSignal): Promise<LLMResponse> {
+    const config = this.getConfig()
+    const normalized = migrateLegacyLLMConfig(config)
+
+    if (this.isOllama(config)) {
+      const baseUrl = resolveProviderBaseUrl('ollama', normalized.baseUrl) || 'http://localhost:11434'
+      const response = await fetch(`${baseUrl}/api/generate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: normalized.model || 'mistral',
+          prompt: `${this.createSystemPrompt(systemPrompt)}\n\n${prompt}`,
+          stream: false,
+        }),
+        signal,
+      })
+
+      if (!response.ok) {
+        throw new Error(`Ollama API error: ${response.statusText}`)
+      }
+
+      const data = await response.json()
+      return {
+        content: data.response || '',
+        model: normalized.model || 'mistral',
+      }
+    }
+
+    const baseUrl =
+      normalized.preset === 'custom-local'
+        ? normalizeOpenAICompatibleBaseUrl(normalized.baseUrl || '')
+        : (resolveProviderBaseUrl('lmstudio', normalized.baseUrl) || 'http://localhost:1234').replace(/\/+$/, '')
+
+    if (!baseUrl) {
+      throw new Error('Local OpenAI-compatible base URL is required')
+    }
+
+    const apiUrl =
+      normalized.preset === 'custom-local' ? `${baseUrl}/chat/completions` : `${baseUrl}/v1/chat/completions`
+
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+    if (normalized.apiKey) {
+      headers.Authorization = `Bearer ${normalized.apiKey}`
+    }
+
+    const response = await fetch(apiUrl, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        model: normalized.model || 'local-model',
+        temperature: normalized.temperature ?? 0.7,
+        max_tokens: normalized.maxTokens || 2000,
+        messages: [
+          { role: 'system', content: this.createSystemPrompt(systemPrompt) },
+          { role: 'user', content: prompt },
+        ],
+      }),
+      signal,
+    })
+
+    if (!response.ok) {
+      throw new Error(`Local OpenAI-compatible API error: ${response.statusText}`)
+    }
+
+    const data = await response.json()
+    return {
+      content: data.choices?.[0]?.message?.content || '',
+      model: normalized.model || 'local-model',
+      tokensUsed: {
+        prompt: data.usage?.prompt_tokens || 0,
+        completion: data.usage?.completion_tokens || 0,
+        total: data.usage?.total_tokens || 0,
+      },
+    }
+  }
+
+  async *stream(prompt: string, systemPrompt?: string): AsyncGenerator<string> {
+    const config = this.getConfig()
+    const normalized = migrateLegacyLLMConfig(config)
+
+    if (this.isOllama(config)) {
+      const baseUrl = resolveProviderBaseUrl('ollama', normalized.baseUrl) || 'http://localhost:11434'
+      const response = await fetch(`${baseUrl}/api/generate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model: normalized.model || 'mistral',
+          prompt: `${this.createSystemPrompt(systemPrompt)}\n\n${prompt}`,
+          stream: true,
+        }),
+      })
+
+      if (!response.ok) {
+        throw new Error(`Ollama API error: ${response.statusText}`)
+      }
+
+      const reader = response.body?.getReader()
+      if (!reader) throw new Error('No response body')
+
+      const decoder = new TextDecoder()
+      let buffer = ''
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+
+        buffer += decoder.decode(value, { stream: true })
+        const lines = buffer.split('\n')
+        buffer = lines.pop() || ''
+
+        for (const line of lines) {
+          if (!line.trim()) continue
+          try {
+            const data = JSON.parse(line)
+            if (data.response) yield data.response
+          } catch {
+            // Skip invalid JSON lines
+          }
+        }
+      }
+
+      return
+    }
+
+    const baseUrl =
+      normalized.preset === 'custom-local'
+        ? normalizeOpenAICompatibleBaseUrl(normalized.baseUrl || '')
+        : (resolveProviderBaseUrl('lmstudio', normalized.baseUrl) || 'http://localhost:1234').replace(/\/+$/, '')
+
+    if (!baseUrl) {
+      throw new Error('Local OpenAI-compatible base URL is required')
+    }
+
+    const apiUrl =
+      normalized.preset === 'custom-local' ? `${baseUrl}/chat/completions` : `${baseUrl}/v1/chat/completions`
+
+    const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+    if (normalized.apiKey) {
+      headers.Authorization = `Bearer ${normalized.apiKey}`
+    }
+
+    const response = await fetch(apiUrl, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        model: normalized.model || 'local-model',
+        temperature: normalized.temperature ?? 0.7,
+        max_tokens: normalized.maxTokens || 2000,
+        stream: true,
+        messages: [
+          { role: 'system', content: this.createSystemPrompt(systemPrompt) },
+          { role: 'user', content: prompt },
+        ],
+      }),
+    })
+
+    if (!response.ok) {
+      throw new Error(`Local OpenAI-compatible API error: ${response.statusText}`)
+    }
+
+    const reader = response.body?.getReader()
+    if (!reader) throw new Error('No response body')
+
+    const decoder = new TextDecoder()
+    let buffer = ''
+
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+
+      buffer += decoder.decode(value, { stream: true })
+      const lines = buffer.split('\n')
+      buffer = lines.pop() || ''
+
+      for (const line of lines) {
+        if (!line.startsWith('data: ')) continue
+        const dataStr = line.slice(6)
+        if (dataStr === '[DONE]') continue
+        try {
+          const data = JSON.parse(dataStr)
+          const chunk = data.choices?.[0]?.delta?.content
+          if (chunk) yield chunk
+        } catch {
+          // Skip malformed SSE chunks
+        }
+      }
+    }
+  }
+
+  async testConnection(): Promise<boolean> {
+    try {
+      const config = this.getConfig()
+      const normalized = migrateLegacyLLMConfig(config)
+
+      if (this.isOllama(config)) {
+        const baseUrl = resolveProviderBaseUrl('ollama', normalized.baseUrl) || 'http://localhost:11434'
+        const response = await fetch(`${baseUrl}/api/tags`)
+        return response.ok
+      }
+
+      const baseUrl =
+        normalized.preset === 'custom-local'
+          ? normalizeOpenAICompatibleBaseUrl(normalized.baseUrl || '')
+          : (resolveProviderBaseUrl('lmstudio', normalized.baseUrl) || 'http://localhost:1234').replace(/\/+$/, '')
+
+      if (!baseUrl) return false
+
+      const apiUrl =
+        normalized.preset === 'custom-local' ? `${baseUrl}/chat/completions` : `${baseUrl}/v1/chat/completions`
+
+      const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+      if (normalized.apiKey) {
+        headers.Authorization = `Bearer ${normalized.apiKey}`
+      }
+
+      const response = await fetch(apiUrl, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          model: normalized.model || 'local-model',
+          temperature: 0,
+          max_tokens: 1,
+          messages: [{ role: 'user', content: 'ping' }],
+        }),
       })
       return response.ok
     } catch {

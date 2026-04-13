@@ -3,10 +3,12 @@ declare const chrome: any
 import type { AnalysisEvidence, ConfidenceLevel, DeepFileAnalysisResult, LearningMission } from '@/types/learning'
 import type { SourceMapOutput } from '@/prompts/types'
 import { createLearningMission } from '@/services/learning-mission'
-import { resolveProviderBaseUrl } from '@/services/llm-provider-config'
+import { normalizeOpenAICompatibleBaseUrl, resolveProviderBaseUrl } from '@/services/llm-provider-config'
 import { fetchRetrievedGithubFiles, parseRetrievalPlan } from '@/services/agent-code-context'
 import { answerAgentQuestion } from '@/services/agent-chat-runtime'
+import { resolveClaudeCompatibleMessagesUrl } from '@/services/claude-compatible-utils'
 import { getDefaultBranch, getRawFileContent } from '@/services/github'
+import { migrateLegacyLLMConfig } from '@/services/llm-config-migration'
 import type {
   AgentMessage,
   AgentChatRequestPayload,
@@ -15,6 +17,7 @@ import type {
   RetrievedFileContext,
   SessionSummary,
 } from '@/types/agent'
+import type { LLMConfig as StoredLLMConfig } from '@/types/llm'
 
 const LLM_CONFIG_KEY = 'gitmentor_llm_config'
 
@@ -93,16 +96,6 @@ function getAnalysisText(lang: Language, key: keyof typeof translations.en, vars
   return text
 }
 
-// LLM Configuration stored in chrome.storage
-interface LLMConfig {
-  provider: 'claude' | 'openai' | 'custom' | 'ollama' | 'deepseek' | 'lmstudio' | 'zhipu' | 'siliconflow'
-  apiKey: string
-  model?: string
-  baseUrl?: string
-  temperature?: number
-  maxTokens?: number
-}
-
 const DEFAULT_LLM_TIMEOUT_MS = 30000
 const CONCEPT_LLM_TIMEOUT_MS = 55000
 const AGENT_LLM_TIMEOUT_MS = 60000
@@ -114,7 +107,7 @@ const AGENT_CODE_CONTEXT_CHARS_PER_FILE = 2200
 const AGENT_CODE_CONTEXT_CHARS_PER_FILE_LITE = 1000
 
 // Get LLM config from storage
-async function getLLMConfig(): Promise<LLMConfig | null> {
+async function getLLMConfig(): Promise<StoredLLMConfig | null> {
   return new Promise((resolve) => {
     // 使用与 popup 相同的键名
     chrome.storage.local.get([LLM_CONFIG_KEY], (result: any) => {
@@ -572,7 +565,7 @@ Rules:
 }
 
 async function runAgentPromptWithFallback(params: {
-  config: LLMConfig
+  config: StoredLLMConfig
   lang: Language
   prompt: string
   litePrompt: string
@@ -606,7 +599,7 @@ async function runAgentPromptWithFallback(params: {
 }
 
 async function planAgentRetrieval(
-  config: LLMConfig,
+  config: StoredLLMConfig,
   payload: AgentChatRequestPayload,
   lang: Language,
 ): Promise<AgentRetrievalPlan> {
@@ -649,7 +642,7 @@ async function fetchAgentRetrievedFiles(
 }
 
 async function answerAgentWithSummary(
-  config: LLMConfig,
+  config: StoredLLMConfig,
   payload: AgentChatRequestPayload,
   lang: Language,
 ): Promise<AgentChatResponsePayload> {
@@ -663,7 +656,7 @@ async function answerAgentWithSummary(
 }
 
 async function answerAgentWithCode(
-  config: LLMConfig,
+  config: StoredLLMConfig,
   payload: AgentChatRequestPayload,
   plan: AgentRetrievalPlan,
   retrievedFiles: RetrievedFileContext[],
@@ -691,140 +684,163 @@ function isAbortError(error: unknown): boolean {
 
 // Call LLM API
 async function callLLM(
-  config: LLMConfig,
+  config: StoredLLMConfig,
   prompt: string,
   options?: { timeoutMs?: number; maxTokens?: number },
 ): Promise<string> {
   let apiUrl: string
   let headers: Record<string, string>
   let body: any
+  const normalized = migrateLegacyLLMConfig(config)
   const requestedMaxTokens =
     typeof options?.maxTokens === 'number' && options.maxTokens > 0
       ? Math.floor(options.maxTokens)
       : undefined
 
-  switch (config.provider) {
-    case 'openai':
-      apiUrl = 'https://api.openai.com/v1/chat/completions'
-      headers = {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${config.apiKey}`,
-      }
-      body = {
-        model: config.model || 'gpt-4o-mini',
-        messages: [{ role: 'user', content: prompt }],
-        temperature: 0.3,
-        max_tokens: requestedMaxTokens ?? config.maxTokens ?? 420,
-      }
-      break
-
-    case 'custom': {
-      const baseUrl = resolveProviderBaseUrl('custom', config.baseUrl)
-      if (!baseUrl) {
-        throw new Error('Custom provider base URL is required')
-      }
-      apiUrl = `${baseUrl}/chat/completions`
-      headers = {
-        'Content-Type': 'application/json',
-      }
-      if (config.apiKey) {
-        headers.Authorization = `Bearer ${config.apiKey}`
-      }
-      body = {
-        model: config.model || 'gpt-4o-mini',
-        messages: [{ role: 'user', content: prompt }],
-        temperature: 0.3,
-        max_tokens: requestedMaxTokens ?? config.maxTokens ?? 420,
+  switch (normalized.protocol) {
+    case 'openai': {
+      switch (normalized.preset) {
+        case 'openai-official':
+          apiUrl = 'https://api.openai.com/v1/chat/completions'
+          headers = {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${normalized.apiKey}`,
+          }
+          body = {
+            model: normalized.model || 'gpt-4o-mini',
+            messages: [{ role: 'user', content: prompt }],
+            temperature: 0.3,
+            max_tokens: requestedMaxTokens ?? normalized.maxTokens ?? 420,
+          }
+          break
+        case 'custom-openai': {
+          const baseUrl = normalizeOpenAICompatibleBaseUrl(normalized.baseUrl || '')
+          if (!baseUrl) {
+            throw new Error('Custom provider base URL is required')
+          }
+          apiUrl = `${baseUrl}/chat/completions`
+          headers = { 'Content-Type': 'application/json' }
+          if (normalized.apiKey) {
+            headers.Authorization = `Bearer ${normalized.apiKey}`
+          }
+          body = {
+            model: normalized.model || 'gpt-4o-mini',
+            messages: [{ role: 'user', content: prompt }],
+            temperature: 0.3,
+            max_tokens: requestedMaxTokens ?? normalized.maxTokens ?? 420,
+          }
+          break
+        }
+        case 'deepseek':
+          apiUrl = 'https://api.deepseek.com/v1/chat/completions'
+          headers = {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${normalized.apiKey}`,
+          }
+          body = {
+            model: normalized.model || 'deepseek-chat',
+            messages: [{ role: 'user', content: prompt }],
+            temperature: 0.3,
+            max_tokens: requestedMaxTokens ?? normalized.maxTokens ?? 420,
+          }
+          break
+        case 'siliconflow':
+          apiUrl = 'https://api.siliconflow.cn/v1/chat/completions'
+          headers = {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${normalized.apiKey}`,
+          }
+          body = {
+            model: normalized.model || 'Qwen/Qwen2.5-72B-Instruct',
+            messages: [{ role: 'user', content: prompt }],
+            temperature: 0.3,
+            max_tokens: requestedMaxTokens ?? normalized.maxTokens ?? 420,
+          }
+          break
+        case 'zhipu':
+          apiUrl = 'https://open.bigmodel.cn/api/paas/v4/chat/completions'
+          headers = {
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${normalized.apiKey}`,
+          }
+          body = {
+            model: normalized.model || 'glm-4',
+            messages: [{ role: 'user', content: prompt }],
+            temperature: 0.3,
+            max_tokens: requestedMaxTokens ?? normalized.maxTokens ?? 420,
+          }
+          break
+        default:
+          throw new Error(`Unsupported OpenAI-compatible preset: ${normalized.preset}`)
       }
       break
     }
+    case 'claude': {
+      if (normalized.preset === 'custom-claude') {
+        apiUrl = resolveClaudeCompatibleMessagesUrl(normalized.baseUrl)
+        if (!apiUrl) {
+          throw new Error('Claude-compatible base URL is required')
+        }
+      } else {
+        apiUrl = 'https://api.anthropic.com/v1/messages'
+      }
 
-    case 'claude':
-      apiUrl = 'https://api.anthropic.com/v1/messages'
       headers = {
         'Content-Type': 'application/json',
-        'x-api-key': config.apiKey,
         'anthropic-version': '2023-06-01',
       }
+      if (normalized.apiKey) {
+        headers['x-api-key'] = normalized.apiKey
+      }
       body = {
-        model: config.model || 'claude-3-haiku-20240307',
-        max_tokens: requestedMaxTokens ?? config.maxTokens ?? 700,
+        model: normalized.model || 'claude-3-haiku-20240307',
+        max_tokens: requestedMaxTokens ?? normalized.maxTokens ?? 700,
         messages: [{ role: 'user', content: prompt }],
       }
       break
+    }
+    case 'local': {
+      const isOllama = normalized.localMode === 'ollama' || normalized.preset === 'ollama'
 
-    case 'deepseek':
-      apiUrl = 'https://api.deepseek.com/v1/chat/completions'
+      if (isOllama) {
+        apiUrl = `${resolveProviderBaseUrl('ollama', normalized.baseUrl) || 'http://localhost:11434'}/api/chat`
+        headers = {
+          'Content-Type': 'application/json',
+        }
+        body = {
+          model: normalized.model || 'llama2',
+          messages: [{ role: 'user', content: prompt }],
+          stream: false,
+        }
+        break
+      }
+
+      if (normalized.preset === 'custom-local') {
+        const baseUrl = normalizeOpenAICompatibleBaseUrl(normalized.baseUrl || '')
+        if (!baseUrl) {
+          throw new Error('Local OpenAI-compatible base URL is required')
+        }
+        apiUrl = `${baseUrl}/chat/completions`
+      } else {
+        apiUrl = `${resolveProviderBaseUrl('lmstudio', normalized.baseUrl) || 'http://localhost:1234'}/v1/chat/completions`
+      }
+
       headers = {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${config.apiKey}`,
+      }
+      if (normalized.apiKey) {
+        headers.Authorization = `Bearer ${normalized.apiKey}`
       }
       body = {
-        model: config.model || 'deepseek-chat',
+        model: normalized.model || 'local-model',
         messages: [{ role: 'user', content: prompt }],
         temperature: 0.3,
-        max_tokens: requestedMaxTokens ?? config.maxTokens ?? 420,
+        max_tokens: requestedMaxTokens ?? normalized.maxTokens ?? 420,
       }
       break
-
-    case 'siliconflow':
-      apiUrl = 'https://api.siliconflow.cn/v1/chat/completions'
-      headers = {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${config.apiKey}`,
-      }
-      body = {
-        model: config.model || 'Qwen/Qwen2.5-72B-Instruct',
-        messages: [{ role: 'user', content: prompt }],
-        temperature: 0.3,
-        max_tokens: requestedMaxTokens ?? config.maxTokens ?? 420,
-      }
-      break
-
-    case 'zhipu':
-      apiUrl = 'https://open.bigmodel.cn/api/paas/v4/chat/completions'
-      headers = {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${config.apiKey}`,
-      }
-      body = {
-        model: config.model || 'glm-4',
-        messages: [{ role: 'user', content: prompt }],
-        temperature: 0.3,
-        max_tokens: requestedMaxTokens ?? config.maxTokens ?? 420,
-      }
-      break
-
-    case 'ollama':
-      apiUrl = `${resolveProviderBaseUrl('ollama', config.baseUrl) || 'http://localhost:11434'}/api/chat`
-      headers = {
-        'Content-Type': 'application/json',
-      }
-      body = {
-        model: config.model || 'llama2',
-        messages: [{ role: 'user', content: prompt }],
-        stream: false,
-      }
-      break
-
-    case 'lmstudio':
-      apiUrl = `${resolveProviderBaseUrl('lmstudio', config.baseUrl) || 'http://localhost:1234'}/v1/chat/completions`
-      headers = {
-        'Content-Type': 'application/json',
-      }
-      if (config.apiKey) {
-        headers.Authorization = `Bearer ${config.apiKey}`
-      }
-      body = {
-        model: config.model || 'local-model',
-        messages: [{ role: 'user', content: prompt }],
-        temperature: 0.3,
-        max_tokens: requestedMaxTokens ?? config.maxTokens ?? 420,
-      }
-      break
-
+    }
     default:
-      throw new Error(`Unknown provider: ${config.provider}`)
+      throw new Error(`Unknown protocol: ${normalized.protocol}`)
   }
 
   const controller = new AbortController()
@@ -849,11 +865,13 @@ async function callLLM(
     const data = await response.json()
 
     // Extract content based on provider
-    if (config.provider === 'claude') {
+    if (normalized.protocol === 'claude') {
       return data.content?.[0]?.text || ''
-    } else {
-      return data.choices?.[0]?.message?.content || ''
     }
+    if (normalized.protocol === 'local' && (normalized.localMode === 'ollama' || normalized.preset === 'ollama')) {
+      return data.message?.content || ''
+    }
+    return data.choices?.[0]?.message?.content || ''
   } catch (error) {
     if (isAbortError(error)) {
       throw new Error('REQUEST_TIMEOUT')
@@ -965,7 +983,7 @@ function quickAnalyzeFile(fileName: string, fileContent: string, lang: Language 
 
 // Deep file analysis with LLM
 async function deepAnalyzeFile(
-  config: LLMConfig,
+  config: StoredLLMConfig,
   fileName: string,
   fileContent: string,
   lang: Language = 'en',
