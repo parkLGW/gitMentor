@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 
 import {
+  getProviderSettings,
   getPresetOptions,
   getProtocolOptions,
   normalizeOpenAICompatibleBaseUrl,
@@ -39,9 +40,10 @@ runTest('lists vendor presets under openai protocol instead of top-level provide
 })
 
 runTest('exposes preset defaults and API key metadata for settings rendering', () => {
-  const [customOpenAI] = getPresetOptions('openai').slice(-1)
+  const customOpenAI = getPresetOptions('openai').find((entry) => entry.value === 'custom-openai')
   const [lmStudio] = getPresetOptions('local').filter((entry) => entry.value === 'lmstudio')
 
+  assert.ok(customOpenAI)
   assert.equal(customOpenAI.defaultModel, 'gpt-4o-mini')
   assert.equal(customOpenAI.defaultBaseUrl, '')
   assert.equal(customOpenAI.apiKeyMode, 'optional')
@@ -50,4 +52,29 @@ runTest('exposes preset defaults and API key metadata for settings rendering', (
   assert.equal(lmStudio.defaultBaseUrl, 'http://localhost:1234')
   assert.equal(lmStudio.apiKeyMode, 'none')
   assert.equal(lmStudio.localMode, 'openai-compatible')
+})
+
+runTest('returns defensive copies for protocol and preset metadata', () => {
+  const [protocol] = getProtocolOptions()
+  const [preset] = getPresetOptions('openai')
+
+  protocol.label.zh = 'changed'
+  preset.label.en = 'changed'
+
+  assert.equal(getProtocolOptions()[0].label.zh, 'OpenAI 兼容协议')
+  assert.equal(getPresetOptions('openai')[0].label.en, 'OpenAI')
+})
+
+runTest('keeps legacy provider settings for existing callers', () => {
+  const custom = getProviderSettings('custom')
+  const claude = getProviderSettings('claude')
+
+  assert.equal(custom.value, 'custom')
+  assert.equal(custom.defaultModel, 'gpt-4o-mini')
+  assert.equal(custom.apiKeyMode, 'optional')
+  assert.equal(custom.supportsBaseUrl, true)
+
+  assert.equal(claude.value, 'claude')
+  assert.equal(claude.defaultModel, 'claude-3-sonnet-20240229')
+  assert.equal(claude.docsUrl, 'https://console.anthropic.com')
 })

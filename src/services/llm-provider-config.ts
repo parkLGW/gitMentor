@@ -319,17 +319,30 @@ function getPresetSettings(type: LLMPresetType): PresetSettings {
   return PRESET_SETTINGS[type]
 }
 
+function cloneLocalizedText(value: { zh: string; en: string }): { zh: string; en: string } {
+  return { ...value }
+}
+
+function clonePresetOption(preset: PresetSettings): PresetOption {
+  return {
+    ...preset,
+    label: cloneLocalizedText(preset.label),
+    description: cloneLocalizedText(preset.description),
+    baseUrlHint: preset.baseUrlHint ? cloneLocalizedText(preset.baseUrlHint) : undefined,
+  }
+}
+
 function toProviderSettings(type: LLMProviderType): ProviderSettings {
   const preset = getPresetSettings(LEGACY_PROVIDER_TO_PRESET[type])
 
   return {
     value: type,
-    label: preset.label,
-    description: preset.description,
+    label: cloneLocalizedText(preset.label),
+    description: cloneLocalizedText(preset.description),
     defaultModel: preset.defaultModel,
     defaultBaseUrl: preset.defaultBaseUrl,
     baseUrlPlaceholder: preset.baseUrlPlaceholder,
-    baseUrlHint: preset.baseUrlHint,
+    baseUrlHint: preset.baseUrlHint ? cloneLocalizedText(preset.baseUrlHint) : undefined,
     modelPlaceholder: preset.modelPlaceholder,
     cost: preset.cost,
     apiKeyMode: preset.apiKeyMode,
@@ -347,11 +360,18 @@ export function getVisibleProviderSettings(): ProviderSettings[] {
 }
 
 export function getProtocolOptions(): ProtocolOption[] {
-  return PROTOCOL_ORDER.map((type) => PROTOCOL_OPTIONS[type])
+  return PROTOCOL_ORDER.map((type) => {
+    const protocol = PROTOCOL_OPTIONS[type]
+    return {
+      value: protocol.value,
+      label: cloneLocalizedText(protocol.label),
+      description: cloneLocalizedText(protocol.description),
+    }
+  })
 }
 
 export function getPresetOptions(protocol: LLMProtocolType): PresetOption[] {
-  return PRESET_ORDER_BY_PROTOCOL[protocol].map((type) => getPresetSettings(type))
+  return PRESET_ORDER_BY_PROTOCOL[protocol].map((type) => clonePresetOption(getPresetSettings(type)))
 }
 
 export function normalizeOpenAICompatibleBaseUrl(baseUrl: string): string {
