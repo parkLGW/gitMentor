@@ -1,0 +1,21 @@
+export const AGENT_LLM_TIMEOUT_MS = 240000;
+export const AGENT_LLM_RETRY_TIMEOUT_MS = 180000;
+export const AGENT_SUMMARY_TIMEOUT_MS = 180000;
+export const AGENT_PLANNER_TIMEOUT_MS = 60000;
+export const AGENT_CODE_FETCH_TIMEOUT_MS = 30000;
+
+const AGENT_RUNTIME_MESSAGE_BUFFER_MS = 90000;
+
+export function getAgentWorstCaseRuntimeTimeoutMs(): number {
+  return (
+    AGENT_PLANNER_TIMEOUT_MS +
+    AGENT_CODE_FETCH_TIMEOUT_MS +
+    AGENT_LLM_TIMEOUT_MS +
+    AGENT_LLM_RETRY_TIMEOUT_MS
+  );
+}
+
+export const AGENT_CHAT_REQUEST_TIMEOUT_MS = Math.max(
+  600000,
+  getAgentWorstCaseRuntimeTimeoutMs() + AGENT_RUNTIME_MESSAGE_BUFFER_MS
+);
