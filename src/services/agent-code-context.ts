@@ -1,5 +1,9 @@
 import type { ConfidenceLevel } from "../types/learning.js";
-import type { AgentRetrievalPlan, RetrievedFileContext } from "../types/agent.js";
+import type {
+  AgentProgressEvent,
+  AgentRetrievalPlan,
+  RetrievedFileContext,
+} from "../types/agent.js";
 
 export interface RetrievalPlanInput {
   needsCodeContext?: boolean;
@@ -43,8 +47,28 @@ export interface GithubFileRetrievalDependencies {
   ) => Promise<string | null>;
 }
 
+export interface RepoTreeNode {
+  name?: string;
+  path: string;
+  type: "dir" | "file";
+  children?: RepoTreeNode[];
+}
+
+export interface CandidateRankingInput {
+  question: string;
+  repoPaths: string[];
+  preferredPaths?: string[];
+  sourceMapSummary?: string;
+  readmeSummary?: string;
+  sessionSummary?: string;
+}
+
 const MAX_TARGET_FILES = 5;
 const WRAPPING_PUNCTUATION = /^[`"'()[\]{}<>,;:!?]+|[`"'()[\]{}<>,;:!?]+$/g;
+const CODE_FILE_EXTENSION_PATTERN =
+  /\.(ts|tsx|js|jsx|mjs|cjs|py|go|java|rs|rb|php|cs|swift|kt|scala|vue|svelte)$/i;
+const LOW_PRIORITY_PATH_PATTERN =
+  /(^|\/)(dist|build|coverage|node_modules|vendor|\.next|\.github)(\/|$)/i;
 
 function toConfidenceLevel(input?: ConfidenceLevel): ConfidenceLevel {
   if (input === "low" || input === "medium" || input === "high") {
@@ -133,9 +157,132 @@ export function buildRetrievedFileEvidence(
   return files.slice(0, MAX_TARGET_FILES);
 }
 
+export function flattenTreeFilePaths(nodes: RepoTreeNode[]): string[] {
+  const paths: string[] = [];
+
+  const visit = (items: RepoTreeNode[]) => {
+    for (const item of items) {
+      if (item.type === "file") {
+        const normalized = normalizeCandidatePath(item.path);
+        if (normalized) {
+          paths.push(normalized);
+        }
+        continue;
+      }
+      if (item.children?.length) {
+        visit(item.children);
+      }
+    }
+  };
+
+  visit(nodes);
+  return Array.from(new Set(paths));
+}
+
+function tokenizeRankingText(input: string): string[] {
+  return Array.from(
+    new Set(
+      input
+        .toLowerCase()
+        .replace(/[^a-z0-9/_-]+/g, " ")
+        .split(/\s+/)
+        .map((token) => token.trim())
+        .filter((token) => token.length >= 2),
+    ),
+  );
+}
+
+function scoreCandidateFile(
+  filePath: string,
+  preferredPaths: Set<string>,
+  joinedText: string,
+  tokens: string[],
+): number {
+  let score = 0;
+  const normalized = filePath.toLowerCase();
+  const fileName = normalized.split("/").pop() || normalized;
+  const fileStem = fileName.replace(/\.[^.]+$/, "");
+  const segments = normalized.split("/").filter(Boolean);
+
+  if (preferredPaths.has(normalized)) {
+    score += 10_000;
+  }
+  if (joinedText.includes(normalized)) {
+    score += 800;
+  }
+  if (joinedText.includes(fileName)) {
+    score += 320;
+  }
+  if (fileStem.length >= 3 && joinedText.includes(fileStem)) {
+    score += 220;
+  }
+
+  for (const token of tokens) {
+    if (normalized.includes(token)) {
+      score += token.length >= 5 ? 90 : 45;
+    }
+  }
+
+  if (CODE_FILE_EXTENSION_PATTERN.test(normalized)) {
+    score += 40;
+  }
+  if (LOW_PRIORITY_PATH_PATTERN.test(normalized)) {
+    score -= 120;
+  }
+  if (/(^|\/)(test|tests|__tests__|spec|specs)(\/|$)/i.test(normalized)) {
+    score -= 80;
+  }
+  if (/(^|\/)(readme|docs)(\/|$)|\.md$/i.test(normalized)) {
+    score -= 60;
+  }
+  if (segments.includes("src")) {
+    score += 25;
+  }
+
+  return score;
+}
+
+export function rankCandidateFiles(input: CandidateRankingInput): string[] {
+  const repoPaths = Array.from(
+    new Set(input.repoPaths.map(normalizeCandidatePath).filter(Boolean)),
+  );
+  const preferredPaths = new Set(
+    (input.preferredPaths || [])
+      .map(normalizeCandidatePath)
+      .filter(Boolean)
+      .map((item) => item.toLowerCase()),
+  );
+  const rankingText = [
+    input.question,
+    input.sourceMapSummary || "",
+    input.readmeSummary || "",
+    input.sessionSummary || "",
+    ...(input.preferredPaths || []),
+  ]
+    .join("\n")
+    .toLowerCase();
+  const tokens = tokenizeRankingText(rankingText);
+
+  return [...repoPaths]
+    .map((filePath) => ({
+      filePath,
+      score: scoreCandidateFile(filePath, preferredPaths, rankingText, tokens),
+    }))
+    .sort((left, right) => {
+      if (right.score !== left.score) {
+        return right.score - left.score;
+      }
+      return left.filePath.localeCompare(right.filePath);
+    })
+    .map((item) => item.filePath);
+}
+
 export async function fetchRetrievedGithubFiles(
   request: GithubFileRetrievalRequest,
-  deps: GithubFileRetrievalDependencies
+  deps: GithubFileRetrievalDependencies,
+  onProgress?: (
+    progress: Pick<AgentProgressEvent, "completed" | "total">
+  ) => void | Promise<void>,
 ): Promise<RetrievedFileContext[]> {
   let defaultBranch: string | undefined;
   try {
@@ -150,36 +297,48 @@ export async function fetchRetrievedGithubFiles(
   const maxFiles = request.maxFiles ?? MAX_TARGET_FILES;
   const maxCharsPerFile = request.maxCharsPerFile ?? Number.POSITIVE_INFINITY;
 
-  const retrievedFiles = await Promise.all(
-    request.targetFiles.slice(0, maxFiles).map(async (filePath) => {
-      for (const branch of branchCandidates) {
-        const content = await deps.getRawFileContent(
-          request.owner,
-          request.repo,
-          branch,
-          filePath,
-          { timeoutMs: request.timeoutMs }
-        );
-        if (!content) {
-          continue;
-        }
+  const targetFiles = request.targetFiles.slice(0, maxFiles);
+  const retrievedFiles: RetrievedFileContext[] = [];
 
-        const truncated = truncateFileForPrompt(filePath, content, maxCharsPerFile);
-        return {
-          filePath,
-          branch,
-          status: "fetched" as const,
-          snippet: truncated.prompt,
-        };
+  for (const [index, filePath] of targetFiles.entries()) {
+    let retrieved: RetrievedFileContext | null = null;
+
+    for (const branch of branchCandidates) {
+      const content = await deps.getRawFileContent(
+        request.owner,
+        request.repo,
+        branch,
+        filePath,
+        { timeoutMs: request.timeoutMs }
+      );
+      if (!content) {
+        continue;
       }
 
-      return {
+      const truncated = truncateFileForPrompt(filePath, content, maxCharsPerFile);
+      retrieved = {
         filePath,
-        status: "failed" as const,
+        branch,
+        status: "fetched",
+        snippet: truncated.prompt,
+      };
+      break;
+    }
+
+    if (!retrieved) {
+      retrieved = {
+        filePath,
+        status: "failed",
         reason: "content_unavailable",
       };
-    })
-  );
+    }
+
+    retrievedFiles.push(retrieved);
+    await onProgress?.({
+      completed: index + 1,
+      total: targetFiles.length,
+    });
+  }
 
   return buildRetrievedFileEvidence(retrievedFiles);
 }

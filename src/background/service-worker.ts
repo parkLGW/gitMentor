@@ -4,15 +4,31 @@ import type { AnalysisEvidence, ConfidenceLevel, DeepFileAnalysisResult, Learnin
 import type { SourceMapOutput } from '@/prompts/types'
 import { createLearningMission } from '@/services/learning-mission'
 import { normalizeOpenAICompatibleBaseUrl, resolveProviderBaseUrl } from '@/services/llm-provider-config'
-import { fetchRetrievedGithubFiles, parseRetrievalPlan } from '@/services/agent-code-context'
-import { answerAgentQuestion } from '@/services/agent-chat-runtime'
+import { fetchRetrievedGithubFiles, flattenTreeFilePaths, parseRetrievalPlan, rankCandidateFiles } from '@/services/agent-code-context'
+import { answerAgentQuestion, buildFastPathAgentAnswer, buildLocalFallbackAnswer } from '@/services/agent-chat-runtime'
+import { buildAgentRetrievalPlannerPrompt } from '@/services/agent-retrieval-planner-prompt'
 import { resolveClaudeCompatibleMessagesUrl } from '@/services/claude-compatible-utils'
-import { getDefaultBranch, getRawFileContent } from '@/services/github'
+import { shouldFallbackCustomStreaming } from '@/services/custom-openai-utils'
+import { withKeepAlive } from '@/services/extension-keepalive'
+import { getDefaultBranch, getFullDirectoryTree, getRawFileContent } from '@/services/github'
 import { migrateLegacyLLMConfig } from '@/services/llm-config-migration'
+import {
+  readClaudeMessageStream,
+  readOllamaJsonStream,
+  readOpenAICompatibleStream,
+} from '@/services/llm-stream'
+import {
+  AGENT_CODE_FETCH_TIMEOUT_MS,
+  AGENT_LLM_RETRY_TIMEOUT_MS,
+  AGENT_LLM_TIMEOUT_MS,
+  AGENT_PLANNER_TIMEOUT_MS,
+  AGENT_SUMMARY_TIMEOUT_MS,
+} from '@/services/agent-timeouts'
 import type {
   AgentMessage,
   AgentChatRequestPayload,
   AgentChatResponsePayload,
+  AgentProgressEvent,
   AgentRetrievalPlan,
   RetrievedFileContext,
   SessionSummary,
@@ -21,10 +37,9 @@ import type { LLMConfig as StoredLLMConfig } from '@/types/llm'
 
 const LLM_CONFIG_KEY = 'gitmentor_llm_config'
 
-console.log('[GitMentor SW] Service worker loaded!')
-
 // Language type
 type Language = 'zh' | 'en'
+type StreamMode = 'openai-compatible' | 'claude' | 'ollama' | null
 
 // Translations for analysis results
 const translations = {
@@ -98,13 +113,11 @@ function getAnalysisText(lang: Language, key: keyof typeof translations.en, vars
 
 const DEFAULT_LLM_TIMEOUT_MS = 30000
 const CONCEPT_LLM_TIMEOUT_MS = 55000
-const AGENT_LLM_TIMEOUT_MS = 60000
-const AGENT_SUMMARY_TIMEOUT_MS = 45000
-const AGENT_PLANNER_TIMEOUT_MS = 22000
-const AGENT_CODE_FETCH_TIMEOUT_MS = 7000
 const AGENT_CODE_CONTEXT_FILES_LIMIT = 5
 const AGENT_CODE_CONTEXT_CHARS_PER_FILE = 2200
 const AGENT_CODE_CONTEXT_CHARS_PER_FILE_LITE = 1000
+const AGENT_DISCOVERY_TREE_DEPTH = 3
+const AGENT_CHAT_PORT_NAME = 'gitmentor-agent-chat'
 
 // Get LLM config from storage
 async function getLLMConfig(): Promise<StoredLLMConfig | null> {
@@ -221,6 +234,64 @@ function buildHeuristicSummary(
     evidenceFiles,
     updatedAt: Date.now(),
   }
+}
+
+function parseAgentChatPayload(rawPayload: Partial<AgentChatRequestPayload>): AgentChatRequestPayload {
+  return {
+    repo: {
+      owner: String(rawPayload.repo?.owner || ''),
+      name: String(rawPayload.repo?.name || ''),
+    },
+    language: rawPayload.language === 'zh' ? 'zh' : 'en',
+    question: String(rawPayload.question || ''),
+    sourceMapSummary: String(rawPayload.sourceMapSummary || ''),
+    readmeSummary: String(rawPayload.readmeSummary || ''),
+    sessionSummary: (rawPayload.sessionSummary || null) as SessionSummary | null,
+    recentMessages: Array.isArray(rawPayload.recentMessages)
+      ? rawPayload.recentMessages as AgentMessage[]
+      : [],
+  }
+}
+
+function buildAgentSessionSummaryText(summary: SessionSummary | null): string {
+  if (!summary) return ''
+  return [
+    String(summary.summary || '').slice(0, 500),
+    `Key concepts: ${(summary.keyConcepts || []).slice(0, 6).join(', ')}`,
+    `Unresolved: ${(summary.unresolvedQuestions || []).slice(0, 4).join(', ')}`,
+    `Evidence files: ${(summary.evidenceFiles || []).slice(0, 6).join(', ')}`,
+  ].join('\n')
+}
+
+async function discoverAgentFiles(
+  payload: AgentChatRequestPayload,
+  plan: AgentRetrievalPlan,
+): Promise<string[]> {
+  const preferredPaths = plan.targetFiles.slice(0, AGENT_CODE_CONTEXT_FILES_LIMIT)
+  const tree = await getFullDirectoryTree(
+    payload.repo.owner,
+    payload.repo.name,
+    AGENT_DISCOVERY_TREE_DEPTH,
+  ).catch(() => [])
+  const repoPaths = flattenTreeFilePaths(tree)
+
+  if (repoPaths.length === 0) {
+    return preferredPaths
+  }
+
+  const ranked = rankCandidateFiles({
+    question: `${payload.question}\n${plan.reason || ''}`,
+    sourceMapSummary: payload.sourceMapSummary,
+    readmeSummary: payload.readmeSummary,
+    sessionSummary: buildAgentSessionSummaryText(payload.sessionSummary || null),
+    repoPaths,
+    preferredPaths,
+  })
+
+  return Array.from(new Set([
+    ...preferredPaths,
+    ...ranked,
+  ])).slice(0, AGENT_CODE_CONTEXT_FILES_LIMIT)
 }
 
 function buildAgentChatPrompt(payload: AgentChatRequestPayload, lang: Language): string {
@@ -358,88 +429,6 @@ function normalizeAgentResponse(
     suggestedNextSteps,
     source: 'ai',
   }
-}
-
-function buildAgentRetrievalPlannerPrompt(payload: AgentChatRequestPayload, lang: Language): string {
-  const historyText = payload.recentMessages
-    .slice(-6)
-    .map((message) => `${message.role.toUpperCase()}: ${String(message.content || '').slice(0, 220)}`)
-    .join('\n')
-
-  const summaryText = payload.sessionSummary
-    ? [
-      String(payload.sessionSummary.summary || '').slice(0, 500),
-      `Key concepts: ${(payload.sessionSummary.keyConcepts || []).slice(0, 6).join(', ')}`,
-      `Unresolved: ${(payload.sessionSummary.unresolvedQuestions || []).slice(0, 4).join(', ')}`,
-      `Evidence files: ${(payload.sessionSummary.evidenceFiles || []).slice(0, 6).join(', ')}`,
-    ].join('\n')
-    : 'None'
-
-  if (lang === 'zh') {
-    return `你要先判断是否真的需要读取 GitHub 源码文件才能回答问题。
-
-仓库：${payload.repo.owner}/${payload.repo.name}
-
-README 摘要：
-${String(payload.readmeSummary || '暂无').slice(0, 900)}
-
-源码地图摘要：
-${String(payload.sourceMapSummary || '暂无').slice(0, 900)}
-
-历史会话摘要：
-${summaryText}
-
-最近对话：
-${historyText || '暂无'}
-
-用户问题：
-${payload.question}
-
-仅返回 JSON：
-{
-  "needsCodeContext": true,
-  "targetFiles": ["src/path/file.ts"],
-  "reason": "为什么需要或不需要源码",
-  "confidence": "low|medium|high"
-}
-
-规则：
-1) 只有在 README、源码地图、会话摘要不足以回答时，才把 needsCodeContext 设为 true。
-2) targetFiles 只写最相关的仓库相对路径，最多 5 个；不确定时返回空数组。
-3) 不要输出 markdown 代码块。`
-  }
-
-  return `Decide whether GitHub source files are actually needed to answer the user's question.
-
-Repository: ${payload.repo.owner}/${payload.repo.name}
-
-README summary:
-${String(payload.readmeSummary || 'N/A').slice(0, 900)}
-
-Source map summary:
-${String(payload.sourceMapSummary || 'N/A').slice(0, 900)}
-
-Session summary:
-${summaryText}
-
-Recent turns:
-${historyText || 'N/A'}
-
-User question:
-${payload.question}
-
-Return JSON only:
-{
-  "needsCodeContext": true,
-  "targetFiles": ["src/path/file.ts"],
-  "reason": "why code is or is not needed",
-  "confidence": "low|medium|high"
-}
-
-Rules:
-1) Set needsCodeContext to true only when summaries are not enough.
-2) targetFiles must be repo-relative paths, max 5; return [] when unsure.
-3) Do not output markdown code fences.`
 }
 
 function buildAgentCodePrompt(
@@ -586,7 +575,7 @@ async function runAgentPromptWithFallback(params: {
   }
 
   const retryResponse = await callLLM(params.config, params.litePrompt, {
-    timeoutMs: 28000,
+    timeoutMs: AGENT_LLM_RETRY_TIMEOUT_MS,
     maxTokens: 220,
   })
   const retryParsed = safeParseJSON(retryResponse)
@@ -624,6 +613,9 @@ async function planAgentRetrieval(
 async function fetchAgentRetrievedFiles(
   payload: AgentChatRequestPayload,
   targetFiles: string[],
+  onProgress?: (
+    progress: Pick<AgentProgressEvent, 'completed' | 'total'>
+  ) => Promise<void> | void,
 ): Promise<RetrievedFileContext[]> {
   return await fetchRetrievedGithubFiles(
     {
@@ -638,6 +630,7 @@ async function fetchAgentRetrievedFiles(
       getDefaultBranch,
       getRawFileContent,
     },
+    onProgress,
   )
 }
 
@@ -677,9 +670,164 @@ async function answerAgentWithCode(
   })
 }
 
+async function runAgentChatRequest(
+  payload: AgentChatRequestPayload,
+  lang: Language,
+  onProgress?: (progress: AgentProgressEvent) => Promise<void> | void,
+): Promise<AgentChatResponsePayload> {
+  const fastPathAnswer = buildFastPathAgentAnswer(payload)
+  if (fastPathAnswer) {
+    return fastPathAnswer
+  }
+
+  const config = await getLLMConfig()
+  if (!config) {
+    throw new Error('LLM not configured')
+  }
+
+  return await withKeepAlive(
+    async () =>
+      await answerAgentQuestion(payload, {
+        planRetriever: async (runtimePayload) => await planAgentRetrieval(config, runtimePayload, lang),
+        discoverFiles: async (runtimePayload, plan) => await discoverAgentFiles(runtimePayload, plan),
+        fetchFiles: async (runtimePayload, targetFiles, onFileProgress) =>
+          await fetchAgentRetrievedFiles(runtimePayload, targetFiles, onFileProgress),
+        answerWithSummary: async (runtimePayload) => await answerAgentWithSummary(config, runtimePayload, lang),
+        answerWithCode: async ({ payload: runtimePayload, plan, retrievedFiles }) =>
+          await answerAgentWithCode(config, runtimePayload, plan, retrievedFiles, lang),
+        onProgress,
+      }),
+    pingServiceWorkerKeepAlive,
+    SERVICE_WORKER_KEEPALIVE_INTERVAL_MS,
+  )
+}
+
 function isAbortError(error: unknown): boolean {
   if (!(error instanceof Error)) return false
   return error.name === 'AbortError' || error.message.includes('aborted')
+}
+
+const SERVICE_WORKER_KEEPALIVE_KEY = '__gitmentor_service_worker_keepalive__'
+const SERVICE_WORKER_KEEPALIVE_INTERVAL_MS = 20_000
+
+async function pingServiceWorkerKeepAlive(): Promise<void> {
+  if (typeof chrome === 'undefined' || !chrome.storage?.local?.set) return
+
+  await new Promise<void>((resolve) => {
+    chrome.storage.local.set({ [SERVICE_WORKER_KEEPALIVE_KEY]: Date.now() }, () => resolve())
+  })
+}
+
+function postAgentChatPortMessage(port: any, message: Record<string, unknown>): void {
+  try {
+    port.postMessage(message)
+  } catch (error) {
+    console.warn('[GitMentor SW] Failed to post agent chat port message:', error)
+  }
+}
+
+chrome.runtime.onConnect.addListener((port: any) => {
+  if (port.name !== AGENT_CHAT_PORT_NAME) return
+
+  port.onMessage.addListener((message: any) => {
+    if (message?.action !== 'startAgentChat') return
+
+    const payload = parseAgentChatPayload((message.payload || {}) as Partial<AgentChatRequestPayload>)
+    const lang: Language = payload.language === 'zh' ? 'zh' : 'en'
+
+    ;(async () => {
+      try {
+        const data = await runAgentChatRequest(
+          payload,
+          lang,
+          async (progress) => {
+            postAgentChatPortMessage(port, {
+              type: 'progress',
+              progress,
+            })
+          },
+        )
+        postAgentChatPortMessage(port, {
+          type: 'result',
+          data,
+        })
+      } catch (error) {
+        const messageText = error instanceof Error ? error.message : 'Agent chat failed'
+        if (messageText === 'REQUEST_TIMEOUT') {
+          postAgentChatPortMessage(port, {
+            type: 'result',
+            data: {
+              ...buildLocalFallbackAnswer(payload, []),
+              retrievalMode: 'summary-only',
+              retrievedFiles: [],
+            },
+          })
+          return
+        }
+        postAgentChatPortMessage(port, {
+          type: 'error',
+          error: messageText,
+        })
+      }
+    })()
+  })
+})
+
+function resolveStreamMode(config: StoredLLMConfig): StreamMode {
+  const normalized = migrateLegacyLLMConfig(config)
+
+  if (normalized.protocol === 'claude') {
+    return 'claude'
+  }
+
+  if (normalized.protocol === 'openai') {
+    return 'openai-compatible'
+  }
+
+  if (normalized.protocol === 'local') {
+    return normalized.localMode === 'ollama' || normalized.preset === 'ollama'
+      ? 'ollama'
+      : 'openai-compatible'
+  }
+
+  return null
+}
+
+function parseLLMResponseText(config: StoredLLMConfig, data: any): string {
+  const normalized = migrateLegacyLLMConfig(config)
+
+  if (normalized.protocol === 'claude') {
+    return data.content?.[0]?.text || ''
+  }
+  if (normalized.protocol === 'local' && (normalized.localMode === 'ollama' || normalized.preset === 'ollama')) {
+    return data.message?.content || data.response || ''
+  }
+  return data.choices?.[0]?.message?.content || ''
+}
+
+async function readStreamingLLMResponse(
+  config: StoredLLMConfig,
+  response: Response,
+): Promise<string> {
+  const streamMode = resolveStreamMode(config)
+  const contentType = response.headers.get('content-type')?.toLowerCase() || ''
+  const expectsStream =
+    streamMode === 'ollama'
+      ? !contentType.includes('application/json')
+      : contentType.includes('text/event-stream')
+
+  if (!expectsStream) {
+    const data = await response.json()
+    return parseLLMResponseText(config, data)
+  }
+
+  if (streamMode === 'claude') {
+    return await readClaudeMessageStream(response)
+  }
+  if (streamMode === 'ollama') {
+    return await readOllamaJsonStream(response)
+  }
+  return await readOpenAICompatibleStream(response)
 }
 
 // Call LLM API
@@ -692,6 +840,7 @@ async function callLLM(
   let headers: Record<string, string>
   let body: any
   const normalized = migrateLegacyLLMConfig(config)
+  const streamMode = resolveStreamMode(config)
   const requestedMaxTokens =
     typeof options?.maxTokens === 'number' && options.maxTokens > 0
       ? Math.floor(options.maxTokens)
@@ -850,28 +999,44 @@ async function callLLM(
   }, timeoutMs)
 
   try {
-    const response = await fetch(apiUrl, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(body),
-      signal: controller.signal,
-    })
+    return await withKeepAlive(
+      async () => {
+        const runRequest = async (stream: boolean): Promise<Response> =>
+          await fetch(apiUrl, {
+            method: 'POST',
+            headers,
+            body: JSON.stringify({
+              ...body,
+              ...(streamMode && stream ? { stream: true } : {}),
+            }),
+            signal: controller.signal,
+          })
 
-    if (!response.ok) {
-      const errorText = await response.text()
-      throw new Error(`API error ${response.status}: ${errorText}`)
-    }
+        let response = await runRequest(Boolean(streamMode))
 
-    const data = await response.json()
+        if (
+          !response.ok &&
+          normalized.preset === 'custom-openai' &&
+          shouldFallbackCustomStreaming(response.status)
+        ) {
+          response = await runRequest(false)
+        }
 
-    // Extract content based on provider
-    if (normalized.protocol === 'claude') {
-      return data.content?.[0]?.text || ''
-    }
-    if (normalized.protocol === 'local' && (normalized.localMode === 'ollama' || normalized.preset === 'ollama')) {
-      return data.message?.content || ''
-    }
-    return data.choices?.[0]?.message?.content || ''
+        if (!response.ok) {
+          const errorText = await response.text()
+          throw new Error(`API error ${response.status}: ${errorText}`)
+        }
+
+        if (!streamMode) {
+          const data = await response.json()
+          return parseLLMResponseText(config, data)
+        }
+
+        return await readStreamingLLMResponse(config, response)
+      },
+      pingServiceWorkerKeepAlive,
+      SERVICE_WORKER_KEEPALIVE_INTERVAL_MS,
+    )
   } catch (error) {
     if (isAbortError(error)) {
       throw new Error('REQUEST_TIMEOUT')
@@ -1213,41 +1378,26 @@ Return only JSON:
 
   if (message.action === 'chatWithAgent') {
     ;(async () => {
+      let payload: AgentChatRequestPayload = parseAgentChatPayload({})
       try {
-        const rawPayload = (message.payload || {}) as Partial<AgentChatRequestPayload>
-        const payload: AgentChatRequestPayload = {
-          repo: {
-            owner: String(rawPayload.repo?.owner || ''),
-            name: String(rawPayload.repo?.name || ''),
-          },
-          language: rawPayload.language === 'zh' ? 'zh' : 'en',
-          question: String(rawPayload.question || ''),
-          sourceMapSummary: String(rawPayload.sourceMapSummary || ''),
-          readmeSummary: String(rawPayload.readmeSummary || ''),
-          sessionSummary: (rawPayload.sessionSummary || null) as SessionSummary | null,
-          recentMessages: Array.isArray(rawPayload.recentMessages)
-            ? rawPayload.recentMessages as AgentMessage[]
-            : [],
-        }
-        const config = await getLLMConfig()
-        if (!config) {
-          sendResponse({ error: 'LLM not configured' })
-          return
-        }
-
-        const data = await answerAgentQuestion(payload, {
-          planRetriever: async (runtimePayload) => await planAgentRetrieval(config, runtimePayload, lang),
-          fetchFiles: async (runtimePayload, targetFiles) => await fetchAgentRetrievedFiles(runtimePayload, targetFiles),
-          answerWithSummary: async (runtimePayload) => await answerAgentWithSummary(config, runtimePayload, lang),
-          answerWithCode: async ({ payload: runtimePayload, plan, retrievedFiles }) =>
-            await answerAgentWithCode(config, runtimePayload, plan, retrievedFiles, lang),
-        })
+        payload = parseAgentChatPayload((message.payload || {}) as Partial<AgentChatRequestPayload>)
+        const data = await runAgentChatRequest(payload, lang)
         sendResponse({ data })
         return
       } catch (error) {
         const messageText = error instanceof Error ? error.message : 'Agent chat failed'
+        if (messageText === 'REQUEST_TIMEOUT') {
+          sendResponse({
+            data: {
+              ...buildLocalFallbackAnswer(payload, []),
+              retrievalMode: 'summary-only',
+              retrievedFiles: [],
+            },
+          })
+          return
+        }
         sendResponse({
-          error: messageText === 'REQUEST_TIMEOUT' ? 'REQUEST_TIMEOUT' : messageText,
+          error: messageText,
         })
       }
     })()

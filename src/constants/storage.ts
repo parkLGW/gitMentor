@@ -8,6 +8,7 @@ export const STORAGE_KEYS = {
   legacyLanguage: "language",
   llmConfig: "gitmentor_llm_config",
   llmConfigMap: "gitmentor_llm_configs_map",
+  githubToken: "gitmentor_github_token",
   usageStats: "gitmentor_usage_stats",
   securityAuditPrefs: "gitmentor_security_audit_prefs_v2",
 } as const;

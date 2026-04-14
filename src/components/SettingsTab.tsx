@@ -45,6 +45,7 @@ function SettingsTab({ language }: SettingsTabProps) {
   const [apiKey, setApiKey] = useState('')
   const [model, setModel] = useState('')
   const [baseUrl, setBaseUrl] = useState('')
+  const [githubToken, setGithubToken] = useState('')
   const [testing, setTesting] = useState(false)
   const [testResult, setTestResult] = useState<boolean | null>(null)
   const [saved, setSaved] = useState(false)
@@ -59,6 +60,7 @@ function SettingsTab({ language }: SettingsTabProps) {
       apiKeyOptional: 'API 密钥（可选）',
       model: '模型',
       baseUrl: '基础 URL',
+      githubToken: 'GitHub Token（可选）',
       testConnection: '测试连接',
       save: '保存配置',
       clear: '清空当前配置',
@@ -88,6 +90,8 @@ function SettingsTab({ language }: SettingsTabProps) {
       totalTokens: '总 Token 数',
       estimatedCost: '预估费用',
       baseUrlAutoHint: '基础 URL 会按当前协议自动规范化。',
+      githubTokenTip: '遇到 GitHub rate limit 时，建议在此填写 GitHub Token 以提高稳定性。',
+      githubTokenHint: '用于 GitHub API 和源码抓取请求，保存到浏览器本地存储。',
     },
     en: {
       connectionType: 'Connection Type',
@@ -96,6 +100,7 @@ function SettingsTab({ language }: SettingsTabProps) {
       apiKeyOptional: 'API Key (Optional)',
       model: 'Model',
       baseUrl: 'Base URL',
+      githubToken: 'GitHub Token (Optional)',
       testConnection: 'Test Connection',
       save: 'Save Configuration',
       clear: 'Clear Current Configuration',
@@ -125,6 +130,8 @@ function SettingsTab({ language }: SettingsTabProps) {
       totalTokens: 'Total Tokens',
       estimatedCost: 'Est. Cost',
       baseUrlAutoHint: 'The base URL is normalized automatically for the selected protocol.',
+      githubTokenTip: 'If you hit GitHub rate limits, add a GitHub token here for better stability.',
+      githubTokenHint: 'Used for GitHub API and source fetch requests. Stored in browser local storage.',
     },
   }
 
@@ -153,6 +160,10 @@ function SettingsTab({ language }: SettingsTabProps) {
   useEffect(() => {
     const loadConfig = async () => {
       try {
+        chrome.storage.local.get(STORAGE_KEYS.githubToken, (data: Record<string, string>) => {
+          setGithubToken(String(data?.[STORAGE_KEYS.githubToken] || ''))
+        })
+
         const result = await new Promise<Record<string, LLMConfig>>((resolve) => {
           chrome.storage.local.get(STORAGE_KEYS.llmConfig, (data: Record<string, LLMConfig>) => {
             resolve(data)
@@ -276,6 +287,9 @@ function SettingsTab({ language }: SettingsTabProps) {
       })
 
       await llmManager.setCurrentConfig(config)
+      await new Promise<void>((resolve) => {
+        chrome.storage.local.set({ [STORAGE_KEYS.githubToken]: githubToken.trim() }, () => resolve())
+      })
 
       const result = await new Promise<Record<string, LLMConfig>>((resolve) => {
         chrome.storage.local.get(STORAGE_KEYS.llmConfig, (data: Record<string, LLMConfig>) => {
@@ -324,6 +338,10 @@ function SettingsTab({ language }: SettingsTabProps) {
     <div className="space-y-4 p-4">
       <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
         <p className="text-xs text-blue-900">{t.info}</p>
+      </div>
+
+      <div className="bg-amber-50 border border-amber-200 rounded-lg p-3">
+        <p className="text-xs text-amber-900">{t.githubTokenTip}</p>
       </div>
 
       <div className="bg-gray-50 border border-gray-200 rounded-lg p-3">
@@ -435,6 +453,22 @@ function SettingsTab({ language }: SettingsTabProps) {
           </p>
         </div>
       )}
+
+      <div>
+        <label className="text-xs font-semibold text-gray-600 block mb-2">
+          {t.githubToken}
+        </label>
+        <input
+          type="password"
+          value={githubToken}
+          onChange={(e) => setGithubToken(e.target.value)}
+          placeholder="ghp_xxx"
+          className="w-full px-2 py-2 border border-gray-300 rounded text-sm"
+        />
+        <p className="text-xs text-gray-500 mt-1">
+          {t.githubTokenHint}
+        </p>
+      </div>
 
       {testResult !== null && (
         <div className={`p-2 rounded text-sm ${testResult ? 'bg-green-100 text-green-900' : 'bg-red-100 text-red-900'}`}>

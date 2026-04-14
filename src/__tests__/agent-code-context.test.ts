@@ -4,6 +4,8 @@ import test from "node:test";
 import {
   buildRetrievedFileEvidence,
   buildRawGithubUrl,
+  flattenTreeFilePaths,
+  rankCandidateFiles,
   normalizeCandidatePath,
   parseRetrievalPlan,
   resolveBranchCandidates,
@@ -127,6 +129,60 @@ test("buildRetrievedFileEvidence passthrough caps by max target files", () => {
 
   const evidence = buildRetrievedFileEvidence(files);
   assert.deepStrictEqual(evidence, files.slice(0, 5));
+});
+
+test("flattenTreeFilePaths returns nested repo-relative file paths", () => {
+  const filePaths = flattenTreeFilePaths([
+    {
+      name: "src",
+      path: "src",
+      type: "dir",
+      children: [
+        {
+          name: "auth",
+          path: "src/auth",
+          type: "dir",
+          children: [
+            {
+              name: "session.ts",
+              path: "src/auth/session.ts",
+              type: "file",
+            },
+          ],
+        },
+        {
+          name: "main.ts",
+          path: "src/main.ts",
+          type: "file",
+        },
+      ],
+    },
+  ]);
+
+  assert.deepStrictEqual(filePaths, [
+    "src/auth/session.ts",
+    "src/main.ts",
+  ]);
+});
+
+test("rankCandidateFiles prioritizes planner targets and matching repo paths", () => {
+  const ranked = rankCandidateFiles({
+    question: "登录流程在哪些文件里，session 是怎么建立的？",
+    sourceMapSummary: "Auth flow: src/auth/index.ts and src/auth/session.ts",
+    repoPaths: [
+      "README.md",
+      "src/ui/App.tsx",
+      "src/auth/index.ts",
+      "src/auth/session.ts",
+      "src/network/client.ts",
+    ],
+    preferredPaths: ["src/auth/index.ts"],
+  });
+
+  assert.deepStrictEqual(ranked.slice(0, 2), [
+    "src/auth/index.ts",
+    "src/auth/session.ts",
+  ]);
 });
 
 test("resolveBranchCandidates prefers default branch then main then master without duplicates", () => {

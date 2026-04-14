@@ -19,7 +19,13 @@ import {
   getAnalyzedFiles,
   getFallbackRelatedFiles,
 } from "@/services/agent-chat-view";
+import { buildAgentProgressText } from "@/services/agent-progress";
+import {
+  AGENT_CHAT_REQUEST_TIMEOUT_MS,
+  AGENT_SUMMARY_TIMEOUT_MS as SUMMARY_TIMEOUT_MS,
+} from "@/services/agent-timeouts";
 import type {
+  AgentProgressEvent,
   AgentChatResponsePayload,
   AgentMessage,
   AgentSession,
@@ -36,14 +42,13 @@ interface AgentSummaryResponse {
   summary?: SessionSummary;
 }
 
-interface AgentChatRuntimeResponse {
-  data?: AgentChatResponsePayload;
-  error?: string;
-}
+type AgentChatStreamMessage =
+  | { type: "progress"; progress?: AgentProgressEvent }
+  | { type: "result"; data?: AgentChatResponsePayload }
+  | { type: "error"; error?: string };
 
-const SUMMARY_TIMEOUT_MS = 45000;
-const CHAT_REQUEST_TIMEOUT_MS = 75000;
 const MAX_RENDER_MESSAGES = 12;
+const AGENT_CHAT_PORT_NAME = "gitmentor-agent-chat";
 
 function buildId(prefix: string): string {
   return `${prefix}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
@@ -178,6 +183,7 @@ function AgentTab({ repo, language }: AgentTabProps) {
   const [error, setError] = useState<string | null>(null);
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const [editingText, setEditingText] = useState("");
+  const [streamingStatusText, setStreamingStatusText] = useState<string | null>(null);
 
   const quickPrompts = useMemo(
     () =>
@@ -223,12 +229,99 @@ function AgentTab({ repo, language }: AgentTabProps) {
     [],
   );
 
+  const streamAgentChat = useCallback(
+    (
+      payload: Record<string, unknown>,
+      onProgress: (progress: AgentProgressEvent) => void,
+      idleTimeoutMs = AGENT_CHAT_REQUEST_TIMEOUT_MS,
+    ) =>
+      new Promise<AgentChatResponsePayload>((resolve, reject) => {
+        if (typeof chrome === "undefined" || !chrome.runtime?.connect) {
+          reject(new Error("Runtime messaging unavailable"));
+          return;
+        }
+
+        const port = chrome.runtime.connect({ name: AGENT_CHAT_PORT_NAME });
+        let settled = false;
+        let timer: ReturnType<typeof setTimeout> | null = null;
+
+        const clearTimer = () => {
+          if (!timer) return;
+          clearTimeout(timer);
+          timer = null;
+        };
+
+        const resetTimer = () => {
+          clearTimer();
+          timer = setTimeout(() => {
+            if (settled) return;
+            settled = true;
+            cleanup();
+            reject(new Error("REQUEST_TIMEOUT"));
+          }, idleTimeoutMs);
+        };
+
+        const handleMessage = (message: AgentChatStreamMessage) => {
+          if (settled) return;
+          resetTimer();
+          if (message?.type === "progress" && message.progress) {
+            onProgress(message.progress);
+            return;
+          }
+          if (message?.type === "result") {
+            settled = true;
+            cleanup();
+            if (!message.data) {
+              reject(new Error("Invalid agent response"));
+              return;
+            }
+            resolve(message.data);
+            return;
+          }
+          if (message?.type === "error") {
+            settled = true;
+            cleanup();
+            reject(new Error(message.error || "Agent chat failed"));
+          }
+        };
+
+        const handleDisconnect = () => {
+          if (settled) return;
+          settled = true;
+          const runtimeError = chrome.runtime.lastError;
+          cleanup();
+          reject(new Error(runtimeError?.message || "Agent chat disconnected"));
+        };
+
+        const cleanup = () => {
+          clearTimer();
+          port.onMessage.removeListener(handleMessage);
+          port.onDisconnect.removeListener(handleDisconnect);
+          try {
+            port.disconnect();
+          } catch {
+            // Ignore disconnect races after the port is already closed.
+          }
+        };
+
+        port.onMessage.addListener(handleMessage);
+        port.onDisconnect.addListener(handleDisconnect);
+        resetTimer();
+        port.postMessage({
+          action: "startAgentChat",
+          payload,
+        });
+      }),
+    [],
+  );
+
   useEffect(() => {
     const loaded = loadAgentSession(repoKey);
     setSession(loaded);
     setError(null);
     setEditingMessageId(null);
     setEditingText("");
+    setStreamingStatusText(null);
   }, [repoKey]);
 
   useEffect(() => {
@@ -300,6 +393,7 @@ function AgentTab({ repo, language }: AgentTabProps) {
       setError(null);
       setEditingMessageId(null);
       setEditingText("");
+      setStreamingStatusText(isZh ? "思考中..." : "Thinking...");
 
       const sessionWithUser = appendMessage(activeSession, userMessage);
       const assistantId = buildId("assistant");
@@ -314,28 +408,28 @@ function AgentTab({ repo, language }: AgentTabProps) {
       setSession(streamingSession);
 
       try {
-        const response = await sendRuntimeMessage<AgentChatRuntimeResponse>(
+        const data = await streamAgentChat(
           {
-            action: "chatWithAgent",
-            payload: {
-              repo,
-              language,
-              question,
-              sourceMapSummary,
-              readmeSummary,
-              sessionSummary: sessionWithUser.summary,
-              recentMessages: getContextMessages(sessionWithUser),
-            },
+            repo,
+            language,
+            question,
+            sourceMapSummary,
+            readmeSummary,
+            sessionSummary: sessionWithUser.summary,
+            recentMessages: getContextMessages(sessionWithUser),
           },
-          CHAT_REQUEST_TIMEOUT_MS,
+          (progress) => {
+            const progressText = buildAgentProgressText(progress, language);
+            setStreamingStatusText(progressText);
+            setSession((currentSession) =>
+              upsertAssistantMessage(currentSession, assistantId, {
+                content: progressText,
+                confidence: "low",
+              })
+            );
+          },
+          AGENT_CHAT_REQUEST_TIMEOUT_MS,
         );
-        if (response?.error) {
-          throw new Error(response.error);
-        }
-        if (!response?.data) {
-          throw new Error("Invalid agent response");
-        }
-        const data = response.data;
 
         const finalAnswer = formatAssistantAnswer(
           data.answer.trim() || (isZh ? "暂无回答。" : "No response."),
@@ -382,6 +476,7 @@ function AgentTab({ repo, language }: AgentTabProps) {
         setError(message);
       } finally {
         setSending(false);
+        setStreamingStatusText(null);
       }
     },
     [
@@ -392,6 +487,7 @@ function AgentTab({ repo, language }: AgentTabProps) {
       sending,
       session,
       sourceMapSummary,
+      streamAgentChat,
       summarizeIfNeeded,
     ],
   );
@@ -422,6 +518,7 @@ function AgentTab({ repo, language }: AgentTabProps) {
     setError(null);
     setEditingMessageId(null);
     setEditingText("");
+    setStreamingStatusText(null);
     persistAgentSession(empty);
   };
 
@@ -621,7 +718,7 @@ function AgentTab({ repo, language }: AgentTabProps) {
         {sending && (
           <div className="flex items-center gap-2 text-xs text-gray-500">
             <LoadingSpinner size="sm" />
-            <span>{isZh ? "思考中..." : "Thinking..."}</span>
+            <span>{streamingStatusText || (isZh ? "思考中..." : "Thinking...")}</span>
           </div>
         )}
       </div>

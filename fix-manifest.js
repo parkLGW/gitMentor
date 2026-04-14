@@ -13,6 +13,11 @@ const manifestPath = path.join(__dirname, 'dist', 'manifest.json');
 const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
 
 manifest.action.default_popup = 'src/popup/index.html';
+manifest.background = {
+  ...(manifest.background || {}),
+  service_worker: 'service-worker.js',
+  type: 'module',
+};
 
 // 复制 icons 目录
 const iconsSrc = path.join(__dirname, 'public', 'icons');

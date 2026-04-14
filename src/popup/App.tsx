@@ -61,7 +61,9 @@ function App() {
       {/* Header */}
       <div className="border-b border-gray-200 px-4 py-3">
         <div className="flex items-center justify-between mb-2">
-          <h1 className="text-lg font-bold text-gray-900">GitMentor</h1>
+          <div>
+            <h1 className="text-lg font-bold text-gray-900">GitMentor</h1>
+          </div>
           <button
             onClick={() => setLanguage(language === "zh" ? "en" : "zh")}
             className="text-xs px-2 py-1 bg-gray-100 hover:bg-gray-200 rounded transition"
@@ -72,6 +74,14 @@ function App() {
         <p className="text-xs text-gray-600">
           {repo.owner}/{repo.name}
         </p>
+        <button
+          onClick={() => setActiveTab("settings")}
+          className="mt-2 w-full text-left text-[11px] px-2 py-1.5 rounded border border-amber-200 bg-amber-50 text-amber-800 hover:bg-amber-100 transition"
+        >
+          {language === "zh"
+            ? "遇到 GitHub rate limit？可在设置页填写 GitHub Token 提高稳定性"
+            : "Hit GitHub rate limits? Add a GitHub token in Settings for better stability"}
+        </button>
       </div>
 
       {/* Tab Navigation */}

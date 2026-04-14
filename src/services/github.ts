@@ -1,6 +1,8 @@
-import { StorageKeys } from '../constants/storage.js'
+import { STORAGE_KEYS, StorageKeys } from '../constants/storage.js'
 import { setJsonCacheWithEviction } from '../utils/local-cache.js'
 import { buildRawGithubUrl, normalizeGithubFilePath } from './agent-code-context.js'
+
+declare const chrome: any
 
 export interface RepoInfo {
   name: string
@@ -20,6 +22,9 @@ export interface RepoInfo {
 
 const CACHE_DURATION = 24 * 60 * 60 * 1000 // 24 hours
 const DEFAULT_TIMEOUT = 10000 // 10 seconds
+const GITHUB_RATE_LIMIT_MAX_RETRIES = 2
+const GITHUB_RATE_LIMIT_DELAY_CAP_MS = 5000
+const GITHUB_RATE_LIMIT_FALLBACK_DELAY_MS = 1000
 
 // Check if localStorage is available
 function isLocalStorageAvailable(): boolean {
@@ -90,6 +95,102 @@ async function fetchWithTimeout(
   }
 }
 
+async function getGithubToken(): Promise<string> {
+  if (typeof chrome === 'undefined' || !chrome.storage?.local?.get) {
+    return ''
+  }
+
+  return await new Promise((resolve) => {
+    chrome.storage.local.get(STORAGE_KEYS.githubToken, (data: Record<string, string>) => {
+      resolve(String(data?.[STORAGE_KEYS.githubToken] || '').trim())
+    })
+  })
+}
+
+async function mergeGithubHeaders(headers?: HeadersInit): Promise<Headers> {
+  const merged = new Headers(headers)
+  const githubToken = await getGithubToken()
+  if (githubToken) {
+    merged.set('Authorization', `Bearer ${githubToken}`)
+  }
+  return merged
+}
+
+function clampGithubRateLimitDelayMs(delayMs: number): number {
+  return Math.min(
+    GITHUB_RATE_LIMIT_DELAY_CAP_MS,
+    Math.max(0, Math.ceil(delayMs)),
+  )
+}
+
+export function parseGithubRateLimitDelayMs(
+  headers: Pick<Headers, 'get'>,
+  nowMs: number = Date.now(),
+): number | null {
+  const retryAfterRaw = headers.get('retry-after') || headers.get('Retry-After')
+  if (retryAfterRaw) {
+    const retryAfterSeconds = Number(retryAfterRaw)
+    if (Number.isFinite(retryAfterSeconds) && retryAfterSeconds >= 0) {
+      return clampGithubRateLimitDelayMs(retryAfterSeconds * 1000)
+    }
+  }
+
+  const remaining = headers.get('x-ratelimit-remaining') || headers.get('X-RateLimit-Remaining')
+  const resetRaw = headers.get('x-ratelimit-reset') || headers.get('X-RateLimit-Reset')
+  if (remaining === '0' && resetRaw) {
+    const resetSeconds = Number(resetRaw)
+    if (Number.isFinite(resetSeconds)) {
+      return clampGithubRateLimitDelayMs(resetSeconds * 1000 - nowMs)
+    }
+  }
+
+  return null
+}
+
+function isGithubRateLimitResponse(response: Response): boolean {
+  if (response.status === 429) return true
+  if (response.status !== 403) return false
+  return parseGithubRateLimitDelayMs(response.headers) !== null
+}
+
+async function sleep(delayMs: number): Promise<void> {
+  if (delayMs <= 0) return
+  await new Promise<void>((resolve) => setTimeout(resolve, delayMs))
+}
+
+async function fetchGithubWithRetry(
+  url: string,
+  options: RequestInit = {},
+  timeoutMs: number = DEFAULT_TIMEOUT,
+): Promise<Response> {
+  let lastResponse: Response | null = null
+  const headers = await mergeGithubHeaders(options.headers)
+  const requestOptions: RequestInit = {
+    ...options,
+    headers,
+  }
+
+  for (let attempt = 0; attempt <= GITHUB_RATE_LIMIT_MAX_RETRIES; attempt++) {
+    const response = await fetchWithTimeout(url, requestOptions, timeoutMs)
+    if (!isGithubRateLimitResponse(response)) {
+      return response
+    }
+
+    lastResponse = response
+    if (attempt >= GITHUB_RATE_LIMIT_MAX_RETRIES) {
+      return response
+    }
+
+    const parsedDelay = parseGithubRateLimitDelayMs(response.headers)
+    const fallbackDelay = GITHUB_RATE_LIMIT_FALLBACK_DELAY_MS * (attempt + 1)
+    const delayMs = parsedDelay ?? clampGithubRateLimitDelayMs(fallbackDelay)
+    console.warn(`[GitHub] Rate limited (${response.status}) for ${url}; retrying in ${delayMs}ms`)
+    await sleep(delayMs)
+  }
+
+  return lastResponse ?? await fetchWithTimeout(url, requestOptions, timeoutMs)
+}
+
 export async function getRepoInfo(
   owner: string,
   repo: string,
@@ -100,7 +201,7 @@ export async function getRepoInfo(
   if (cached) return cached
 
   try {
-    const response = await fetchWithTimeout(
+    const response = await fetchGithubWithRetry(
       `https://api.github.com/repos/${owner}/${repo}`,
       {},
       options?.timeoutMs ?? 5000
@@ -170,7 +271,7 @@ export async function getRawFileContent(
     if (!url) {
       return null
     }
-    const response = await fetchWithTimeout(url, {}, options.timeoutMs ?? DEFAULT_TIMEOUT)
+    const response = await fetchGithubWithRetry(url, {}, options.timeoutMs ?? DEFAULT_TIMEOUT)
     if (!response.ok) {
       return null
     }
@@ -190,7 +291,7 @@ export async function getReadme(owner: string, repo: string): Promise<string> {
   if (cached) return cached
 
   try {
-    const response = await fetchWithTimeout(
+    const response = await fetchGithubWithRetry(
       `https://api.github.com/repos/${owner}/${repo}/readme`,
       {
         headers: {
@@ -223,7 +324,7 @@ export async function getRepoTree(
   if (cached) return cached
 
   try {
-    const response = await fetchWithTimeout(
+    const response = await fetchGithubWithRetry(
       `https://api.github.com/repos/${owner}/${repo}/contents/${path}`,
       {},
       10000
@@ -248,7 +349,7 @@ export async function getPackageJson(owner: string, repo: string): Promise<any> 
   if (cached) return cached
 
   try {
-    const response = await fetchWithTimeout(
+    const response = await fetchGithubWithRetry(
       `https://api.github.com/repos/${owner}/${repo}/contents/package.json`,
       {
         headers: {
@@ -278,7 +379,7 @@ export async function getLanguages(owner: string, repo: string): Promise<Record<
   if (cached) return cached
 
   try {
-    const response = await fetchWithTimeout(
+    const response = await fetchGithubWithRetry(
       `https://api.github.com/repos/${owner}/${repo}/languages`,
       {},
       5000
@@ -408,7 +509,7 @@ class ConcurrencyLimiter {
 }
 
 // Global limiter: max 5 concurrent requests to avoid rate limiting
-const apiLimiter = new ConcurrencyLimiter(5)
+const apiLimiter = new ConcurrencyLimiter(3)
 
 // Get full directory tree (recursive with concurrency control)
 export async function getFullDirectoryTree(
@@ -510,7 +611,7 @@ export async function getFileContent(
   if (cached) return cached
 
   try {
-    const response = await fetchWithTimeout(
+    const response = await fetchGithubWithRetry(
       `https://api.github.com/repos/${owner}/${repo}/contents/${path}`,
       {
         headers: {

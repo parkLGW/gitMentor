@@ -2,7 +2,10 @@ import assert from "node:assert";
 import test from "node:test";
 
 import { fetchRetrievedGithubFiles } from "../services/agent-code-context.js";
-import { answerAgentQuestion } from "../services/agent-chat-runtime.js";
+import {
+  answerAgentQuestion,
+  buildFastPathAgentAnswer,
+} from "../services/agent-chat-runtime.js";
 
 import type {
   AgentChatRequestPayload,
@@ -276,6 +279,7 @@ test("preserves UI-facing answer fields alongside retrieval metadata in code-con
 
 test("fetchRetrievedGithubFiles retries branch candidates per file until one succeeds", async () => {
   const branchAttempts: Array<{ branch: string; filePath: string }> = [];
+  const progressEvents: Array<{ completed?: number; total?: number }> = [];
 
   const result = await fetchRetrievedGithubFiles(
     {
@@ -297,6 +301,12 @@ test("fetchRetrievedGithubFiles retries branch candidates per file until one suc
         }
         return null;
       },
+    },
+    (progress) => {
+      progressEvents.push({
+        completed: progress.completed,
+        total: progress.total,
+      });
     },
   );
 
@@ -355,5 +365,183 @@ test("fetchRetrievedGithubFiles falls back to main and master when default branc
       status: "failed",
       reason: "content_unavailable",
     },
+  ]);
+});
+
+test("falls back to a local summary answer when summary generation times out", async () => {
+  const payload = createPayload();
+
+  const result = await answerAgentQuestion(payload, {
+    planRetriever: async () => ({
+      needsCodeContext: false,
+      targetFiles: [],
+      reason: "Summaries are enough",
+      confidence: "medium",
+    }),
+    fetchFiles: async () => [],
+    answerWithSummary: async () => {
+      throw new Error("REQUEST_TIMEOUT");
+    },
+    answerWithCode: async () => createAnswer("code answer"),
+  });
+
+  assert.strictEqual(result.retrievalMode, "summary-only");
+  assert.deepStrictEqual(result.retrievedFiles, []);
+  assert.strictEqual(result.source, "fallback");
+  assert.strictEqual(result.confidence, "low");
+  assert.match(result.answer, /README|source map|源码地图|README/);
+});
+
+test("falls back to a local answer when code-grounded generation times out", async () => {
+  const payload = createPayload();
+  const retrievedFiles: RetrievedFileContext[] = [
+    {
+      filePath: "src/request-flow.ts",
+      branch: "main",
+      status: "fetched",
+      snippet: "export async function runRequestFlow() {}",
+    },
+  ];
+
+  const result = await answerAgentQuestion(payload, {
+    planRetriever: async () => ({
+      needsCodeContext: true,
+      targetFiles: ["src/request-flow.ts"],
+      reason: "Need implementation details",
+      confidence: "high",
+    }),
+    fetchFiles: async () => retrievedFiles,
+    answerWithSummary: async () => createAnswer("summary answer"),
+    answerWithCode: async () => {
+      throw new Error("REQUEST_TIMEOUT");
+    },
+  });
+
+  assert.strictEqual(result.retrievalMode, "github-code");
+  assert.deepStrictEqual(result.retrievedFiles, retrievedFiles);
+  assert.strictEqual(result.source, "fallback");
+  assert.strictEqual(result.confidence, "low");
+  assert.match(result.answer, /src\/request-flow\.ts|README|source map|源码地图/);
+});
+
+test("handles greeting-only turns locally without invoking retrieval planning", async () => {
+  const payload: AgentChatRequestPayload = {
+    ...createPayload(),
+    language: "zh",
+    question: "你好",
+  };
+
+  let plannerCalls = 0;
+  let summaryCalls = 0;
+
+  const result = await answerAgentQuestion(payload, {
+    planRetriever: async () => {
+      plannerCalls += 1;
+      return {
+        needsCodeContext: false,
+        targetFiles: [],
+        reason: "unused",
+        confidence: "low",
+      };
+    },
+    fetchFiles: async () => [],
+    answerWithSummary: async () => {
+      summaryCalls += 1;
+      return createAnswer("summary answer");
+    },
+    answerWithCode: async () => createAnswer("code answer"),
+  });
+
+  assert.strictEqual(plannerCalls, 0);
+  assert.strictEqual(summaryCalls, 0);
+  assert.strictEqual(result.retrievalMode, "summary-only");
+  assert.deepStrictEqual(result.retrievedFiles, []);
+  assert.strictEqual(result.source, "fallback");
+  assert.match(result.answer, /GitMentor|仓库|README|源码地图/);
+});
+
+test("buildFastPathAgentAnswer returns immediate reply for greeting-only turns", () => {
+  const result = buildFastPathAgentAnswer({
+    ...createPayload(),
+    language: "zh",
+    question: "你好",
+  });
+
+  assert.ok(result);
+  assert.strictEqual(result?.retrievalMode, "summary-only");
+  assert.deepStrictEqual(result?.retrievedFiles, []);
+  assert.match(String(result?.answer || ""), /GitMentor|仓库/);
+});
+
+test("buildFastPathAgentAnswer skips normal repo questions", () => {
+  const result = buildFastPathAgentAnswer(createPayload());
+
+  assert.strictEqual(result, null);
+});
+
+test("emits user-facing progress stages while locating, reading, and drafting code answers", async () => {
+  const payload = createPayload();
+  const progressStages: string[] = [];
+  const readingCounts: Array<{ completed?: number; total?: number }> = [];
+  const retrievedFiles: RetrievedFileContext[] = [
+    {
+      filePath: "src/auth/index.ts",
+      branch: "main",
+      status: "fetched",
+      snippet: "export function startAuth() {}",
+    },
+    {
+      filePath: "src/auth/session.ts",
+      branch: "main",
+      status: "fetched",
+      snippet: "export function createSession() {}",
+    },
+  ];
+
+  const result = await answerAgentQuestion(payload, {
+    planRetriever: async () => ({
+      needsCodeContext: true,
+      targetFiles: [],
+      reason: "Need auth implementation details",
+      confidence: "high",
+    }),
+    discoverFiles: async () => [
+      "src/auth/index.ts",
+      "src/auth/session.ts",
+    ],
+    fetchFiles: async (_receivedPayload, targetFiles, onFileProgress) => {
+      assert.deepStrictEqual(targetFiles, [
+        "src/auth/index.ts",
+        "src/auth/session.ts",
+      ]);
+      await onFileProgress?.({ completed: 1, total: 2 });
+      await onFileProgress?.({ completed: 2, total: 2 });
+      return retrievedFiles;
+    },
+    answerWithSummary: async () => createAnswer("summary answer"),
+    answerWithCode: async () => createAnswer("code answer"),
+    onProgress: async (event) => {
+      progressStages.push(event.stage);
+      if (event.stage === "reading-files") {
+        readingCounts.push({
+          completed: event.completed,
+          total: event.total,
+        });
+      }
+    },
+  });
+
+  assert.strictEqual(result.answer, "code answer");
+  assert.deepStrictEqual(progressStages, [
+    "locating-files",
+    "reading-files",
+    "reading-files",
+    "reading-files",
+    "drafting-answer",
+  ]);
+  assert.deepStrictEqual(readingCounts, [
+    { completed: 0, total: 2 },
+    { completed: 1, total: 2 },
+    { completed: 2, total: 2 },
   ]);
 });

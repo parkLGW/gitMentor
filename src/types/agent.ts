@@ -21,6 +21,16 @@ export interface AgentRetrievalPlan {
 }
 
 export type AgentRetrievalMode = "summary-only" | "github-code";
+export type AgentProgressStage =
+  | "locating-files"
+  | "reading-files"
+  | "drafting-answer";
+
+export interface AgentProgressEvent {
+  stage: AgentProgressStage;
+  completed?: number;
+  total?: number;
+}
 
 export interface AgentRetrievalMetadata {
   retrievedFiles?: RetrievedFileMetadata[];
