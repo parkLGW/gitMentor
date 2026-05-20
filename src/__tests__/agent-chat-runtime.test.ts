@@ -8,11 +8,14 @@ import {
 } from "../services/agent-chat-runtime.js";
 
 import type {
+  AgentIntent,
   AgentChatRequestPayload,
   AgentChatResponsePayload,
+  AgentObservation,
   RetrievedFileMetadata,
   AgentRetrievalPlan,
   RetrievedFileContext,
+  AgentSufficiencyDecision,
 } from "../types/agent.js";
 
 function createPayload(): AgentChatRequestPayload {
@@ -277,6 +280,44 @@ test("preserves UI-facing answer fields alongside retrieval metadata in code-con
   );
 });
 
+test("fetchRetrievedGithubFiles tries raw HEAD before default branch API lookup", async () => {
+  let defaultBranchCalls = 0;
+  const branchAttempts: string[] = [];
+
+  const result = await fetchRetrievedGithubFiles(
+    {
+      owner: "acme",
+      repo: "widgets",
+      targetFiles: ["src/request-flow.ts"],
+      timeoutMs: 7000,
+      maxCharsPerFile: 200,
+    },
+    {
+      getDefaultBranch: async () => {
+        defaultBranchCalls += 1;
+        return "develop";
+      },
+      getRawFileContent: async (_owner, _repo, branch) => {
+        branchAttempts.push(branch);
+        return branch === "HEAD"
+          ? "export async function runRequestFlow() { return true; }"
+          : null;
+      },
+    },
+  );
+
+  assert.strictEqual(defaultBranchCalls, 0);
+  assert.deepStrictEqual(branchAttempts, ["HEAD"]);
+  assert.deepStrictEqual(result, [
+    {
+      filePath: "src/request-flow.ts",
+      branch: "HEAD",
+      status: "fetched",
+      snippet: "File: src/request-flow.ts\nexport async function runRequestFlow() { return true; }",
+    },
+  ]);
+});
+
 test("fetchRetrievedGithubFiles retries branch candidates per file until one succeeds", async () => {
   const branchAttempts: Array<{ branch: string; filePath: string }> = [];
   const progressEvents: Array<{ completed?: number; total?: number }> = [];
@@ -296,7 +337,7 @@ test("fetchRetrievedGithubFiles retries branch candidates per file until one suc
         if (filePath === "src/request-flow.ts" && branch === "main") {
           return "export async function runRequestFlow() { return true; }";
         }
-        if (filePath === "src/http/client.ts" && branch === "master") {
+        if (filePath === "src/http/client.ts" && branch === "develop") {
           return "export class HttpClient {}";
         }
         return null;
@@ -317,8 +358,8 @@ test("fetchRetrievedGithubFiles retries branch candidates per file until one suc
   }, {});
 
   assert.deepStrictEqual(attemptsByFile, {
-    "src/request-flow.ts": ["develop", "main"],
-    "src/http/client.ts": ["develop", "main", "master"],
+    "src/request-flow.ts": ["HEAD", "main"],
+    "src/http/client.ts": ["HEAD", "main", "master", "develop"],
   });
   assert.deepStrictEqual(result, [
     {
@@ -329,7 +370,7 @@ test("fetchRetrievedGithubFiles retries branch candidates per file until one suc
     },
     {
       filePath: "src/http/client.ts",
-      branch: "master",
+      branch: "develop",
       status: "fetched",
       snippet: "File: src/http/client.ts\nexport class HttpClient {}",
     },
@@ -358,7 +399,7 @@ test("fetchRetrievedGithubFiles falls back to main and master when default branc
     },
   );
 
-  assert.deepStrictEqual(branchAttempts, ["main", "master"]);
+  assert.deepStrictEqual(branchAttempts, ["HEAD", "main", "master"]);
   assert.deepStrictEqual(result, [
     {
       filePath: "src/request-flow.ts",
@@ -420,7 +461,7 @@ test("falls back to a local answer when code-grounded generation times out", asy
   assert.strictEqual(result.retrievalMode, "github-code");
   assert.deepStrictEqual(result.retrievedFiles, retrievedFiles);
   assert.strictEqual(result.source, "fallback");
-  assert.strictEqual(result.confidence, "low");
+  assert.strictEqual(result.confidence, "medium");
   assert.match(result.answer, /src\/request-flow\.ts|README|source map|源码地图/);
 });
 
@@ -543,5 +584,638 @@ test("emits user-facing progress stages while locating, reading, and drafting co
     { completed: 0, total: 2 },
     { completed: 1, total: 2 },
     { completed: 2, total: 2 },
+  ]);
+});
+
+test("generic agent loop continues with next tool calls until observations are sufficient", async () => {
+  const payload = createPayload();
+  const events: string[] = [];
+  const executed: string[] = [];
+  const fetchedFile: RetrievedFileContext = {
+    filePath: "src/request-flow.ts",
+    branch: "main",
+    status: "fetched",
+    snippet: "export async function runRequestFlow() {}",
+  };
+  const intent: AgentIntent = {
+    category: "architecture",
+    reason: "Need repository implementation details",
+    confidence: "high",
+    toolCalls: [
+      {
+        tool: "searchRepoPaths",
+        args: { query: "request flow" },
+      },
+    ],
+  };
+  let sufficiencyChecks = 0;
+
+  const result = await answerAgentQuestion(payload, {
+    planRetriever: async () => ({
+      needsCodeContext: false,
+      targetFiles: [],
+      reason: "legacy unused",
+      confidence: "low",
+    }),
+    fetchFiles: async () => [],
+    answerWithSummary: async () => createAnswer("summary answer"),
+    answerWithCode: async () => createAnswer("code answer"),
+    judgeIntent: async () => intent,
+    executeToolCalls: async (_payload, calls): Promise<AgentObservation[]> => {
+      executed.push(calls[0].tool);
+      if (calls[0].tool === "searchRepoPaths") {
+        return [
+          {
+            tool: "searchRepoPaths",
+            ok: true,
+            summary: "Found candidate request-flow file",
+            candidateFiles: ["src/request-flow.ts"],
+          },
+        ];
+      }
+      return [
+        {
+          tool: "readGithubFiles",
+          ok: true,
+          summary: "Fetched request flow",
+          retrievedFiles: [fetchedFile],
+        },
+      ];
+    },
+    judgeSufficiency: async (): Promise<AgentSufficiencyDecision> => {
+      sufficiencyChecks += 1;
+      return {
+        enough: true,
+        reason: "Source file retrieved",
+        confidence: "high",
+        nextToolCalls: [],
+      };
+    },
+    answerWithObservations: async ({ observations, retrievedFiles }) => {
+      assert.strictEqual(observations.length, 2);
+      assert.deepStrictEqual(retrievedFiles, [fetchedFile]);
+      return createAnswer("grounded answer");
+    },
+    onProgress: async (progress) => {
+      events.push(progress.stage);
+    },
+  });
+
+  assert.strictEqual(result.answer, "grounded answer");
+  assert.strictEqual(result.retrievalMode, "github-code");
+  assert.deepStrictEqual(result.retrievedFiles, [fetchedFile]);
+  assert.strictEqual(sufficiencyChecks, 0);
+  assert.deepStrictEqual(executed, ["searchRepoPaths", "readGithubFiles"]);
+  assert.deepStrictEqual(events, [
+    "understanding-intent",
+    "searching-files",
+    "searching-files",
+    "drafting-answer",
+  ]);
+});
+
+test("generic agent loop falls back when sufficiency never becomes true within budget", async () => {
+  const payload = createPayload();
+  let sufficiencyChecks = 0;
+
+  const result = await answerAgentQuestion(payload, {
+    planRetriever: async () => ({
+      needsCodeContext: false,
+      targetFiles: [],
+      reason: "legacy unused",
+      confidence: "low",
+    }),
+    fetchFiles: async () => [],
+    answerWithSummary: async () => createAnswer("summary answer"),
+    answerWithCode: async () => createAnswer("code answer"),
+    judgeIntent: async () => ({
+      category: "debugging",
+      reason: "Need source",
+      confidence: "medium",
+      toolCalls: [{ tool: "searchRepoPaths", args: { query: "bug" } }],
+    }),
+    executeToolCalls: async (): Promise<AgentObservation[]> => [
+      {
+        tool: "searchRepoPaths",
+        ok: true,
+        summary: "No decisive candidates",
+        candidateFiles: [],
+      },
+    ],
+    judgeSufficiency: async (): Promise<AgentSufficiencyDecision> => {
+      sufficiencyChecks += 1;
+      return {
+        enough: false,
+        reason: "Still need context",
+        confidence: "low",
+        nextToolCalls: [
+          { tool: "searchRepoPaths", args: { query: `bug-${sufficiencyChecks}` } },
+        ],
+      };
+    },
+    answerWithObservations: async () => {
+      throw new Error("should not draft final answer when loop is insufficient");
+    },
+  });
+
+  assert.strictEqual(result.source, "fallback");
+  assert.strictEqual(result.confidence, "low");
+  assert.strictEqual(result.retrievalMode, "summary-only");
+  assert.match(result.answer, /did not retrieve enough code evidence/);
+  assert.doesNotMatch(result.answer, /timed out/);
+  assert.strictEqual(sufficiencyChecks, 3);
+});
+
+test("generic agent loop drafts from fetched observations after local coverage checks without sufficiency LLM", async () => {
+  const payload = createPayload();
+  const executed: string[] = [];
+  const fetchedFile: RetrievedFileContext = {
+    filePath: "src/memory-store.ts",
+    branch: "main",
+    status: "fetched",
+    snippet: "export function saveMemory() {}",
+  };
+
+  const result = await answerAgentQuestion(payload, {
+    planRetriever: async () => ({
+      needsCodeContext: false,
+      targetFiles: [],
+      reason: "legacy unused",
+      confidence: "low",
+    }),
+    fetchFiles: async () => [],
+    answerWithSummary: async () => createAnswer("summary answer"),
+    answerWithCode: async () => createAnswer("code answer"),
+    judgeIntent: async () => ({
+      category: "architecture",
+      reason: "Need source",
+      confidence: "high",
+      toolCalls: [{ tool: "readGithubFiles", args: { paths: ["src/memory-store.ts"] } }],
+    }),
+    executeToolCalls: async (_payload, calls): Promise<AgentObservation[]> => {
+      executed.push(calls.map((call) => call.tool).join("+"));
+      if (calls[0].tool === "readGithubFiles") {
+        return [
+          {
+            tool: "readGithubFiles",
+            ok: true,
+            summary: "Fetched memory store",
+            retrievedFiles: [fetchedFile],
+          },
+        ];
+      }
+      assert.deepStrictEqual(calls.map((call) => call.tool), ["buildCodeIndex", "expandImports"]);
+      return [
+        {
+          tool: "buildCodeIndex",
+          ok: true,
+          summary: "Indexed memory store",
+          codeIndex: {
+            files: [
+              {
+                filePath: "src/memory-store.ts",
+                language: "ts",
+                status: "indexed",
+                imports: [],
+                exports: [],
+                symbols: [],
+              },
+            ],
+            dependencies: [],
+          },
+        },
+        {
+          tool: "expandImports",
+          ok: true,
+          summary: "No import candidates",
+          candidateFiles: [],
+        },
+      ];
+    },
+    judgeSufficiency: async (): Promise<AgentSufficiencyDecision> => ({
+      enough: false,
+      reason: "Need more implementation details",
+      confidence: "low",
+      nextToolCalls: [],
+    }),
+    answerWithObservations: async ({ retrievedFiles, sufficient }) => {
+      assert.deepStrictEqual(retrievedFiles, [fetchedFile]);
+      assert.strictEqual(sufficient.enough, true);
+      return createAnswer("partial but grounded memory answer");
+    },
+  });
+
+  assert.strictEqual(result.answer, "partial but grounded memory answer");
+  assert.strictEqual(result.retrievalMode, "github-code");
+  assert.deepStrictEqual(result.retrievedFiles, [fetchedFile]);
+  assert.deepStrictEqual(executed, ["readGithubFiles", "buildCodeIndex+expandImports"]);
+});
+
+test("generic agent loop skips sufficiency LLM after source files are fetched", async () => {
+  const payload = createPayload();
+  const fetchedFile: RetrievedFileContext = {
+    filePath: "src/memory-store.ts",
+    branch: "main",
+    status: "fetched",
+    snippet: "export function saveMemory() {}",
+  };
+  let sufficiencyChecks = 0;
+
+  const result = await answerAgentQuestion(payload, {
+    planRetriever: async () => ({
+      needsCodeContext: false,
+      targetFiles: [],
+      reason: "legacy unused",
+      confidence: "low",
+    }),
+    fetchFiles: async () => [],
+    answerWithSummary: async () => createAnswer("summary answer"),
+    answerWithCode: async () => createAnswer("code answer"),
+    judgeIntent: async () => ({
+      category: "architecture",
+      reason: "Need source",
+      confidence: "high",
+      toolCalls: [{ tool: "readGithubFiles", args: { paths: ["src/memory-store.ts"] } }],
+    }),
+    executeToolCalls: async (): Promise<AgentObservation[]> => [
+      {
+        tool: "readGithubFiles",
+        ok: true,
+        summary: "Fetched memory store",
+        retrievedFiles: [fetchedFile],
+      },
+    ],
+    judgeSufficiency: async (): Promise<AgentSufficiencyDecision> => {
+      sufficiencyChecks += 1;
+      throw new Error("sufficiency should not run after fetched source evidence");
+    },
+    answerWithObservations: async ({ retrievedFiles, sufficient }) => {
+      assert.deepStrictEqual(retrievedFiles, [fetchedFile]);
+      assert.strictEqual(sufficient.enough, true);
+      assert.match(sufficient.reason, /Fetched source/);
+      return createAnswer("source-grounded answer");
+    },
+  });
+
+  assert.strictEqual(result.answer, "source-grounded answer");
+  assert.strictEqual(result.retrievalMode, "github-code");
+  assert.deepStrictEqual(result.retrievedFiles, [fetchedFile]);
+  assert.strictEqual(sufficiencyChecks, 0);
+});
+
+test("generic agent loop reads unread candidates before treating fetched source as sufficient", async () => {
+  const payload = {
+    ...createPayload(),
+    question: "How is the memory system designed?",
+  };
+  const executed: string[] = [];
+  const indexFile: RetrievedFileContext = {
+    filePath: "src/memory/index.ts",
+    branch: "main",
+    status: "fetched",
+    snippet: "export { MemoryManager } from './manager';",
+  };
+  const managerFile: RetrievedFileContext = {
+    filePath: "src/memory/manager.ts",
+    branch: "main",
+    status: "fetched",
+    snippet: "export class MemoryManager { recall() {} save() {} }",
+  };
+  let sufficiencyChecks = 0;
+
+  const result = await answerAgentQuestion(payload, {
+    planRetriever: async () => ({
+      needsCodeContext: false,
+      targetFiles: [],
+      reason: "legacy unused",
+      confidence: "low",
+    }),
+    fetchFiles: async () => [],
+    answerWithSummary: async () => createAnswer("summary answer"),
+    answerWithCode: async () => createAnswer("code answer"),
+    judgeIntent: async () => ({
+      category: "architecture",
+      reason: "Need implementation evidence for the memory design.",
+      confidence: "high",
+      toolCalls: [
+        { tool: "searchRepoPaths", args: { query: "memory", maxFiles: 2 } },
+        { tool: "readGithubFiles", args: { paths: ["src/memory/index.ts"] } },
+      ],
+    }),
+    executeToolCalls: async (_payload, calls): Promise<AgentObservation[]> => {
+      executed.push(calls.map((call) => call.tool).join("+"));
+      if (calls.some((call) => call.tool === "searchRepoPaths")) {
+        return [
+          {
+            tool: "searchRepoPaths",
+            ok: true,
+            summary: "Found memory candidates",
+            candidateFiles: ["src/memory/index.ts", "src/memory/manager.ts"],
+          },
+          {
+            tool: "readGithubFiles",
+            ok: true,
+            summary: "Fetched memory index",
+            retrievedFiles: [indexFile],
+          },
+        ];
+      }
+      assert.deepStrictEqual(calls, [
+        {
+          tool: "readGithubFiles",
+          args: {
+            paths: ["src/memory/manager.ts"],
+            reason: "Read remaining candidate files before making code-grounded claims.",
+          },
+        },
+      ]);
+      return [
+        {
+          tool: "readGithubFiles",
+          ok: true,
+          summary: "Fetched memory manager",
+          retrievedFiles: [managerFile],
+        },
+      ];
+    },
+    judgeSufficiency: async (): Promise<AgentSufficiencyDecision> => {
+      sufficiencyChecks += 1;
+      throw new Error("sufficiency should not run after source coverage is locally sufficient");
+    },
+    answerWithObservations: async ({ retrievedFiles, sufficient }) => {
+      assert.deepStrictEqual(retrievedFiles, [indexFile, managerFile]);
+      assert.strictEqual(sufficient.enough, true);
+      return createAnswer("grounded memory design answer");
+    },
+  });
+
+  assert.strictEqual(result.answer, "grounded memory design answer");
+  assert.strictEqual(result.retrievalMode, "github-code");
+  assert.deepStrictEqual(result.retrievedFiles, [indexFile, managerFile]);
+  assert.deepStrictEqual(executed, ["searchRepoPaths+readGithubFiles", "readGithubFiles"]);
+  assert.strictEqual(sufficiencyChecks, 0);
+});
+
+test("generic agent loop reads candidate files before answering architecture questions", async () => {
+  const payload = createPayload();
+  const executed: string[] = [];
+  const fetchedFile: RetrievedFileContext = {
+    filePath: "src/memory-store.ts",
+    branch: "main",
+    status: "fetched",
+    snippet: "export function saveMemory() {}",
+  };
+
+  const result = await answerAgentQuestion(payload, {
+    planRetriever: async () => ({
+      needsCodeContext: false,
+      targetFiles: [],
+      reason: "legacy unused",
+      confidence: "low",
+    }),
+    fetchFiles: async () => [],
+    answerWithSummary: async () => createAnswer("summary answer"),
+    answerWithCode: async () => createAnswer("code answer"),
+    judgeIntent: async () => ({
+      category: "architecture",
+      reason: "Need implementation evidence",
+      confidence: "high",
+      toolCalls: [{ tool: "searchRepoPaths", args: { query: "memory" } }],
+    }),
+    executeToolCalls: async (_payload, calls): Promise<AgentObservation[]> => {
+      executed.push(calls[0].tool);
+      if (calls[0].tool === "searchRepoPaths") {
+        return [
+          {
+            tool: "searchRepoPaths",
+            ok: true,
+            summary: "Found memory candidates",
+            candidateFiles: ["src/memory-store.ts"],
+          },
+        ];
+      }
+      assert.deepStrictEqual(calls[0].args?.paths, ["src/memory-store.ts"]);
+      return [
+        {
+          tool: "readGithubFiles",
+          ok: true,
+          summary: "Fetched memory store",
+          retrievedFiles: [fetchedFile],
+        },
+      ];
+    },
+    judgeSufficiency: async (): Promise<AgentSufficiencyDecision> => ({
+      enough: true,
+      reason: "Fallback judge incorrectly treated candidates as enough",
+      confidence: "low",
+      nextToolCalls: [],
+    }),
+    answerWithObservations: async ({ retrievedFiles }) => {
+      assert.deepStrictEqual(retrievedFiles, [fetchedFile]);
+      return createAnswer("memory answer");
+    },
+  });
+
+  assert.strictEqual(result.answer, "memory answer");
+  assert.strictEqual(result.retrievalMode, "github-code");
+  assert.deepStrictEqual(executed, ["searchRepoPaths", "readGithubFiles"]);
+});
+
+test("generic agent loop forces code evidence when intent only asks for summaries", async () => {
+  const payload = {
+    ...createPayload(),
+    question: "How is the memory system designed?",
+  };
+  const executed: string[] = [];
+  const fetchedFile: RetrievedFileContext = {
+    filePath: "src/memory/manager.ts",
+    branch: "main",
+    status: "fetched",
+    snippet: "export class MemoryManager {}",
+  };
+  let sufficiencyChecks = 0;
+
+  const result = await answerAgentQuestion(payload, {
+    planRetriever: async () => ({
+      needsCodeContext: false,
+      targetFiles: [],
+      reason: "legacy unused",
+      confidence: "low",
+    }),
+    fetchFiles: async () => [],
+    answerWithSummary: async () => createAnswer("summary answer"),
+    answerWithCode: async () => createAnswer("code answer"),
+    judgeIntent: async () => ({
+      category: "architecture",
+      reason: "The user asks about implementation design.",
+      confidence: "high",
+      toolCalls: [{ tool: "readSummaries", args: {} }],
+    }),
+    executeToolCalls: async (_payload, calls): Promise<AgentObservation[]> => {
+      executed.push(calls[0].tool);
+      if (calls[0].tool === "readSummaries") {
+        return [
+          {
+            tool: "readSummaries",
+            ok: true,
+            summary: "Read README and source map summaries.",
+          },
+        ];
+      }
+      if (calls[0].tool === "searchRepoPaths") {
+        return [
+          {
+            tool: "searchRepoPaths",
+            ok: true,
+            summary: "Found memory candidates",
+            candidateFiles: ["src/memory/manager.ts"],
+          },
+        ];
+      }
+      assert.strictEqual(calls[0].tool, "readGithubFiles");
+      assert.deepStrictEqual(calls[0].args?.paths, ["src/memory/manager.ts"]);
+      return [
+        {
+          tool: "readGithubFiles",
+          ok: true,
+          summary: "Fetched memory manager",
+          retrievedFiles: [fetchedFile],
+        },
+      ];
+    },
+    judgeSufficiency: async (): Promise<AgentSufficiencyDecision> => {
+      sufficiencyChecks += 1;
+      return {
+        enough: true,
+        reason: "Source file retrieved",
+        confidence: "high",
+        nextToolCalls: [],
+      };
+    },
+    answerWithObservations: async ({ observations, retrievedFiles }) => {
+      assert.deepStrictEqual(
+        observations.map((observation) => observation.tool),
+        ["readSummaries", "searchRepoPaths", "readGithubFiles"],
+      );
+      assert.deepStrictEqual(retrievedFiles, [fetchedFile]);
+      return createAnswer("grounded memory design answer");
+    },
+  });
+
+  assert.strictEqual(result.answer, "grounded memory design answer");
+  assert.strictEqual(result.retrievalMode, "github-code");
+  assert.deepStrictEqual(result.retrievedFiles, [fetchedFile]);
+  assert.deepStrictEqual(executed, ["readSummaries", "searchRepoPaths", "readGithubFiles"]);
+  assert.strictEqual(sufficiencyChecks, 0);
+});
+
+test("generic agent loop allows learning path questions to stay summary-only", async () => {
+  const payload = {
+    ...createPayload(),
+    question: "What should I learn first in this project?",
+  };
+  const executed: string[] = [];
+
+  const result = await answerAgentQuestion(payload, {
+    planRetriever: async () => ({
+      needsCodeContext: false,
+      targetFiles: [],
+      reason: "legacy unused",
+      confidence: "low",
+    }),
+    fetchFiles: async () => [],
+    answerWithSummary: async () => createAnswer("summary answer"),
+    answerWithCode: async () => createAnswer("code answer"),
+    judgeIntent: async () => ({
+      category: "learning-path",
+      reason: "The user asks for study guidance.",
+      confidence: "medium",
+      toolCalls: [{ tool: "readSummaries", args: {} }],
+    }),
+    executeToolCalls: async (_payload, calls): Promise<AgentObservation[]> => {
+      executed.push(calls[0].tool);
+      return [
+        {
+          tool: "readSummaries",
+          ok: true,
+          summary: "Read README and source map summaries.",
+        },
+      ];
+    },
+    judgeSufficiency: async (): Promise<AgentSufficiencyDecision> => ({
+      enough: true,
+      reason: "Summaries are enough for a learning path.",
+      confidence: "medium",
+      nextToolCalls: [],
+    }),
+    answerWithObservations: async ({ retrievedFiles }) => {
+      assert.deepStrictEqual(retrievedFiles, []);
+      return createAnswer("learning path answer");
+    },
+  });
+
+  assert.strictEqual(result.answer, "learning path answer");
+  assert.strictEqual(result.retrievalMode, "summary-only");
+  assert.deepStrictEqual(result.retrievedFiles, []);
+  assert.deepStrictEqual(executed, ["readSummaries"]);
+});
+
+test("generic agent loop preserves retrieved files when final observation answer times out", async () => {
+  const payload = createPayload();
+  const fetchedFile: RetrievedFileContext = {
+    filePath: "src/memory-store.ts",
+    branch: "main",
+    status: "fetched",
+    snippet: "export function saveMemory() {}",
+  };
+
+  const result = await answerAgentQuestion(payload, {
+    planRetriever: async () => ({
+      needsCodeContext: false,
+      targetFiles: [],
+      reason: "legacy unused",
+      confidence: "low",
+    }),
+    fetchFiles: async () => [],
+    answerWithSummary: async () => createAnswer("summary answer"),
+    answerWithCode: async () => createAnswer("code answer"),
+    judgeIntent: async () => ({
+      category: "architecture",
+      reason: "Need source",
+      confidence: "high",
+      toolCalls: [{ tool: "readGithubFiles", args: { paths: ["src/memory-store.ts"] } }],
+    }),
+    executeToolCalls: async (): Promise<AgentObservation[]> => [
+      {
+        tool: "readGithubFiles",
+        ok: true,
+        summary: "Fetched memory store",
+        retrievedFiles: [fetchedFile],
+      },
+    ],
+    judgeSufficiency: async (): Promise<AgentSufficiencyDecision> => ({
+      enough: true,
+      reason: "Source retrieved",
+      confidence: "high",
+      nextToolCalls: [],
+    }),
+    answerWithObservations: async () => {
+      throw new Error("REQUEST_TIMEOUT");
+    },
+  });
+
+  assert.strictEqual(result.source, "fallback");
+  assert.strictEqual(result.retrievalMode, "github-code");
+  assert.deepStrictEqual(result.retrievedFiles, [fetchedFile]);
+  assert.match(result.answer, /src\/memory-store\.ts/);
+  assert.match(result.answer, /saveMemory/);
+  assert.doesNotMatch(result.answer, /model timed out|repository summaries|README and source map/i);
+  assert.deepStrictEqual(result.evidence, [
+    {
+      filePath: "src/memory-store.ts",
+      lineStart: 1,
+      snippet: "export function saveMemory() {}",
+      reason: "Fetched source evidence used after final answer timeout.",
+    },
   ]);
 });

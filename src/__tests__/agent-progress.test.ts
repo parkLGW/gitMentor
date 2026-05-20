@@ -31,9 +31,34 @@ test("buildAgentProgressText renders reading progress counts", () => {
   );
 });
 
+test("buildAgentProgressText appends concise progress notes", () => {
+  assert.strictEqual(
+    buildAgentProgressText(
+      { stage: "drafting-answer", note: "final LLM" },
+      "zh",
+    ),
+    "正在整理答案：final LLM",
+  );
+});
+
 test("buildAgentProgressText renders drafting stage text", () => {
   assert.strictEqual(
     buildAgentProgressText({ stage: "drafting-answer" }, "zh"),
     "正在整理答案",
+  );
+});
+
+test("buildAgentProgressText renders generic agent loop stages", () => {
+  assert.strictEqual(
+    buildAgentProgressText({ stage: "understanding-intent" }, "zh"),
+    "正在理解问题意图",
+  );
+  assert.strictEqual(
+    buildAgentProgressText({ stage: "searching-files" }, "en"),
+    "Searching repository context",
+  );
+  assert.strictEqual(
+    buildAgentProgressText({ stage: "indexing-code" }, "zh"),
+    "正在建立代码索引",
   );
 });

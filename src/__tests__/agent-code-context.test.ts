@@ -30,6 +30,9 @@ test("parseRetrievalPlan caps target files and normalizes paths", () => {
       "./src/features/gamma.ts",
       "src/utils/helpers.ts",
       "src/extra.ts",
+      "src/extra-2.ts",
+      "src/extra-3.ts",
+      "src/extra-4.ts",
     ],
     reason: "Gather context",
     confidence: "high",
@@ -38,13 +41,16 @@ test("parseRetrievalPlan caps target files and normalizes paths", () => {
   assert.strictEqual(plan.needsCodeContext, true);
   assert.strictEqual(plan.reason, "Gather context");
   assert.strictEqual(plan.confidence, "high");
-  assert.strictEqual(plan.targetFiles.length, 5);
+  assert.strictEqual(plan.targetFiles.length, 8);
   assert.deepStrictEqual(plan.targetFiles, [
     "src/features/alpha.ts",
     "src/widgets/beta.ts",
     "docs/guide.md",
     "src/features/gamma.ts",
     "src/utils/helpers.ts",
+    "src/extra.ts",
+    "src/extra-2.ts",
+    "src/extra-3.ts",
   ]);
 });
 
@@ -125,10 +131,13 @@ test("buildRetrievedFileEvidence passthrough caps by max target files", () => {
     { filePath: "src/4.ts", status: "fetched" as const },
     { filePath: "src/5.ts", status: "failed" as const },
     { filePath: "src/6.ts", status: "skipped" as const },
+    { filePath: "src/7.ts", status: "fetched" as const },
+    { filePath: "src/8.ts", status: "failed" as const },
+    { filePath: "src/9.ts", status: "skipped" as const },
   ];
 
   const evidence = buildRetrievedFileEvidence(files);
-  assert.deepStrictEqual(evidence, files.slice(0, 5));
+  assert.deepStrictEqual(evidence, files.slice(0, 8));
 });
 
 test("flattenTreeFilePaths returns nested repo-relative file paths", () => {
@@ -187,11 +196,12 @@ test("rankCandidateFiles prioritizes planner targets and matching repo paths", (
 
 test("resolveBranchCandidates prefers default branch then main then master without duplicates", () => {
   assert.deepStrictEqual(resolveBranchCandidates("develop"), [
+    "HEAD",
     "develop",
     "main",
     "master",
   ]);
-  assert.deepStrictEqual(resolveBranchCandidates("main"), ["main", "master"]);
+  assert.deepStrictEqual(resolveBranchCandidates("main"), ["HEAD", "main", "master"]);
 });
 
 test("buildRawGithubUrl builds an encoded raw github content url", () => {

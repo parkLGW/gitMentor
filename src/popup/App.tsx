@@ -17,8 +17,20 @@ type TabType =
   | "security"
   | "settings";
 
+function getInitialTab(): TabType {
+  const tab = new URLSearchParams(window.location.search).get("tab");
+  return tab === "overview" ||
+    tab === "quickstart" ||
+    tab === "sourcemap" ||
+    tab === "agent" ||
+    tab === "security" ||
+    tab === "settings"
+    ? tab
+    : "overview";
+}
+
 function App() {
-  const [activeTab, setActiveTab] = useState<TabType>("overview");
+  const [activeTab, setActiveTab] = useState<TabType>(getInitialTab);
   const { repo, loading, error } = useRepo();
   const { language, setLanguage } = useLanguage();
 

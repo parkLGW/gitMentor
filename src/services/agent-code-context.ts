@@ -30,6 +30,7 @@ export interface GithubFileRetrievalRequest {
   timeoutMs?: number;
   maxFiles?: number;
   maxCharsPerFile?: number;
+  skipDefaultBranchLookup?: boolean;
 }
 
 export interface GithubFileRetrievalDependencies {
@@ -63,12 +64,38 @@ export interface CandidateRankingInput {
   sessionSummary?: string;
 }
 
-const MAX_TARGET_FILES = 5;
+const MAX_TARGET_FILES = 8;
 const WRAPPING_PUNCTUATION = /^[`"'()[\]{}<>,;:!?]+|[`"'()[\]{}<>,;:!?]+$/g;
 const CODE_FILE_EXTENSION_PATTERN =
   /\.(ts|tsx|js|jsx|mjs|cjs|py|go|java|rs|rb|php|cs|swift|kt|scala|vue|svelte)$/i;
+const INSPECTABLE_FILE_EXTENSION_PATTERN =
+  /\.(ts|tsx|js|jsx|mjs|cjs|py|go|java|rs|rb|php|cs|swift|kt|scala|vue|svelte|json|md|mdx|txt|yml|yaml|toml|ini|env|css|scss|html|htm|sh|bash|zsh|ps1|sql|graphql|gql|proto|xml)$/i;
+const INSPECTABLE_BASENAME_PATTERN =
+  /^(dockerfile|makefile|gemfile|rakefile|procfile|readme|license|copying|notice|changelog)(\.[a-z0-9_-]+)?$/i;
 const LOW_PRIORITY_PATH_PATTERN =
   /(^|\/)(dist|build|coverage|node_modules|vendor|\.next|\.github)(\/|$)/i;
+const LOW_VALUE_ROOT_FILE_PATTERN =
+  /^(license|copying|notice|changelog|release_notes(?:_[^/]+)?)(?:\.[a-z0-9_-]+)?$/i;
+const PATH_LIKE_HINT_PATTERN =
+  /(?:^|[\s`"'([{<])((?:\.\/)?(?:[A-Za-z0-9_.-]+\/)+[A-Za-z0-9_.-]+(?:\.[A-Za-z0-9_.-]+)?)/g;
+const MULTILINGUAL_RANKING_ALIASES: Array<[RegExp, string[]]> = [
+  [/记忆|记住|内存/u, ["memory", "session", "history", "store", "storage"]],
+  [/会话|上下文/u, ["session", "context", "history"]],
+  [/历史|记录/u, ["history", "record"]],
+  [/存储|保存|持久化/u, ["store", "storage", "persist"]],
+  [/缓存/u, ["cache"]],
+  [/入口|启动|初始化/u, ["entry", "main", "index", "init", "bootstrap"]],
+  [/配置|设置/u, ["config", "settings", "options"]],
+  [/认证|鉴权|登录/u, ["auth", "login", "signin"]],
+  [/路由/u, ["route", "router", "routing"]],
+  [/数据库/u, ["database", "db", "sql"]],
+  [/接口|请求/u, ["api", "request", "client"]],
+  [/工具/u, ["tool", "utils", "helper"]],
+  [/任务|作业/u, ["task", "job", "worker"]],
+  [/流程|工作流/u, ["flow", "workflow", "pipeline"]],
+  [/模型/u, ["model"]],
+  [/插件/u, ["plugin", "extension"]],
+];
 
 function toConfidenceLevel(input?: ConfidenceLevel): ConfidenceLevel {
   if (input === "low" || input === "medium" || input === "high") {
@@ -100,6 +127,14 @@ export function normalizeCandidatePath(input: string): string {
 
 export function normalizeGithubFilePath(input: string): string {
   return normalizeCandidatePath(input);
+}
+
+export function isInspectableRepoPath(input: string): boolean {
+  const normalized = normalizeCandidatePath(input);
+  if (!normalized) return false;
+  const basename = normalized.split("/").pop() || normalized;
+  return INSPECTABLE_FILE_EXTENSION_PATTERN.test(normalized) ||
+    INSPECTABLE_BASENAME_PATTERN.test(basename);
 }
 
 export function parseRetrievalPlan(input: RetrievalPlanInput): AgentRetrievalPlan {
@@ -180,16 +215,32 @@ export function flattenTreeFilePaths(nodes: RepoTreeNode[]): string[] {
 }
 
 function tokenizeRankingText(input: string): string[] {
+  const aliases = MULTILINGUAL_RANKING_ALIASES.flatMap(([pattern, terms]) =>
+    pattern.test(input) ? terms : [],
+  );
+
   return Array.from(
     new Set(
-      input
-        .toLowerCase()
-        .replace(/[^a-z0-9/_-]+/g, " ")
-        .split(/\s+/)
-        .map((token) => token.trim())
+      [
+        ...input
+          .toLowerCase()
+          .replace(/[^a-z0-9/_-]+/g, " ")
+          .split(/\s+/),
+        ...aliases,
+      ]
+        .map((token) => token.trim().toLowerCase())
         .filter((token) => token.length >= 2),
     ),
   );
+}
+
+function extractPathLikeHints(input: string): string[] {
+  const paths: string[] = [];
+  for (const match of input.matchAll(PATH_LIKE_HINT_PATTERN)) {
+    const normalized = normalizeCandidatePath(match[1]);
+    if (normalized) paths.push(normalized);
+  }
+  return paths;
 }
 
 function scoreCandidateFile(
@@ -197,6 +248,7 @@ function scoreCandidateFile(
   preferredPaths: Set<string>,
   joinedText: string,
   tokens: string[],
+  questionTokens: string[],
 ): number {
   let score = 0;
   const normalized = filePath.toLowerCase();
@@ -221,6 +273,24 @@ function scoreCandidateFile(
     if (normalized.includes(token)) {
       score += token.length >= 5 ? 90 : 45;
     }
+    if (segments.includes(token)) {
+      score += token.length >= 5 ? 300 : 150;
+    }
+    if (fileStem === token) {
+      score += token.length >= 5 ? 80 : 40;
+    }
+  }
+
+  for (const token of questionTokens) {
+    if (normalized.includes(token)) {
+      score += token.length >= 5 ? 140 : 70;
+    }
+    if (segments.includes(token)) {
+      score += token.length >= 5 ? 500 : 250;
+    }
+    if (fileStem === token) {
+      score += token.length >= 5 ? 80 : 40;
+    }
   }
 
   if (CODE_FILE_EXTENSION_PATTERN.test(normalized)) {
@@ -230,10 +300,17 @@ function scoreCandidateFile(
     score -= 120;
   }
   if (/(^|\/)(test|tests|__tests__|spec|specs)(\/|$)/i.test(normalized)) {
-    score -= 80;
+    score -= 500;
   }
   if (/(^|\/)(readme|docs)(\/|$)|\.md$/i.test(normalized)) {
     score -= 60;
+  }
+  if (segments.length === 1 && LOW_VALUE_ROOT_FILE_PATTERN.test(fileName)) {
+    score -= tokens.some((token) =>
+      token === "license" || token === "legal" || token === "copyright" || token === fileStem
+    )
+      ? 0
+      : 280;
   }
   if (segments.includes("src")) {
     score += 25;
@@ -243,8 +320,23 @@ function scoreCandidateFile(
 }
 
 export function rankCandidateFiles(input: CandidateRankingInput): string[] {
-  const repoPaths = Array.from(
+  const normalizedRepoPaths = Array.from(
     new Set(input.repoPaths.map(normalizeCandidatePath).filter(Boolean)),
+  );
+  const pathHints = new Set(
+    [
+      ...(input.preferredPaths || []),
+      ...extractPathLikeHints(input.question),
+      ...extractPathLikeHints(input.sourceMapSummary || ""),
+      ...extractPathLikeHints(input.readmeSummary || ""),
+      ...extractPathLikeHints(input.sessionSummary || ""),
+    ]
+      .map(normalizeCandidatePath)
+      .filter(Boolean)
+      .map((item) => item.toLowerCase()),
+  );
+  const repoPaths = normalizedRepoPaths.filter((filePath) =>
+    isInspectableRepoPath(filePath) || pathHints.has(filePath.toLowerCase()),
   );
   const preferredPaths = new Set(
     (input.preferredPaths || [])
@@ -262,11 +354,12 @@ export function rankCandidateFiles(input: CandidateRankingInput): string[] {
     .join("\n")
     .toLowerCase();
   const tokens = tokenizeRankingText(rankingText);
+  const questionTokens = tokenizeRankingText(input.question);
 
   return [...repoPaths]
     .map((filePath) => ({
       filePath,
-      score: scoreCandidateFile(filePath, preferredPaths, rankingText, tokens),
+      score: scoreCandidateFile(filePath, preferredPaths, rankingText, tokens, questionTokens),
     }))
     .sort((left, right) => {
       if (right.score !== left.score) {
@@ -284,16 +377,25 @@ export async function fetchRetrievedGithubFiles(
     progress: Pick<AgentProgressEvent, "completed" | "total">
   ) => void | Promise<void>,
 ): Promise<RetrievedFileContext[]> {
-  let defaultBranch: string | undefined;
-  try {
-    defaultBranch = await deps.getDefaultBranch(request.owner, request.repo, {
-      timeoutMs: request.timeoutMs,
-    });
-  } catch {
-    defaultBranch = undefined;
-  }
-
-  const branchCandidates = resolveBranchCandidates(defaultBranch);
+  let defaultBranchCandidates: string[] | null = null;
+  const initialBranchCandidates = resolveBranchCandidates();
+  const loadDefaultBranchCandidates = async (triedBranches: Set<string>) => {
+    if (request.skipDefaultBranchLookup) {
+      return [];
+    }
+    if (!defaultBranchCandidates) {
+      let defaultBranch: string | undefined;
+      try {
+        defaultBranch = await deps.getDefaultBranch(request.owner, request.repo, {
+          timeoutMs: request.timeoutMs,
+        });
+      } catch {
+        defaultBranch = undefined;
+      }
+      defaultBranchCandidates = resolveBranchCandidates(defaultBranch);
+    }
+    return defaultBranchCandidates.filter((branch) => !triedBranches.has(branch));
+  };
   const maxFiles = request.maxFiles ?? MAX_TARGET_FILES;
   const maxCharsPerFile = request.maxCharsPerFile ?? Number.POSITIVE_INFINITY;
 
@@ -302,8 +404,10 @@ export async function fetchRetrievedGithubFiles(
 
   for (const [index, filePath] of targetFiles.entries()) {
     let retrieved: RetrievedFileContext | null = null;
+    const triedBranches = new Set<string>();
 
-    for (const branch of branchCandidates) {
+    for (const branch of initialBranchCandidates) {
+      triedBranches.add(branch);
       const content = await deps.getRawFileContent(
         request.owner,
         request.repo,
@@ -323,6 +427,32 @@ export async function fetchRetrievedGithubFiles(
         snippet: truncated.prompt,
       };
       break;
+    }
+
+    if (!retrieved) {
+      const fallbackBranches = await loadDefaultBranchCandidates(triedBranches);
+      for (const branch of fallbackBranches) {
+        triedBranches.add(branch);
+        const content = await deps.getRawFileContent(
+          request.owner,
+          request.repo,
+          branch,
+          filePath,
+          { timeoutMs: request.timeoutMs }
+        );
+        if (!content) {
+          continue;
+        }
+
+        const truncated = truncateFileForPrompt(filePath, content, maxCharsPerFile);
+        retrieved = {
+          filePath,
+          branch,
+          status: "fetched",
+          snippet: truncated.prompt,
+        };
+        break;
+      }
     }
 
     if (!retrieved) {
@@ -353,6 +483,7 @@ export function resolveBranchCandidates(defaultBranch?: string): string[] {
     candidates.push(value);
   };
 
+  pushUnique("HEAD");
   pushUnique(defaultBranch);
   pushUnique("main");
   pushUnique("master");

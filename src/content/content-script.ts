@@ -4,6 +4,7 @@ import type { DeepFileAnalysisResult } from '@/types/learning'
 const STORAGE_KEYS = {
   language: 'gitmentor_language',
   legacyLanguage: 'language',
+  llmConfig: 'gitmentor_llm_config',
 } as const
 
 // Track current file path to detect changes
@@ -28,26 +29,50 @@ async function getLanguage(): Promise<'zh' | 'en'> {
 // Translations for sidebar UI
 const uiTranslations = {
   zh: {
-    readyToAnalyze: '准备分析',
-    clickToAnalyze: '点击下方按钮开始使用 AI 分析此文件',
-    startAnalysis: '开始分析',
-    requiresLLMConfig: '需要在设置中配置 LLM',
+    readingFile: '正在读取当前文件...',
+    fileUnderstanding: '当前文件理解',
+    fileOverview: '文件概览',
+    metrics: '基础信息',
+    keySymbols: '关键函数/类型',
+    dependencies: '依赖',
+    noSymbols: '未检测到明显的函数、类或类型定义',
+    noDependencies: '未检测到显式依赖',
+    quickQuestions: '快捷追问',
+    aiAnalysis: 'AI 分析此文件',
+    configureLLM: '配置 LLM 后可生成文件解释',
+    openSettings: '打开 GitMentor 设置',
     analyzingFile: '正在分析文件...',
     deepAnalysisInProgress: '正在进行 AI 深度分析...',
     mayTakeMoment: '这可能需要一点时间',
     deepAnalysisFailed: '深度分析失败',
     thinking: '思考中...',
+    loc: '有效行',
+    lines: '行数',
+    imports: '依赖数',
+    todos: '待办',
   },
   en: {
-    readyToAnalyze: 'Ready to Analyze',
-    clickToAnalyze: 'Click the button below to start analyzing this file with AI',
-    startAnalysis: 'Start Analysis',
-    requiresLLMConfig: 'Requires LLM configuration in settings',
+    readingFile: 'Reading current file...',
+    fileUnderstanding: 'Current File Understanding',
+    fileOverview: 'File Overview',
+    metrics: 'Metrics',
+    keySymbols: 'Key Functions / Types',
+    dependencies: 'Dependencies',
+    noSymbols: 'No obvious functions, classes, or types detected',
+    noDependencies: 'No explicit dependencies detected',
+    quickQuestions: 'Quick Questions',
+    aiAnalysis: 'Analyze This File',
+    configureLLM: 'Configure an LLM to generate file explanations',
+    openSettings: 'Open GitMentor Settings',
     analyzingFile: 'Analyzing file...',
     deepAnalysisInProgress: 'Performing deep analysis with AI...',
     mayTakeMoment: 'This may take a moment',
     deepAnalysisFailed: 'Deep analysis failed',
     thinking: 'Thinking...',
+    loc: 'LOC',
+    lines: 'Lines',
+    imports: 'Imports',
+    todos: 'TODOs',
   },
 }
 
@@ -222,7 +247,7 @@ async function injectFileSidebar() {
     </div>
   `
   
-  // Content area - 默认显示开始分析按钮
+  // Content area
   const content = document.createElement('div')
   content.id = 'gitmentor-file-content'
   content.style.cssText = `
@@ -230,36 +255,7 @@ async function injectFileSidebar() {
     font-size: 13px;
     color: #24292e;
   `
-  
-  // 默认显示开始分析界面
-  content.innerHTML = `
-    <div style="text-align: center; padding: 40px 20px;">
-      <div style="font-size: 48px; margin-bottom: 16px;">🔍</div>
-      <h3 style="font-size: 16px; font-weight: 600; margin: 0 0 8px 0; color: #24292e;">
-        ${getText('readyToAnalyze')}
-      </h3>
-      <p style="font-size: 13px; color: #666; margin: 0 0 20px 0; line-height: 1.5;">
-        ${getText('clickToAnalyze')}
-      </p>
-      <button id="gitmentor-start-analysis-btn" style="
-        width: 100%;
-        padding: 12px 20px;
-        background: #24292e;
-        color: white;
-        border: 1px solid rgba(27, 31, 35, 0.15);
-        border-radius: 6px;
-        font-size: 14px;
-        font-weight: 500;
-        cursor: pointer;
-        transition: background-color 0.2s;
-      ">
-        ${getText('startAnalysis')}
-      </button>
-      <p style="font-size: 11px; color: #999; margin-top: 12px;">
-        ${getText('requiresLLMConfig')}
-      </p>
-    </div>
-  `
+  renderFileLoading(content)
   
   sidebar.appendChild(header)
   sidebar.appendChild(content)
@@ -270,12 +266,8 @@ async function injectFileSidebar() {
   closeBtn?.addEventListener('click', () => {
     sidebar.remove()
   })
-  
-  // Start analysis button
-  const startAnalysisBtn = content.querySelector('#gitmentor-start-analysis-btn')
-  startAnalysisBtn?.addEventListener('click', () => {
-    fetchAndAnalyzeFile(fileInfo, content)
-  })
+
+  fetchAndAnalyzeFile(fileInfo, content)
 }
 
 function createSectionTitle(text: string): HTMLHeadingElement {
@@ -293,82 +285,628 @@ function createText(text: string, style = ''): HTMLParagraphElement {
   return p
 }
 
+interface FileData {
+  fileName: string
+  fileContent: string
+}
+
+type FileInsightSymbolKind =
+  | 'function'
+  | 'class'
+  | 'component'
+  | 'hook'
+  | 'type'
+  | 'interface'
+  | 'constant'
+
+interface FileInsightImport {
+  source: string
+  lineStart: number
+}
+
+interface FileInsightSymbol {
+  name: string
+  kind: FileInsightSymbolKind
+  lineStart: number
+}
+
+const FILE_LANGUAGE_LABELS: Record<string, string> = {
+  js: 'JavaScript',
+  jsx: 'JSX',
+  ts: 'TypeScript',
+  tsx: 'TSX',
+  py: 'Python',
+  go: 'Go',
+  rs: 'Rust',
+  java: 'Java',
+  rb: 'Ruby',
+  php: 'PHP',
+  css: 'CSS',
+  scss: 'SCSS',
+  html: 'HTML',
+  json: 'JSON',
+  yml: 'YAML',
+  yaml: 'YAML',
+  toml: 'TOML',
+  sh: 'Shell',
+}
+
+function fileBasename(filePath: string): string {
+  return filePath.split('/').pop() || filePath
+}
+
+function fileExtension(filePath: string): string {
+  const match = fileBasename(filePath).match(/\.([^.]+)$/)
+  return match?.[1]?.toLowerCase() || ''
+}
+
+function fileLanguageLabel(filePath: string): string {
+  const ext = fileExtension(filePath)
+  return FILE_LANGUAGE_LABELS[ext] || (ext ? ext.toUpperCase() : 'File')
+}
+
+function countSourceLoc(lines: string[]): number {
+  return lines.filter((line) => {
+    const trimmed = line.trim()
+    return trimmed.length > 0 &&
+      !trimmed.startsWith('//') &&
+      !trimmed.startsWith('#') &&
+      !trimmed.startsWith('*')
+  }).length
+}
+
+function pushUniqueLocalImport(
+  imports: FileInsightImport[],
+  source: string,
+  lineStart: number,
+) {
+  const normalized = source.trim()
+  if (!normalized || imports.some((item) => item.source === normalized)) return
+  imports.push({ source: normalized, lineStart })
+}
+
+function extractLocalImports(lines: string[]): FileInsightImport[] {
+  const imports: FileInsightImport[] = []
+
+  lines.forEach((line, index) => {
+    const lineStart = index + 1
+    const trimmed = line.trim()
+    const pythonFrom = trimmed.match(/^from\s+([A-Za-z0-9_.]+)\s+import\s+/)
+    if (pythonFrom) {
+      pushUniqueLocalImport(imports, pythonFrom[1], lineStart)
+      return
+    }
+
+    const jsFrom = trimmed.match(/^import\s+.+?\s+from\s+["']([^"']+)["']/)
+    if (jsFrom) {
+      pushUniqueLocalImport(imports, jsFrom[1], lineStart)
+      return
+    }
+
+    const jsSideEffect = trimmed.match(/^import\s*["']([^"']+)["']/)
+    if (jsSideEffect) {
+      pushUniqueLocalImport(imports, jsSideEffect[1], lineStart)
+      return
+    }
+
+    const pythonImport = trimmed.match(/^import\s+(.+)/)
+    if (pythonImport && !trimmed.startsWith('import(')) {
+      pythonImport[1]
+        .split(',')
+        .map((item) => item.trim().split(/\s+as\s+/)[0])
+        .forEach((source) => pushUniqueLocalImport(imports, source, lineStart))
+      return
+    }
+
+    const requireMatch = trimmed.match(/require\(["']([^"']+)["']\)/)
+    if (requireMatch) {
+      pushUniqueLocalImport(imports, requireMatch[1], lineStart)
+    }
+  })
+
+  return imports.slice(0, 12)
+}
+
+function symbolKindForLocalName(name: string, fallback: FileInsightSymbolKind): FileInsightSymbolKind {
+  if (/^use[A-Z0-9]/.test(name)) return 'hook'
+  if (/^[A-Z]/.test(name) && (fallback === 'function' || fallback === 'constant')) {
+    return 'component'
+  }
+  return fallback
+}
+
+function extractLocalSymbols(lines: string[]): FileInsightSymbol[] {
+  const symbols: FileInsightSymbol[] = []
+
+  lines.forEach((line, index) => {
+    const lineStart = index + 1
+    const trimmed = line.trim()
+
+    const pythonFunction = trimmed.match(/^(?:async\s+)?def\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(/)
+    if (pythonFunction) {
+      symbols.push({ name: pythonFunction[1], kind: 'function', lineStart })
+      return
+    }
+
+    const classMatch = trimmed.match(/^(?:export\s+)?class\s+([A-Za-z_][A-Za-z0-9_]*)/)
+    if (classMatch) {
+      symbols.push({ name: classMatch[1], kind: 'class', lineStart })
+      return
+    }
+
+    const interfaceMatch = trimmed.match(/^(?:export\s+)?interface\s+([A-Za-z_][A-Za-z0-9_]*)/)
+    if (interfaceMatch) {
+      symbols.push({ name: interfaceMatch[1], kind: 'interface', lineStart })
+      return
+    }
+
+    const typeMatch = trimmed.match(/^(?:export\s+)?type\s+([A-Za-z_][A-Za-z0-9_]*)/)
+    if (typeMatch) {
+      symbols.push({ name: typeMatch[1], kind: 'type', lineStart })
+      return
+    }
+
+    const functionMatch = trimmed.match(/^(?:export\s+)?(?:async\s+)?function\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(/)
+    if (functionMatch) {
+      symbols.push({
+        name: functionMatch[1],
+        kind: symbolKindForLocalName(functionMatch[1], 'function'),
+        lineStart,
+      })
+      return
+    }
+
+    const constFunction = trimmed.match(/^(?:export\s+)?const\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?:async\s*)?(?:\([^)]*\)|[A-Za-z_][A-Za-z0-9_]*)\s*=>/)
+    if (constFunction) {
+      symbols.push({
+        name: constFunction[1],
+        kind: symbolKindForLocalName(constFunction[1], 'constant'),
+        lineStart,
+      })
+    }
+  })
+
+  return symbols.slice(0, 16)
+}
+
+function localModuleName(filePath: string): string {
+  const segments = filePath.split('/').filter(Boolean)
+  if (segments.length <= 1) return 'root'
+  const parent = segments[segments.length - 2]
+  return parent === 'src' && segments.length > 2 ? segments[segments.length - 3] : parent
+}
+
+function buildLocalQuickQuestions(
+  filePath: string,
+  imports: FileInsightImport[],
+  lang: 'zh' | 'en',
+): string[] {
+  const moduleLabel = localModuleName(filePath)
+  if (lang === 'zh') {
+    return [
+      '解释这个文件的实现原理',
+      `这个文件在 ${moduleLabel} 模块中负责什么？`,
+      imports.length > 0 ? '接下来应该看哪些依赖文件？' : '接下来应该看哪个相关文件？',
+    ]
+  }
+
+  return [
+    "Explain this file's implementation",
+    `What role does this file play in the ${moduleLabel} module?`,
+    imports.length > 0 ? 'Which related files should I read next?' : 'Which nearby file should I read next?',
+  ]
+}
+
+function buildFileLocalInsight(filePath: string, fileContent: string, lang: 'zh' | 'en') {
+  const lines = fileContent.split('\n')
+  const imports = extractLocalImports(lines)
+  return {
+    filePath,
+    fileName: fileBasename(filePath),
+    extension: fileExtension(filePath),
+    languageLabel: fileLanguageLabel(filePath),
+    totalLines: lines.length,
+    loc: countSourceLoc(lines),
+    imports,
+    symbols: extractLocalSymbols(lines),
+    todos: lines.filter((line) => /TODO|FIXME|HACK|XXX/i.test(line)).length,
+    quickQuestions: buildLocalQuickQuestions(filePath, imports, lang),
+  }
+}
+
+async function isLLMConfigured(): Promise<boolean> {
+  try {
+    if (!isExtensionContextValid()) return false
+    const result = await chrome.storage.local.get([STORAGE_KEYS.llmConfig])
+    return Boolean(result[STORAGE_KEYS.llmConfig])
+  } catch (error) {
+    console.warn('[GitMentor] Could not read LLM config:', error)
+    return false
+  }
+}
+
+function renderFileLoading(container: HTMLElement) {
+  container.innerHTML = `
+    <div style="padding:16px;background:#f6f8fa;border:1px solid #d8dee4;border-radius:8px;text-align:center;color:#57606a;font-size:12px;">
+      <div style="display:inline-block;width:16px;height:16px;border:2px solid #57606a;border-top-color:transparent;border-radius:50%;animation:gitmentor-spin 1s linear infinite;margin-right:8px;vertical-align:middle;"></div>
+      ${getText('readingFile')}
+    </div>
+    <style>@keyframes gitmentor-spin { to { transform: rotate(360deg); } }</style>
+  `
+}
+
+function createCard(): HTMLDivElement {
+  const card = document.createElement('div')
+  card.style.cssText =
+    'padding:12px;background:#fff;border:1px solid #d8dee4;border-radius:8px;'
+  return card
+}
+
+function createMetric(label: string, value: string | number): HTMLDivElement {
+  const box = document.createElement('div')
+  box.style.cssText =
+    'min-width:86px;flex:1;padding:8px;background:#f6f8fa;border-radius:6px;border:1px solid #eaeef2;'
+  const valueEl = document.createElement('div')
+  valueEl.style.cssText = 'font-size:15px;font-weight:600;color:#24292f;line-height:1.2;'
+  valueEl.textContent = String(value)
+  const labelEl = document.createElement('div')
+  labelEl.style.cssText = 'font-size:10px;color:#57606a;margin-top:2px;'
+  labelEl.textContent = label
+  box.append(valueEl, labelEl)
+  return box
+}
+
+function createChip(text: string, tone: 'blue' | 'gray' | 'amber' = 'gray'): HTMLSpanElement {
+  const chip = document.createElement('span')
+  const colors = {
+    blue: 'background:#ddf4ff;color:#0969da;border-color:#b6e3ff;',
+    gray: 'background:#f6f8fa;color:#57606a;border-color:#d8dee4;',
+    amber: 'background:#fff8c5;color:#9a6700;border-color:#f0d98c;',
+  }
+  chip.style.cssText =
+    `display:inline-flex;align-items:center;max-width:100%;padding:3px 8px;border:1px solid;border-radius:999px;font-size:11px;line-height:1.4;word-break:break-word;${colors[tone]}`
+  chip.textContent = text
+  return chip
+}
+
+function confidenceText(confidence: DeepFileAnalysisResult['confidence']): string {
+  if (currentLanguage === 'zh') {
+    const labels = {
+      high: '高',
+      medium: '中',
+      low: '低',
+    } as const
+    return `置信度：${labels[confidence] || confidence}`
+  }
+  return `Confidence: ${confidence}`
+}
+
+function createPrimaryButton(text: string, disabled = false): HTMLButtonElement {
+  const button = document.createElement('button')
+  button.textContent = text
+  button.disabled = disabled
+  button.style.cssText = `
+    width: 100%;
+    padding: 10px 14px;
+    background: ${disabled ? '#f6f8fa' : '#24292e'};
+    color: ${disabled ? '#8c959f' : 'white'};
+    border: 1px solid ${disabled ? '#d8dee4' : 'rgba(27, 31, 35, 0.15)'};
+    border-radius: 6px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: ${disabled ? 'not-allowed' : 'pointer'};
+  `
+  return button
+}
+
+function renderInsightError(container: HTMLElement, message: string) {
+  container.replaceChildren()
+  const error = document.createElement('div')
+  error.style.cssText =
+    'color:#cf222e;padding:12px;background:#ffebe9;border:1px solid #ffcecb;border-radius:8px;font-size:12px;line-height:1.5;'
+  error.textContent = message
+  container.appendChild(error)
+}
+
+function renderQuestionAnswer(
+  target: HTMLElement,
+  fileData: FileData,
+  question: string,
+) {
+  target.replaceChildren(
+    createText(
+      getText('thinking'),
+      'padding:8px;background:#f6f8fa;border-radius:6px;font-size:12px;color:#57606a;margin:0;',
+    ),
+  )
+
+  chrome.runtime.sendMessage(
+    {
+      action: 'askQuestion',
+      fileName: fileData.fileName,
+      fileContent: fileData.fileContent,
+      question,
+    },
+    (qaResult: any) => {
+      if (qaResult?.error) {
+        renderInsightError(target, qaResult.error)
+        return
+      }
+
+      const answer = document.createElement('div')
+      answer.style.cssText =
+        'padding:10px;background:#f6f8fa;border:1px solid #d8dee4;border-radius:8px;font-size:12px;line-height:1.6;color:#24292f;white-space:pre-wrap;word-break:break-word;'
+      answer.textContent = String(qaResult?.answer || '')
+      target.replaceChildren(answer)
+    },
+  )
+}
+
+function renderFileInsight(
+  container: HTMLElement,
+  fileInfo: FileInfo,
+  fileData: FileData,
+  llmConfigured: boolean,
+) {
+  const insight = buildFileLocalInsight(fileData.fileName, fileData.fileContent, currentLanguage)
+  container.replaceChildren()
+
+  const wrapper = document.createElement('div')
+  wrapper.style.cssText = 'display:flex;flex-direction:column;gap:12px;'
+
+  const overview = createCard()
+  overview.appendChild(createSectionTitle(getText('fileUnderstanding')))
+  overview.appendChild(
+    createText(
+      currentLanguage === 'zh'
+        ? `先基于当前文件内容做本地解析。AI 分析会在你点击按钮后再调用模型。`
+        : 'Local file context is available now. AI analysis only runs after you click the button.',
+      'font-size:12px;color:#57606a;line-height:1.55;margin:0 0 10px 0;',
+    ),
+  )
+  const path = document.createElement('div')
+  path.style.cssText =
+    'font-family:ui-monospace,SFMono-Regular,SFMono,Consolas,monospace;font-size:12px;color:#24292f;background:#f6f8fa;border-radius:6px;padding:8px;word-break:break-all;'
+  path.textContent = insight.filePath
+  overview.appendChild(path)
+  const overviewChips = document.createElement('div')
+  overviewChips.style.cssText = 'display:flex;flex-wrap:wrap;gap:6px;margin-top:10px;'
+  overviewChips.append(
+    createChip(insight.languageLabel, 'blue'),
+    createChip(`${getText('lines')}: ${insight.totalLines}`),
+    createChip(`${getText('loc')}: ${insight.loc}`),
+  )
+  if (insight.todos > 0) {
+    overviewChips.appendChild(createChip(`${getText('todos')}: ${insight.todos}`, 'amber'))
+  }
+  overview.appendChild(overviewChips)
+  wrapper.appendChild(overview)
+
+  const metrics = createCard()
+  metrics.appendChild(createSectionTitle(getText('metrics')))
+  const metricRow = document.createElement('div')
+  metricRow.style.cssText = 'display:flex;gap:8px;flex-wrap:wrap;'
+  metricRow.append(
+    createMetric(getText('lines'), insight.totalLines),
+    createMetric(getText('loc'), insight.loc),
+    createMetric(getText('imports'), insight.imports.length),
+  )
+  metrics.appendChild(metricRow)
+  wrapper.appendChild(metrics)
+
+  const symbols = createCard()
+  symbols.appendChild(createSectionTitle(getText('keySymbols')))
+  if (insight.symbols.length === 0) {
+    symbols.appendChild(createText(getText('noSymbols'), 'font-size:12px;color:#57606a;margin:0;'))
+  } else {
+    const list = document.createElement('div')
+    list.style.cssText = 'display:flex;flex-direction:column;gap:6px;'
+    insight.symbols.slice(0, 10).forEach((symbol) => {
+      const row = document.createElement('div')
+      row.style.cssText =
+        'display:flex;align-items:center;gap:6px;padding:7px 8px;background:#f6f8fa;border-radius:6px;min-width:0;'
+      const name = document.createElement('span')
+      name.style.cssText =
+        'flex:1;min-width:0;font-family:ui-monospace,SFMono-Regular,SFMono,Consolas,monospace;font-size:12px;color:#0969da;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;'
+      name.textContent = symbol.name
+      row.append(name, createChip(symbol.kind, 'gray'), createChip(`L${symbol.lineStart}`, 'blue'))
+      list.appendChild(row)
+    })
+    symbols.appendChild(list)
+  }
+  wrapper.appendChild(symbols)
+
+  const dependencies = createCard()
+  dependencies.appendChild(createSectionTitle(getText('dependencies')))
+  const depTags = document.createElement('div')
+  depTags.style.cssText = 'display:flex;flex-wrap:wrap;gap:6px;'
+  if (insight.imports.length === 0) {
+    dependencies.appendChild(createText(getText('noDependencies'), 'font-size:12px;color:#57606a;margin:0;'))
+  } else {
+    insight.imports.slice(0, 12).forEach((item) => {
+      depTags.appendChild(createChip(item.source, 'blue'))
+    })
+    dependencies.appendChild(depTags)
+  }
+  wrapper.appendChild(dependencies)
+
+  const aiCard = createCard()
+  aiCard.appendChild(createSectionTitle(currentLanguage === 'zh' ? 'AI 增强' : 'AI Assist'))
+  const aiButton = createPrimaryButton(
+    llmConfigured ? getText('aiAnalysis') : getText('configureLLM'),
+    !llmConfigured,
+  )
+  if (llmConfigured) {
+    aiButton.addEventListener('click', () => performDeepAnalysis(container, fileData))
+  }
+  aiCard.appendChild(aiButton)
+  if (!llmConfigured) {
+    aiCard.appendChild(
+      createText(
+        getText('configureLLM'),
+        'font-size:11px;color:#8c959f;text-align:center;margin:8px 0 8px 0;',
+      ),
+    )
+    const settingsButton = createPrimaryButton(getText('openSettings'))
+    settingsButton.addEventListener('click', () => openPanel(fileInfo.owner, fileInfo.repo, 'settings'))
+    aiCard.appendChild(settingsButton)
+  }
+  wrapper.appendChild(aiCard)
+
+  const questions = createCard()
+  questions.appendChild(createSectionTitle(getText('quickQuestions')))
+  const response = document.createElement('div')
+  response.style.cssText = 'margin-top:10px;'
+  const questionList = document.createElement('div')
+  questionList.style.cssText = 'display:flex;flex-direction:column;gap:6px;'
+  insight.quickQuestions.forEach((question) => {
+    const button = document.createElement('button')
+    button.textContent = question
+    button.disabled = !llmConfigured
+    button.style.cssText = `
+      width:100%;
+      text-align:left;
+      padding:8px 10px;
+      border:1px solid #d8dee4;
+      border-radius:6px;
+      background:${llmConfigured ? '#f6f8fa' : '#f6f8fa'};
+      color:${llmConfigured ? '#24292f' : '#8c959f'};
+      font-size:12px;
+      line-height:1.4;
+      cursor:${llmConfigured ? 'pointer' : 'not-allowed'};
+    `
+    if (llmConfigured) {
+      button.addEventListener('click', () => renderQuestionAnswer(response, fileData, question))
+    }
+    questionList.appendChild(button)
+  })
+  questions.append(questionList, response)
+  wrapper.appendChild(questions)
+
+  container.appendChild(wrapper)
+}
+
 function renderDeepAnalysis(
   container: HTMLElement,
   analysis: DeepFileAnalysisResult,
-  fileData: { fileName: string; fileContent: string },
+  fileData: FileData,
 ) {
   container.replaceChildren()
 
   const wrapper = document.createElement('div')
   wrapper.style.cssText = 'display:flex;flex-direction:column;gap:12px;'
 
-  const summaryCard = document.createElement('div')
-  summaryCard.style.cssText =
-    'padding:12px;background:#f0f7ff;border-radius:6px;border-left:3px solid #0366d6;'
-  summaryCard.appendChild(createSectionTitle(currentLanguage === 'zh' ? 'AI 分析' : 'AI Analysis'))
-  summaryCard.appendChild(
-    createText(analysis.summary, 'font-size:12px;color:#444;line-height:1.5;margin:0;'),
+  const roleCard = document.createElement('div')
+  roleCard.style.cssText =
+    'padding:14px;background:#f0f7ff;border-radius:8px;border-left:4px solid #0969da;'
+  roleCard.appendChild(createSectionTitle(currentLanguage === 'zh' ? '这个文件做什么' : 'What This File Does'))
+  roleCard.appendChild(
+    createText(
+      analysis.role || analysis.summary,
+      'font-size:14px;color:#24292f;line-height:1.55;margin:0;font-weight:600;',
+    ),
   )
-  if (analysis.confidence === 'low') {
-    summaryCard.appendChild(
+  if (analysis.summary && analysis.summary !== analysis.role) {
+    roleCard.appendChild(
       createText(
-        currentLanguage === 'zh'
-          ? '提示：当前分析证据不足，请结合代码手动确认。'
-          : 'Note: Low confidence due to limited evidence. Please verify with source code.',
-        'font-size:11px;color:#b45309;margin-top:8px;',
+        analysis.summary,
+        'font-size:12px;color:#57606a;line-height:1.5;margin:8px 0 0 0;',
       ),
     )
   }
-  wrapper.appendChild(summaryCard)
+  const confidenceRow = document.createElement('div')
+  confidenceRow.style.cssText = 'display:flex;gap:6px;align-items:center;margin-top:10px;'
+  confidenceRow.appendChild(createChip(
+    confidenceText(analysis.confidence),
+    analysis.confidence === 'low' ? 'amber' : 'blue',
+  ))
+  roleCard.appendChild(confidenceRow)
+  wrapper.appendChild(roleCard)
+
+  if (analysis.workflow && analysis.workflow.length > 0) {
+    const section = createCard()
+    section.appendChild(createSectionTitle(currentLanguage === 'zh' ? '工作流程' : 'How It Works'))
+    const list = document.createElement('div')
+    list.style.cssText = 'display:flex;flex-direction:column;gap:8px;'
+    analysis.workflow.slice(0, 6).forEach((step) => {
+      const row = document.createElement('div')
+      row.style.cssText = 'display:flex;gap:8px;align-items:flex-start;'
+      const badge = document.createElement('div')
+      badge.style.cssText =
+        'width:22px;height:22px;border-radius:50%;background:#0969da;color:white;font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:1px;'
+      badge.textContent = String(step.step)
+      const body = document.createElement('div')
+      body.style.cssText = 'flex:1;min-width:0;'
+      if (step.title) {
+        body.appendChild(createText(step.title, 'font-size:12px;font-weight:600;color:#24292f;margin:0 0 2px 0;'))
+      }
+      body.appendChild(createText(step.description, 'font-size:12px;color:#57606a;line-height:1.5;margin:0;'))
+      const meta = [step.functionName, step.lineNumber ? `L${step.lineNumber}` : ''].filter(Boolean).join(' · ')
+      if (meta) {
+        body.appendChild(createText(meta, 'font-size:10px;color:#8c959f;margin:3px 0 0 0;font-family:monospace;'))
+      }
+      row.append(badge, body)
+      list.appendChild(row)
+    })
+    section.appendChild(list)
+    wrapper.appendChild(section)
+  }
 
   if (analysis.components.length > 0) {
-    const section = document.createElement('div')
-    section.appendChild(createSectionTitle(currentLanguage === 'zh' ? '关键组件' : 'Key Components'))
+    const section = createCard()
+    section.appendChild(createSectionTitle(currentLanguage === 'zh' ? '关键实现' : 'Key Implementation'))
     analysis.components.slice(0, 8).forEach((component) => {
       const row = document.createElement('div')
-      row.style.cssText = 'padding:8px;background:#f6f8fa;border-radius:4px;margin-bottom:6px;'
+      row.style.cssText = 'padding:8px;background:#f6f8fa;border-radius:6px;margin-bottom:6px;'
       const heading = document.createElement('div')
       heading.style.cssText = 'display:flex;align-items:center;gap:6px;'
       const name = document.createElement('span')
-      name.style.cssText = 'font-family:monospace;font-size:12px;font-weight:500;color:#0366d6;'
+      name.style.cssText = 'font-family:monospace;font-size:12px;font-weight:600;color:#0969da;'
       name.textContent = component.name
-      const kind = document.createElement('span')
-      kind.style.cssText =
-        'font-size:10px;padding:1px 6px;background:#e1e4e8;border-radius:3px;color:#666;'
-      kind.textContent = component.type
-      heading.append(name, kind)
+      heading.append(name, createChip(component.type, 'gray'))
       row.appendChild(heading)
-      row.appendChild(
-        createText(component.description, 'font-size:11px;color:#666;margin:4px 0 0 0;'),
-      )
+      if (component.description) {
+        row.appendChild(
+          createText(component.description, 'font-size:11px;color:#57606a;line-height:1.45;margin:4px 0 0 0;'),
+        )
+      }
       section.appendChild(row)
     })
     wrapper.appendChild(section)
   }
 
+  if (analysis.designNotes && analysis.designNotes.length > 0) {
+    const section = createCard()
+    section.appendChild(createSectionTitle(currentLanguage === 'zh' ? '为什么这样设计' : 'Why This Design'))
+    const list = document.createElement('ul')
+    list.style.cssText = 'margin:0;padding-left:16px;font-size:12px;color:#57606a;line-height:1.6;'
+    analysis.designNotes.slice(0, 4).forEach((note) => {
+      const li = document.createElement('li')
+      li.textContent = note
+      list.appendChild(li)
+    })
+    section.appendChild(list)
+    wrapper.appendChild(section)
+  }
+
   if (analysis.dependencies.length > 0) {
-    const section = document.createElement('div')
-    section.appendChild(createSectionTitle(currentLanguage === 'zh' ? '依赖' : 'Dependencies'))
+    const section = createCard()
+    section.appendChild(createSectionTitle(currentLanguage === 'zh' ? '相关依赖' : 'Related Dependencies'))
     const tags = document.createElement('div')
-    tags.style.cssText = 'display:flex;flex-wrap:wrap;gap:4px;'
+    tags.style.cssText = 'display:flex;flex-wrap:wrap;gap:6px;'
     analysis.dependencies.slice(0, 10).forEach((dep) => {
-      const tag = document.createElement('span')
-      tag.style.cssText =
-        'background:#e8f4fd;padding:2px 8px;border-radius:4px;font-size:11px;color:#0f172a;'
-      tag.textContent = dep
-      tags.appendChild(tag)
+      tags.appendChild(createChip(dep, 'blue'))
     })
     section.appendChild(tags)
     wrapper.appendChild(section)
   }
 
   if (analysis.evidence.length > 0) {
-    const section = document.createElement('div')
-    section.appendChild(createSectionTitle(currentLanguage === 'zh' ? '证据' : 'Evidence'))
-    analysis.evidence.slice(0, 3).forEach((item) => {
+    const section = createCard()
+    section.appendChild(createSectionTitle(currentLanguage === 'zh' ? '支撑证据' : 'Evidence'))
+    analysis.evidence.slice(0, 2).forEach((item) => {
       const box = document.createElement('div')
-      box.style.cssText = 'padding:8px;background:#f6f8fa;border-radius:4px;margin-bottom:6px;'
+      box.style.cssText = 'padding:8px;background:#f6f8fa;border-radius:6px;margin-bottom:6px;'
       const fileLine = `${item.filePath || fileData.fileName}${item.lineStart ? `:${item.lineStart}` : ''}`
       box.appendChild(createText(fileLine, 'font-size:11px;color:#374151;font-family:monospace;margin:0 0 4px 0;'))
       box.appendChild(createText(item.reason, 'font-size:11px;color:#4b5563;margin:0 0 4px 0;'))
@@ -383,8 +921,8 @@ function renderDeepAnalysis(
   }
 
   if (analysis.suggestions.length > 0) {
-    const section = document.createElement('div')
-    section.appendChild(createSectionTitle(currentLanguage === 'zh' ? '建议' : 'Suggestions'))
+    const section = createCard()
+    section.appendChild(createSectionTitle(currentLanguage === 'zh' ? '继续看' : 'Next Reading'))
     const list = document.createElement('ul')
     list.style.cssText = 'margin:0;padding-left:16px;font-size:12px;color:#666;line-height:1.6;'
     analysis.suggestions.slice(0, 5).forEach((suggestion) => {
@@ -540,42 +1078,14 @@ async function fetchAndAnalyzeFile(fileInfo: FileInfo, contentDiv: HTMLElement) 
       showReloadPrompt()
       return
     }
-    
-    // Show loading state
-    contentDiv.innerHTML = `
-      <div style="padding: 12px; background: #f0f2f5; border-radius: 4px; text-align: center; font-size: 12px; color: #666;">
-        <div style="display: inline-block; width: 16px; height: 16px; border: 2px solid #24292e; border-top-color: transparent; border-radius: 50%; animation: spin 1s linear infinite; margin-right: 8px; vertical-align: middle;"></div>
-        ${getText('analyzingFile')}
-      </div>
-      <style>
-        @keyframes spin {
-          to { transform: rotate(360deg); }
-        }
-      </style>
-    `
-    
-    // Send to background script for AI analysis
-    chrome.runtime.sendMessage({
-      action: 'analyzeFile',
-      ...fileData,
-      language: currentLanguage,
-    }, (response: any) => {
-      if (response?.error) {
-        contentDiv.innerHTML = `<div style="color: #d73a49; padding: 12px; background: #ffeef0; border-radius: 4px; font-size: 12px;">${response.error}</div>`
-      } else if (response?.html) {
-        contentDiv.innerHTML = response.html
-        
-        // Attach event listener for deep analysis button
-        const deepAnalysisBtn = contentDiv.querySelector('#gitmentor-deep-analysis-btn')
-        if (deepAnalysisBtn) {
-          deepAnalysisBtn.addEventListener('click', () => {
-            performDeepAnalysis(contentDiv, fileData)
-          })
-        }
-      }
-    })
+
+    const llmConfigured = await isLLMConfigured()
+    renderFileInsight(contentDiv, fileInfo, fileData, llmConfigured)
   } catch (error) {
-    contentDiv.innerHTML = `<div style="color: #d73a49; padding: 12px; background: #ffeef0; border-radius: 4px; font-size: 12px;">Failed to fetch file: ${error instanceof Error ? error.message : 'Unknown error'}</div>`
+    renderInsightError(
+      contentDiv,
+      `Failed to fetch file: ${error instanceof Error ? error.message : 'Unknown error'}`,
+    )
   }
 }
 
@@ -771,7 +1281,7 @@ function showReloadPrompt() {
   })
 }
 
-function openPanel(owner: string, repo: string) {
+function openPanel(owner: string, repo: string, initialTab?: 'settings') {
   console.log(`[GitMentor] openPanel called with ${owner}/${repo}`)
   
   try {
@@ -779,7 +1289,14 @@ function openPanel(owner: string, repo: string) {
     const existing = document.getElementById('gitmentor-panel')
     if (existing) {
       existing.remove()
-      return
+      if (!initialTab) return
+    }
+
+    const widget = document.getElementById('gitmentor-widget') as HTMLElement | null
+    const showWidget = () => {
+      if (widget) {
+        widget.style.display = ''
+      }
     }
     
     // Check if extension context is valid
@@ -790,7 +1307,7 @@ function openPanel(owner: string, repo: string) {
     }
     
     const extensionId = chrome.runtime.id
-    const popupUrl = `chrome-extension://${extensionId}/src/popup/index.html?owner=${encodeURIComponent(owner)}&repo=${encodeURIComponent(repo)}`
+    const popupUrl = `chrome-extension://${extensionId}/src/popup/index.html?owner=${encodeURIComponent(owner)}&repo=${encodeURIComponent(repo)}${initialTab ? `&tab=${encodeURIComponent(initialTab)}` : ''}`
     console.log('[GitMentor] Panel URL:', popupUrl)
     
     // Create floating panel
@@ -857,6 +1374,17 @@ function openPanel(owner: string, repo: string) {
     panel.appendChild(header)
     panel.appendChild(iframe)
     document.body.appendChild(panel)
+    if (widget) {
+      widget.style.display = 'none'
+    }
+    const panelObserver = new MutationObserver(() => {
+      if (!document.body.contains(panel)) {
+        showWidget()
+        document.removeEventListener('keydown', escapeHandler)
+        panelObserver.disconnect()
+      }
+    })
+    panelObserver.observe(document.body, { childList: true })
     
     // Close button
     const closeBtn = header.querySelector('#gitmentor-close') as HTMLElement
@@ -868,7 +1396,6 @@ function openPanel(owner: string, repo: string) {
     const escapeHandler = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         panel.remove()
-        document.removeEventListener('keydown', escapeHandler)
       }
     }
     document.addEventListener('keydown', escapeHandler)

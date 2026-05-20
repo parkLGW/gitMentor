@@ -25,6 +25,8 @@ const DEFAULT_TIMEOUT = 10000 // 10 seconds
 const GITHUB_RATE_LIMIT_MAX_RETRIES = 2
 const GITHUB_RATE_LIMIT_DELAY_CAP_MS = 5000
 const GITHUB_RATE_LIMIT_FALLBACK_DELAY_MS = 1000
+const GITHUB_WEB_TREE_TIMEOUT_MS = 8000
+const FULL_TREE_CACHE_VERSION = 'v2'
 
 // Check if localStorage is available
 function isLocalStorageAvailable(): boolean {
@@ -162,6 +164,7 @@ async function fetchGithubWithRetry(
   url: string,
   options: RequestInit = {},
   timeoutMs: number = DEFAULT_TIMEOUT,
+  maxRateLimitRetries: number = GITHUB_RATE_LIMIT_MAX_RETRIES,
 ): Promise<Response> {
   let lastResponse: Response | null = null
   const headers = await mergeGithubHeaders(options.headers)
@@ -170,14 +173,14 @@ async function fetchGithubWithRetry(
     headers,
   }
 
-  for (let attempt = 0; attempt <= GITHUB_RATE_LIMIT_MAX_RETRIES; attempt++) {
+  for (let attempt = 0; attempt <= maxRateLimitRetries; attempt++) {
     const response = await fetchWithTimeout(url, requestOptions, timeoutMs)
     if (!isGithubRateLimitResponse(response)) {
       return response
     }
 
     lastResponse = response
-    if (attempt >= GITHUB_RATE_LIMIT_MAX_RETRIES) {
+    if (attempt >= maxRateLimitRetries) {
       return response
     }
 
@@ -317,7 +320,8 @@ export async function getReadme(owner: string, repo: string): Promise<string> {
 export async function getRepoTree(
   owner: string,
   repo: string,
-  path: string = ''
+  path: string = '',
+  options?: { maxRateLimitRetries?: number }
 ): Promise<any> {
   const cacheKey = getCacheKey(owner, repo, `tree_${path || 'root'}`)
   const cached = getFromCache<any>(cacheKey)
@@ -327,7 +331,8 @@ export async function getRepoTree(
     const response = await fetchGithubWithRetry(
       `https://api.github.com/repos/${owner}/${repo}/contents/${path}`,
       {},
-      10000
+      10000,
+      options?.maxRateLimitRetries,
     )
 
     if (!response.ok) {
@@ -338,7 +343,7 @@ export async function getRepoTree(
     setCache(cacheKey, data)
     return data
   } catch (error) {
-    console.error('Failed to fetch repo tree:', error)
+    console.debug('Failed to fetch repo tree:', error)
     throw error
   }
 }
@@ -436,6 +441,15 @@ export interface TreeNode {
   children?: TreeNode[]
 }
 
+export interface GithubWebTreeEntry extends TreeNode {
+  type: 'file' | 'dir'
+}
+
+interface GithubRecursiveTreeEntry {
+  path?: string
+  type?: string
+}
+
 // Ignored directories and files
 const IGNORED_PATHS = [
   'node_modules',
@@ -511,22 +525,254 @@ class ConcurrencyLimiter {
 // Global limiter: max 5 concurrent requests to avoid rate limiting
 const apiLimiter = new ConcurrencyLimiter(3)
 
+function escapeRegExp(input: string): string {
+  return input.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+function decodeGithubPath(input: string): string {
+  try {
+    return decodeURIComponent(input)
+  } catch {
+    return input
+  }
+}
+
+function buildGithubWebTreeUrl(owner: string, repo: string, path: string): string {
+  const encodedOwner = encodeURIComponent(owner)
+  const encodedRepo = encodeURIComponent(repo)
+  const normalizedPath = path
+    .split('/')
+    .map((segment) => encodeURIComponent(segment))
+    .join('/')
+  return normalizedPath
+    ? `https://github.com/${encodedOwner}/${encodedRepo}/tree/HEAD/${normalizedPath}`
+    : `https://github.com/${encodedOwner}/${encodedRepo}/tree/HEAD`
+}
+
+export function parseGithubWebTreeEntries(
+  owner: string,
+  repo: string,
+  html: string,
+): GithubWebTreeEntry[] {
+  const escapedOwner = escapeRegExp(owner)
+  const escapedRepo = escapeRegExp(repo)
+  const hrefPattern = new RegExp(
+    `href=["']/${escapedOwner}/${escapedRepo}/(blob|tree)/[^/"']+/([^"'?#]+)["']`,
+    'g',
+  )
+  const entries = new Map<string, GithubWebTreeEntry>()
+
+  for (const match of html.matchAll(hrefPattern)) {
+    const type = match[1] === 'tree' ? 'dir' : 'file'
+    const path = normalizeGithubFilePath(decodeGithubPath(match[2] || ''))
+    if (!path) continue
+    const name = path.split('/').pop() || path
+    if (shouldIgnore(name)) continue
+    const key = `${type}:${path}`
+    if (!entries.has(key)) {
+      entries.set(key, { name, path, type })
+    }
+  }
+
+  return Array.from(entries.values())
+}
+
+function isIgnoredPath(path: string): boolean {
+  return path.split('/').some((segment) => shouldIgnore(segment))
+}
+
+function insertFlatTreePath(root: TreeNode[], filePath: string, type: 'file' | 'dir'): void {
+  const segments = filePath.split('/').filter(Boolean)
+  if (segments.length === 0) return
+
+  let siblings = root
+  let currentPath = ''
+
+  segments.forEach((segment, index) => {
+    currentPath = currentPath ? `${currentPath}/${segment}` : segment
+    const isLeaf = index === segments.length - 1
+    const nodeType: TreeNode['type'] = isLeaf ? type : 'dir'
+    let node = siblings.find((item) => item.name === segment && item.path === currentPath)
+
+    if (!node) {
+      node = {
+        name: segment,
+        path: currentPath,
+        type: nodeType,
+        ...(nodeType === 'dir' ? { children: [] } : {}),
+      }
+      siblings.push(node)
+    }
+
+    if (!isLeaf || node.type === 'dir') {
+      node.children ||= []
+      siblings = node.children
+    }
+  })
+}
+
+function sortTreeNodes(nodes: TreeNode[]): TreeNode[] {
+  nodes.sort((a, b) => {
+    if (a.type === b.type) return a.name.localeCompare(b.name)
+    return a.type === 'dir' ? -1 : 1
+  })
+  nodes.forEach((node) => {
+    if (node.children?.length) sortTreeNodes(node.children)
+  })
+  return nodes
+}
+
+export function buildDirectoryTreeFromGithubEntries(
+  entries: GithubRecursiveTreeEntry[],
+  maxDepth: number,
+): TreeNode[] {
+  const nodes: TreeNode[] = []
+  const maxSegments = Math.max(1, maxDepth + 1)
+
+  for (const entry of entries) {
+    const path = normalizeGithubFilePath(entry.path || '')
+    if (!path || isIgnoredPath(path)) continue
+    if (path.split('/').length > maxSegments) continue
+
+    if (entry.type === 'tree') {
+      insertFlatTreePath(nodes, path, 'dir')
+      continue
+    }
+    if (entry.type === 'blob') {
+      insertFlatTreePath(nodes, path, 'file')
+    }
+  }
+
+  return sortTreeNodes(nodes)
+}
+
+export async function getGithubWebDirectoryPaths(
+  owner: string,
+  repo: string,
+  path: string,
+): Promise<string[]> {
+  const normalizedPath = normalizeGithubFilePath(path)
+  if (!normalizedPath || isIgnoredPath(normalizedPath)) return []
+
+  try {
+    const response = await fetchWithTimeout(
+      buildGithubWebTreeUrl(owner, repo, normalizedPath),
+      {
+        headers: {
+          Accept: 'text/html',
+        },
+      },
+      GITHUB_WEB_TREE_TIMEOUT_MS,
+    )
+    if (!response.ok) return []
+
+    const prefix = `${normalizedPath}/`
+    return parseGithubWebTreeEntries(owner, repo, await response.text())
+      .filter((entry) => entry.type === 'file' && entry.path.startsWith(prefix))
+      .map((entry) => entry.path)
+  } catch (error) {
+    console.debug(`Failed to fetch GitHub web directory paths at ${normalizedPath}:`, error)
+    return []
+  }
+}
+
+async function getGithubRecursiveDirectoryTree(
+  owner: string,
+  repo: string,
+  maxDepth: number,
+): Promise<TreeNode[]> {
+  const response = await fetchGithubWithRetry(
+    `https://api.github.com/repos/${owner}/${repo}/git/trees/HEAD?recursive=1`,
+    {},
+    GITHUB_WEB_TREE_TIMEOUT_MS,
+    0,
+  )
+  if (!response.ok) return []
+
+  const data = await response.json()
+  const entries = Array.isArray(data?.tree) ? data.tree : []
+  return buildDirectoryTreeFromGithubEntries(entries, maxDepth)
+}
+
+async function getGithubWebDirectoryTree(
+  owner: string,
+  repo: string,
+  maxDepth: number,
+): Promise<TreeNode[]> {
+  async function fetchWebTree(path: string, depth: number): Promise<TreeNode[]> {
+    if (depth > maxDepth) return []
+
+    try {
+      const response = await fetchWithTimeout(
+        buildGithubWebTreeUrl(owner, repo, path),
+        {
+          headers: {
+            Accept: 'text/html',
+          },
+        },
+        GITHUB_WEB_TREE_TIMEOUT_MS,
+      )
+      if (!response.ok) return []
+
+      const entries = parseGithubWebTreeEntries(owner, repo, await response.text())
+      const nodes: TreeNode[] = []
+
+      for (const entry of entries) {
+        const node: TreeNode = {
+          name: entry.name,
+          path: entry.path,
+          type: entry.type,
+        }
+
+        if (entry.type === 'dir' && depth < maxDepth) {
+          node.children = await fetchWebTree(entry.path, depth + 1)
+        }
+
+        nodes.push(node)
+      }
+
+      nodes.sort((a, b) => {
+        if (a.type === b.type) return a.name.localeCompare(b.name)
+        return a.type === 'dir' ? -1 : 1
+      })
+
+      return nodes
+    } catch (error) {
+      console.debug(`Failed to fetch GitHub web tree at ${path || '/'}:`, error)
+      return []
+    }
+  }
+
+  return fetchWebTree('', 0)
+}
+
 // Get full directory tree (recursive with concurrency control)
 export async function getFullDirectoryTree(
   owner: string,
   repo: string,
   maxDepth: number = 3
 ): Promise<TreeNode[]> {
-  const cacheKey = getCacheKey(owner, repo, `full_tree_${maxDepth}`)
+  const cacheKey = getCacheKey(owner, repo, `full_tree_${FULL_TREE_CACHE_VERSION}_${maxDepth}`)
   const cached = getFromCache<TreeNode[]>(cacheKey)
   if (cached) return cached
+
+  let tree = await getGithubRecursiveDirectoryTree(owner, repo, maxDepth).catch((error) => {
+    console.debug('Failed to fetch recursive repo tree:', error)
+    return [] as TreeNode[]
+  })
+  if (tree.length > 0) {
+    setCache(cacheKey, tree)
+    return tree
+  }
 
   async function fetchTree(path: string, depth: number): Promise<TreeNode[]> {
     if (depth > maxDepth) return []
 
     try {
       // Use concurrency limiter for API requests
-      const contents = await apiLimiter.run(() => getRepoTree(owner, repo, path))
+      const contents = await apiLimiter.run(() =>
+        getRepoTree(owner, repo, path, { maxRateLimitRetries: 0 })
+      )
       if (!Array.isArray(contents)) return []
 
       const nodes: TreeNode[] = []
@@ -561,7 +807,10 @@ export async function getFullDirectoryTree(
     }
   }
 
-  const tree = await fetchTree('', 0)
+  tree = await fetchTree('', 0)
+  if (tree.length === 0) {
+    tree = await getGithubWebDirectoryTree(owner, repo, maxDepth)
+  }
   setCache(cacheKey, tree)
   return tree
 }

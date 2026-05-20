@@ -13,8 +13,19 @@ export interface DeepAnalysisComponent {
   description: string;
 }
 
+export interface DeepAnalysisWorkflowStep {
+  step: number;
+  title?: string;
+  description: string;
+  lineNumber?: number;
+  functionName?: string;
+}
+
 export interface DeepFileAnalysisResult {
   summary: string;
+  role?: string;
+  workflow?: DeepAnalysisWorkflowStep[];
+  designNotes?: string[];
   components: DeepAnalysisComponent[];
   dependencies: string[];
   suggestions: string[];
