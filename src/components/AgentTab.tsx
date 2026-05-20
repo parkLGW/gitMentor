@@ -375,6 +375,7 @@ function AgentTab({ repo, language }: AgentTabProps) {
     }
     return null;
   }, [session.recentMessages]);
+  const hasConversationMessages = session.recentMessages.length > 0;
 
   const sendQuestion = useCallback(
     async (questionText: string, baseSession?: AgentSession) => {
@@ -559,7 +560,7 @@ function AgentTab({ repo, language }: AgentTabProps) {
   };
 
   return (
-    <div className="space-y-3">
+    <div className="space-y-2">
       <div className="flex items-center justify-between">
         <div className="text-xs text-gray-500">
           {isZh
@@ -581,8 +582,12 @@ function AgentTab({ repo, language }: AgentTabProps) {
         </div>
       )}
 
-      <div className="border border-gray-200 rounded h-[340px] overflow-y-auto p-3 space-y-3 bg-white">
-        {session.recentMessages.length === 0 ? (
+      <div
+        className={`border border-gray-200 rounded ${
+          hasConversationMessages ? "h-[430px]" : "h-[220px]"
+        } overflow-y-auto p-3 space-y-3 bg-white`}
+      >
+        {!hasConversationMessages ? (
           <p className="text-sm text-gray-500">
             {isZh
               ? "开始提问吧，我会结合当前仓库信息回答。"
@@ -736,29 +741,31 @@ function AgentTab({ repo, language }: AgentTabProps) {
         ))}
       </div>
 
-      <form onSubmit={handleSubmit} className="space-y-2">
-        <textarea
-          value={input}
-          onChange={(event) => setInput(event.target.value)}
-          onKeyDown={handleInputKeyDown}
-          rows={3}
-          placeholder={isZh ? "输入你不理解的问题..." : "Ask what you do not understand..."}
-          className="w-full border border-gray-300 rounded px-3 py-2 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-gray-300"
-        />
-        <div className="flex items-center justify-between">
-          <p className="text-xs text-gray-500">
-            {isZh
-              ? "默认先使用 README + 源码地图 + 会话摘要；需要时会补充抓取 GitHub 源码"
-              : "Starts with README, source map, and session summary; fetches GitHub code when needed"}
-          </p>
+      <form onSubmit={handleSubmit} className="space-y-1">
+        <div className="relative">
+          <textarea
+            value={input}
+            onChange={(event) => setInput(event.target.value)}
+            onKeyDown={handleInputKeyDown}
+            rows={3}
+            placeholder={isZh ? "输入你不理解的问题..." : "Ask what you do not understand..."}
+            className="w-full border border-gray-300 rounded px-3 py-2 pb-10 pr-12 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-gray-300"
+          />
           <button
             type="submit"
             disabled={sending || !input.trim()}
-            className="px-3 py-1.5 text-sm bg-gray-800 text-white rounded hover:bg-gray-700 disabled:opacity-50"
+            aria-label={isZh ? "发送" : "Send"}
+            title={isZh ? "发送" : "Send"}
+            className="absolute bottom-2 right-2 h-8 w-8 rounded-full bg-gray-800 text-white text-sm font-semibold leading-none hover:bg-gray-700 disabled:opacity-40 disabled:cursor-not-allowed"
           >
-            {isZh ? "发送" : "Send"}
+            ↑
           </button>
         </div>
+        <p className="text-[11px] leading-snug text-gray-500">
+          {isZh
+            ? "默认先使用 README + 源码地图 + 会话摘要；需要时会补充抓取 GitHub 源码"
+            : "Starts with README, source map, and session summary; fetches GitHub code when needed"}
+        </p>
       </form>
 
       {error && (
