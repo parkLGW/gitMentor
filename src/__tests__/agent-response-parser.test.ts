@@ -2,6 +2,7 @@ import assert from "node:assert";
 import test from "node:test";
 
 import {
+  normalizeAgentJsonFields,
   parseLooseAgentJson,
   unwrapNestedAgentJson,
 } from "../services/agent-response-parser.js";
@@ -75,5 +76,43 @@ test("unwrapNestedAgentJson recovers truncated nested JSON answers", () => {
   assert.deepStrictEqual(parsed, {
     answer: "记忆系统基于文件系统实现。",
     confidence: "high",
+  });
+});
+
+test("normalizeAgentJsonFields maps localized model field names to canonical keys", () => {
+  const normalized = normalizeAgentJsonFields({
+    "答案": "内存会话恢复由 agent.py 驱动，manager.py 管理持久化。",
+    "置信度": "medium",
+    "证据": [
+      {
+        filePath: "src/openharness/memory/manager.py",
+        snippet: "class MemoryManager",
+        reason: "管理内存持久化",
+      },
+    ],
+    "下一步建议": ["继续看 paths.py"],
+  });
+
+  assert.deepStrictEqual(normalized, {
+    "答案": "内存会话恢复由 agent.py 驱动，manager.py 管理持久化。",
+    "置信度": "medium",
+    "证据": [
+      {
+        filePath: "src/openharness/memory/manager.py",
+        snippet: "class MemoryManager",
+        reason: "管理内存持久化",
+      },
+    ],
+    "下一步建议": ["继续看 paths.py"],
+    answer: "内存会话恢复由 agent.py 驱动，manager.py 管理持久化。",
+    confidence: "medium",
+    evidence: [
+      {
+        filePath: "src/openharness/memory/manager.py",
+        snippet: "class MemoryManager",
+        reason: "管理内存持久化",
+      },
+    ],
+    suggestedNextSteps: ["继续看 paths.py"],
   });
 });

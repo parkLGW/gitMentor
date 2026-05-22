@@ -35,6 +35,22 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+function firstString(value: Record<string, unknown>, keys: string[]): string | undefined {
+  for (const key of keys) {
+    const item = value[key];
+    if (typeof item === "string" && item.trim()) return item.trim();
+  }
+  return undefined;
+}
+
+function firstArray(value: Record<string, unknown>, keys: string[]): unknown[] | undefined {
+  for (const key of keys) {
+    const item = value[key];
+    if (Array.isArray(item)) return item;
+  }
+  return undefined;
+}
+
 function looksLikeAgentJson(text: string): boolean {
   const trimmed = text.trim();
   return (
@@ -71,6 +87,31 @@ export function unwrapNestedAgentJson(raw: unknown): Record<string, unknown> | n
   if (suggestedNextSteps !== undefined) unwrapped.suggestedNextSteps = suggestedNextSteps;
 
   return unwrapped;
+}
+
+export function normalizeAgentJsonFields(raw: unknown): Record<string, unknown> | null {
+  if (!isRecord(raw)) return null;
+
+  const normalized: Record<string, unknown> = { ...raw };
+  const answer = firstString(raw, ["answer", "答案", "回答", "response"]);
+  if (answer) normalized.answer = answer;
+
+  const confidence = firstString(raw, ["confidence", "置信度"]);
+  if (confidence) normalized.confidence = confidence;
+
+  const evidence = firstArray(raw, ["evidence", "证据"]);
+  if (evidence) normalized.evidence = evidence;
+
+  const suggestedNextSteps = firstArray(raw, [
+    "suggestedNextSteps",
+    "suggestions",
+    "nextSteps",
+    "下一步建议",
+    "建议",
+  ]);
+  if (suggestedNextSteps) normalized.suggestedNextSteps = suggestedNextSteps;
+
+  return normalized;
 }
 
 export function parseLooseAgentJson(text: string): Record<string, unknown> | null {

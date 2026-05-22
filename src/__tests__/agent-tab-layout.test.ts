@@ -18,3 +18,21 @@ test("AgentTab uses a shorter message area when the conversation is empty", () =
   assert.match(source, /const hasConversationMessages = session\.recentMessages\.length > 0;/);
   assert.match(source, /hasConversationMessages \? "h-\[430px\]" : "h-\[220px\]"/);
 });
+
+test("AgentTab renders assistant answers through the markdown display", () => {
+  const source = readFileSync("src/components/AgentTab.tsx", "utf8");
+
+  assert.match(source, /import \{ MarkdownDisplay \} from "@\/components\/MarkdownDisplay";/);
+  assert.match(source, /message\.role === "assistant"/);
+  assert.match(source, /<MarkdownDisplay/);
+  assert.match(source, /content=\{message\.content\}/);
+});
+
+test("AgentTab scrolls the message pane to the newest content", () => {
+  const source = readFileSync("src/components/AgentTab.tsx", "utf8");
+
+  assert.match(source, /const messagesEndRef = useRef<HTMLDivElement \| null>\(null\);/);
+  assert.match(source, /messagesEndRef\.current\?\.scrollIntoView\(\{ block: "end" \}\);/);
+  assert.match(source, /session\.recentMessages/);
+  assert.match(source, /<div ref=\{messagesEndRef\}/);
+});

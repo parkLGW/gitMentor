@@ -28,6 +28,7 @@ import {
 } from '@/services/llm-stream'
 import { parseLooseJson } from '@/services/llm-json'
 import { normalizeDeepFileAnalysisResult } from '@/services/deep-file-analysis-normalizer'
+import { normalizeAgentJsonFields } from '@/services/agent-response-parser'
 import {
   AGENT_CODE_FETCH_TIMEOUT_MS,
   AGENT_FINAL_ANSWER_RETRY_TIMEOUT_MS,
@@ -403,7 +404,8 @@ function normalizeAgentResponse(
   raw: unknown,
   lang: Language,
 ): AgentChatResponsePayload {
-  const value = unwrapNestedAgentJson(raw) || ((raw || {}) as Record<string, unknown>)
+  const value = normalizeAgentJsonFields(unwrapNestedAgentJson(raw) || raw)
+    || ((raw || {}) as Record<string, unknown>)
   const fallbackAnswer = lang === 'zh'
     ? '我暂时无法给出完整答案。建议先从 README 与源码地图中的核心模块开始。'
     : 'I cannot provide a complete answer right now. Start from README and the core modules in the source map.'

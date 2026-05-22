@@ -1,5 +1,6 @@
-import { FormEvent, KeyboardEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { FormEvent, KeyboardEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { LoadingSpinner } from "@/components/LoadingSpinner";
+import { MarkdownDisplay } from "@/components/MarkdownDisplay";
 import { StorageKeys } from "@/constants/storage";
 import {
   appendMessage,
@@ -184,6 +185,7 @@ function AgentTab({ repo, language }: AgentTabProps) {
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);
   const [editingText, setEditingText] = useState("");
   const [streamingStatusText, setStreamingStatusText] = useState<string | null>(null);
+  const messagesEndRef = useRef<HTMLDivElement | null>(null);
 
   const quickPrompts = useMemo(
     () =>
@@ -376,6 +378,10 @@ function AgentTab({ repo, language }: AgentTabProps) {
     return null;
   }, [session.recentMessages]);
   const hasConversationMessages = session.recentMessages.length > 0;
+
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ block: "end" });
+  }, [session.recentMessages, sending, streamingStatusText]);
 
   const sendQuestion = useCallback(
     async (questionText: string, baseSession?: AgentSession) => {
@@ -615,7 +621,16 @@ function AgentTab({ repo, language }: AgentTabProps) {
                   }`}
                 >
                   <div className="flex items-start justify-between gap-2">
-                    {!isEditing && <p className="whitespace-pre-line flex-1">{message.content}</p>}
+                    {!isEditing && (
+                      isUser ? (
+                        <p className="whitespace-pre-line flex-1">{message.content}</p>
+                      ) : (
+                        <MarkdownDisplay
+                          content={message.content}
+                          className="flex-1 text-sm text-gray-800"
+                        />
+                      )
+                    )}
                     {isLatestUser && !isEditing && (
                       <button
                         onClick={() => handleStartEdit(message)}
@@ -726,6 +741,7 @@ function AgentTab({ repo, language }: AgentTabProps) {
             <span>{streamingStatusText || (isZh ? "思考中..." : "Thinking...")}</span>
           </div>
         )}
+        <div ref={messagesEndRef} />
       </div>
 
       <div className="flex flex-wrap gap-2">
