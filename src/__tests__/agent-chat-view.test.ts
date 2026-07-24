@@ -77,7 +77,7 @@ test("buildRetrievalUiNote localizes summary fallback and partial fetch states",
 
   assert.equal(
     buildRetrievalUiNote(fallbackMessage, "zh"),
-    "GitHub 源码未成功获取，本次回答回退为 README、源码地图和会话上下文。",
+    "GitHub 源码未成功获取（通常是接口限流或网络问题），本次回答回退为 README、源码地图和会话上下文。建议在设置中配置 GitHub Token 或稍后重试以提升成功率。",
   );
   assert.equal(
     buildRetrievalUiNote(partialMessage, "en"),

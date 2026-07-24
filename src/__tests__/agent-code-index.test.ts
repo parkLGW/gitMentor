@@ -86,3 +86,26 @@ test("buildCodeIndex marks unsupported or invalid files as failed without throwi
   assert.strictEqual(index.files[1].status, "failed");
   assert.match(index.files[1].error || "", /unsupported/i);
 });
+
+test("buildCodeIndex records re-export sources so barrels can be followed", () => {
+  const index = buildCodeIndex([
+    {
+      filePath: "packages/agent/src/index.ts",
+      status: "fetched",
+      snippet: [
+        'export * from "./harness/tools/index";',
+        'export { Registry } from "./tools/registry";',
+      ].join("\n"),
+    },
+  ]);
+
+  const sources = index.files[0].imports.map((item) => item.source);
+  assert.deepStrictEqual(sources, [
+    "./harness/tools/index",
+    "./tools/registry",
+  ]);
+  assert.deepStrictEqual(
+    index.dependencies.map((dependency) => dependency.source),
+    ["./harness/tools/index", "./tools/registry"],
+  );
+});

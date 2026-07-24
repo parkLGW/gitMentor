@@ -8,6 +8,7 @@ import type {
 export interface RetrievalPlanInput {
   needsCodeContext?: boolean;
   targetFiles?: string[];
+  searchTerms?: string[];
   reason?: string;
   confidence?: ConfidenceLevel;
 }
@@ -59,6 +60,12 @@ export interface CandidateRankingInput {
   question: string;
   repoPaths: string[];
   preferredPaths?: string[];
+  /**
+   * English keyword hints (from the planner) that bridge a non-English
+   * question to English file/path tokens. These replace the old hardcoded
+   * multilingual alias table.
+   */
+  searchTerms?: string[];
   sourceMapSummary?: string;
   readmeSummary?: string;
   sessionSummary?: string;
@@ -78,24 +85,6 @@ const LOW_VALUE_ROOT_FILE_PATTERN =
   /^(license|copying|notice|changelog|release_notes(?:_[^/]+)?)(?:\.[a-z0-9_-]+)?$/i;
 const PATH_LIKE_HINT_PATTERN =
   /(?:^|[\s`"'([{<])((?:\.\/)?(?:[A-Za-z0-9_.-]+\/)+[A-Za-z0-9_.-]+(?:\.[A-Za-z0-9_.-]+)?)/g;
-const MULTILINGUAL_RANKING_ALIASES: Array<[RegExp, string[]]> = [
-  [/记忆|记住|内存/u, ["memory", "session", "history", "store", "storage"]],
-  [/会话|上下文/u, ["session", "context", "history"]],
-  [/历史|记录/u, ["history", "record"]],
-  [/存储|保存|持久化/u, ["store", "storage", "persist"]],
-  [/缓存/u, ["cache"]],
-  [/入口|启动|初始化/u, ["entry", "main", "index", "init", "bootstrap"]],
-  [/配置|设置/u, ["config", "settings", "options"]],
-  [/认证|鉴权|登录/u, ["auth", "login", "signin"]],
-  [/路由/u, ["route", "router", "routing"]],
-  [/数据库/u, ["database", "db", "sql"]],
-  [/接口|请求/u, ["api", "request", "client"]],
-  [/工具/u, ["tool", "utils", "helper"]],
-  [/任务|作业/u, ["task", "job", "worker"]],
-  [/流程|工作流/u, ["flow", "workflow", "pipeline"]],
-  [/模型/u, ["model"]],
-  [/插件/u, ["plugin", "extension"]],
-];
 
 function toConfidenceLevel(input?: ConfidenceLevel): ConfidenceLevel {
   if (input === "low" || input === "medium" || input === "high") {
@@ -146,9 +135,18 @@ export function parseRetrievalPlan(input: RetrievalPlanInput): AgentRetrievalPla
     ),
   ).slice(0, MAX_TARGET_FILES);
 
+  const searchTerms = Array.from(
+    new Set(
+      (input.searchTerms ?? [])
+        .map((term) => String(term || "").trim())
+        .filter(Boolean),
+    ),
+  ).slice(0, 12);
+
   return {
     needsCodeContext: Boolean(input.needsCodeContext),
     targetFiles,
+    searchTerms,
     reason: input.reason?.trim() ?? "",
     confidence: toConfidenceLevel(input.confidence),
   };
@@ -215,19 +213,12 @@ export function flattenTreeFilePaths(nodes: RepoTreeNode[]): string[] {
 }
 
 function tokenizeRankingText(input: string): string[] {
-  const aliases = MULTILINGUAL_RANKING_ALIASES.flatMap(([pattern, terms]) =>
-    pattern.test(input) ? terms : [],
-  );
-
   return Array.from(
     new Set(
-      [
-        ...input
-          .toLowerCase()
-          .replace(/[^a-z0-9/_-]+/g, " ")
-          .split(/\s+/),
-        ...aliases,
-      ]
+      input
+        .toLowerCase()
+        .replace(/[^a-z0-9/_-]+/g, " ")
+        .split(/\s+/)
         .map((token) => token.trim().toLowerCase())
         .filter((token) => token.length >= 2),
     ),
@@ -344,17 +335,26 @@ export function rankCandidateFiles(input: CandidateRankingInput): string[] {
       .filter(Boolean)
       .map((item) => item.toLowerCase()),
   );
+  const searchTerms = input.searchTerms || [];
   const rankingText = [
     input.question,
     input.sourceMapSummary || "",
     input.readmeSummary || "",
     input.sessionSummary || "",
     ...(input.preferredPaths || []),
+    ...searchTerms,
   ]
     .join("\n")
     .toLowerCase();
   const tokens = tokenizeRankingText(rankingText);
-  const questionTokens = tokenizeRankingText(input.question);
+  // Planner-provided English search terms carry the question's intent across
+  // languages, so weight them like question tokens (the strongest lexical signal).
+  const questionTokens = Array.from(
+    new Set([
+      ...tokenizeRankingText(input.question),
+      ...searchTerms.flatMap((term) => tokenizeRankingText(term)),
+    ]),
+  );
 
   return [...repoPaths]
     .map((filePath) => ({
@@ -377,61 +377,37 @@ export async function fetchRetrievedGithubFiles(
     progress: Pick<AgentProgressEvent, "completed" | "total">
   ) => void | Promise<void>,
 ): Promise<RetrievedFileContext[]> {
-  let defaultBranchCandidates: string[] | null = null;
   const initialBranchCandidates = resolveBranchCandidates();
-  const loadDefaultBranchCandidates = async (triedBranches: Set<string>) => {
-    if (request.skipDefaultBranchLookup) {
-      return [];
+  // Memoize the default-branch lookup as a shared promise so that parallel
+  // per-file fetches trigger at most one getDefaultBranch call.
+  let defaultBranchPromise: Promise<string[]> | null = null;
+  const getDefaultBranchCandidates = async (): Promise<string[]> => {
+    if (request.skipDefaultBranchLookup) return [];
+    if (!defaultBranchPromise) {
+      defaultBranchPromise = (async () => {
+        let defaultBranch: string | undefined;
+        try {
+          defaultBranch = await deps.getDefaultBranch(request.owner, request.repo, {
+            timeoutMs: request.timeoutMs,
+          });
+        } catch {
+          defaultBranch = undefined;
+        }
+        return resolveBranchCandidates(defaultBranch);
+      })();
     }
-    if (!defaultBranchCandidates) {
-      let defaultBranch: string | undefined;
-      try {
-        defaultBranch = await deps.getDefaultBranch(request.owner, request.repo, {
-          timeoutMs: request.timeoutMs,
-        });
-      } catch {
-        defaultBranch = undefined;
-      }
-      defaultBranchCandidates = resolveBranchCandidates(defaultBranch);
-    }
-    return defaultBranchCandidates.filter((branch) => !triedBranches.has(branch));
+    return defaultBranchPromise;
   };
   const maxFiles = request.maxFiles ?? MAX_TARGET_FILES;
   const maxCharsPerFile = request.maxCharsPerFile ?? Number.POSITIVE_INFINITY;
 
   const targetFiles = request.targetFiles.slice(0, maxFiles);
-  const retrievedFiles: RetrievedFileContext[] = [];
 
-  for (const [index, filePath] of targetFiles.entries()) {
-    let retrieved: RetrievedFileContext | null = null;
+  const fetchOneFile = async (filePath: string): Promise<RetrievedFileContext> => {
     const triedBranches = new Set<string>();
-
-    for (const branch of initialBranchCandidates) {
-      triedBranches.add(branch);
-      const content = await deps.getRawFileContent(
-        request.owner,
-        request.repo,
-        branch,
-        filePath,
-        { timeoutMs: request.timeoutMs }
-      );
-      if (!content) {
-        continue;
-      }
-
-      const truncated = truncateFileForPrompt(filePath, content, maxCharsPerFile);
-      retrieved = {
-        filePath,
-        branch,
-        status: "fetched",
-        snippet: truncated.prompt,
-      };
-      break;
-    }
-
-    if (!retrieved) {
-      const fallbackBranches = await loadDefaultBranchCandidates(triedBranches);
-      for (const branch of fallbackBranches) {
+    const tryBranches = async (branches: string[]): Promise<RetrievedFileContext | null> => {
+      for (const branch of branches) {
+        if (triedBranches.has(branch)) continue;
         triedBranches.add(branch);
         const content = await deps.getRawFileContent(
           request.owner,
@@ -440,35 +416,35 @@ export async function fetchRetrievedGithubFiles(
           filePath,
           { timeoutMs: request.timeoutMs }
         );
-        if (!content) {
-          continue;
-        }
-
+        if (!content) continue;
         const truncated = truncateFileForPrompt(filePath, content, maxCharsPerFile);
-        retrieved = {
-          filePath,
-          branch,
-          status: "fetched",
-          snippet: truncated.prompt,
-        };
-        break;
+        return { filePath, branch, status: "fetched", snippet: truncated.prompt };
       }
-    }
+      return null;
+    };
 
+    let retrieved = await tryBranches(initialBranchCandidates);
     if (!retrieved) {
-      retrieved = {
-        filePath,
-        status: "failed",
-        reason: "content_unavailable",
-      };
+      const fallbackBranches = (await getDefaultBranchCandidates()).filter(
+        (branch) => !triedBranches.has(branch),
+      );
+      retrieved = await tryBranches(fallbackBranches);
     }
+    return retrieved ?? { filePath, status: "failed", reason: "content_unavailable" };
+  };
 
-    retrievedFiles.push(retrieved);
-    await onProgress?.({
-      completed: index + 1,
-      total: targetFiles.length,
-    });
-  }
+  // Fetch files in parallel (branch attempts within each file stay sequential),
+  // preserving input order in the result while reporting progress as each settles.
+  let completed = 0;
+  const total = targetFiles.length;
+  const retrievedFiles = await Promise.all(
+    targetFiles.map(async (filePath) => {
+      const result = await fetchOneFile(filePath);
+      completed += 1;
+      await onProgress?.({ completed, total });
+      return result;
+    }),
+  );
 
   return buildRetrievedFileEvidence(retrievedFiles);
 }

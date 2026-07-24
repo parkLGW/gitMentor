@@ -65,8 +65,8 @@ export function buildRetrievalUiNote(
 
   if (message.retrievalMode === "summary-only" && requestedCount > 0 && fetchedCount === 0) {
     return language === "zh"
-      ? "GitHub 源码未成功获取，本次回答回退为 README、源码地图和会话上下文。"
-      : "GitHub code could not be fetched, so this answer fell back to README, source map, and session context.";
+      ? "GitHub 源码未成功获取（通常是接口限流或网络问题），本次回答回退为 README、源码地图和会话上下文。建议在设置中配置 GitHub Token 或稍后重试以提升成功率。"
+      : "GitHub code could not be fetched (usually API rate limiting or a network issue), so this answer fell back to README, source map, and session context. Configuring a GitHub token in settings or retrying shortly should help.";
   }
 
   if (message.retrievalMode === "github-code" && requestedCount > 0 && fetchedCount > 0 && fetchedCount < requestedCount) {

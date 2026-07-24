@@ -207,6 +207,31 @@ function indexFile(file: RetrievedFileContext): AgentCodeFileIndex {
         specifiers.forEach((specifier) => {
           addExport(exportsList, String(specifier.exported?.name || specifier.local?.name || ""), "unknown", specifier);
         });
+        // Re-export from another module (`export { x } from './y'`) is a
+        // dependency edge to follow when expanding imports.
+        const reExportSource = String(node.source?.value || "");
+        if (reExportSource) {
+          imports.push({
+            source: reExportSource,
+            imported: specifiers.map((specifier) => String(specifier.exported?.name || "")).filter(Boolean),
+            kind: "side-effect",
+            lineStart: lineStart(node),
+          });
+        }
+        return;
+      }
+
+      if (node.type === "ExportAllDeclaration") {
+        // Barrel re-export (`export * from './y'`): follow the pointer.
+        const reExportSource = String(node.source?.value || "");
+        if (reExportSource) {
+          imports.push({
+            source: reExportSource,
+            imported: [],
+            kind: "side-effect",
+            lineStart: lineStart(node),
+          });
+        }
         return;
       }
 

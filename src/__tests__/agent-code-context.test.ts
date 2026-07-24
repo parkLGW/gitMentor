@@ -194,6 +194,27 @@ test("rankCandidateFiles prioritizes planner targets and matching repo paths", (
   ]);
 });
 
+test("rankCandidateFiles bridges a non-English question via planner searchTerms", () => {
+  const ranked = rankCandidateFiles({
+    question: "这个 agent 自带哪些工具？",
+    searchTerms: ["tools", "registry"],
+    repoPaths: [
+      "README.md",
+      "src/ui/App.tsx",
+      "src/tools/registry.ts",
+      "src/tools/index.ts",
+      "src/network/client.ts",
+    ],
+  });
+
+  // Without searchTerms the pure-Chinese question strips to no useful tokens;
+  // the planner terms are what surface both tools files above everything else.
+  assert.deepStrictEqual(
+    new Set(ranked.slice(0, 2)),
+    new Set(["src/tools/index.ts", "src/tools/registry.ts"]),
+  );
+});
+
 test("resolveBranchCandidates prefers default branch then main then master without duplicates", () => {
   assert.deepStrictEqual(resolveBranchCandidates("develop"), [
     "HEAD",

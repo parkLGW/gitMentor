@@ -16,6 +16,14 @@ export interface RetrievedFileContext extends RetrievedFileMetadata {
 export interface AgentRetrievalPlan {
   needsCodeContext: boolean;
   targetFiles: string[];
+  /**
+   * English keyword hints the planner derives from the (possibly non-English)
+   * question. Used to drive lexical file ranking without a hardcoded alias
+   * table, so cross-language retrieval generalizes to any vocabulary.
+   * Always populated by parseRetrievalPlan (possibly empty); optional so
+   * callers constructing plans directly need not supply it.
+   */
+  searchTerms?: string[];
   reason: string;
   confidence: ConfidenceLevel;
 }

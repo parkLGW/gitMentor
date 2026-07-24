@@ -6,20 +6,13 @@ import { createLearningMission } from '@/services/learning-mission'
 import { normalizeOpenAICompatibleBaseUrl, resolveProviderBaseUrl } from '@/services/llm-provider-config'
 import { fetchRetrievedGithubFiles, flattenTreeFilePaths, parseRetrievalPlan, rankCandidateFiles } from '@/services/agent-code-context'
 import { answerAgentQuestion, buildFastPathAgentAnswer, buildLocalFallbackAnswer } from '@/services/agent-chat-runtime'
-import {
-  buildAgentFinalAnswerPromptCompact,
-  buildAgentFinalAnswerPromptLite,
-  buildAgentIntentPrompt,
-  buildAgentSufficiencyPrompt,
-  normalizeAgentIntent,
-  normalizeAgentSufficiencyDecision,
-} from '@/services/agent-loop-prompts'
 import { buildAgentRetrievalPlannerPrompt } from '@/services/agent-retrieval-planner-prompt'
-import { executeAgentToolCalls, extractRepoPathHintsFromText } from '@/services/agent-tool-runtime'
+import { expandImports, extractRepoPathHintsFromText } from '@/services/agent-tool-runtime'
+import { buildCodeIndex } from '@/services/agent-code-index'
 import { resolveClaudeCompatibleMessagesUrl } from '@/services/claude-compatible-utils'
 import { shouldFallbackCustomStreaming } from '@/services/custom-openai-utils'
 import { withKeepAlive } from '@/services/extension-keepalive'
-import { getDefaultBranch, getFullDirectoryTree, getGithubWebDirectoryPaths, getRawFileContent } from '@/services/github'
+import { getDefaultBranch, getFullDirectoryTree, getRawFileContent, getRecursiveRepoFilePaths } from '@/services/github'
 import { migrateLegacyLLMConfig } from '@/services/llm-config-migration'
 import {
   readClaudeMessageStream,
@@ -33,8 +26,6 @@ import {
   AGENT_CODE_FETCH_TIMEOUT_MS,
   AGENT_FINAL_ANSWER_RETRY_TIMEOUT_MS,
   AGENT_FINAL_ANSWER_TIMEOUT_MS,
-  AGENT_REPO_PATH_DISCOVERY_TIMEOUT_MS,
-  AGENT_TOPIC_PATH_DISCOVERY_TIMEOUT_MS,
   AGENT_LLM_RETRY_TIMEOUT_MS,
   AGENT_LLM_TIMEOUT_MS,
   AGENT_PLANNER_TIMEOUT_MS,
@@ -48,9 +39,6 @@ import type {
   AgentChatResponsePayload,
   AgentProgressEvent,
   AgentRetrievalPlan,
-  AgentIntent,
-  AgentObservation,
-  AgentCodeIndex,
   RetrievedFileContext,
   SessionSummary,
 } from '@/types/agent'
@@ -137,8 +125,10 @@ const CONCEPT_LLM_TIMEOUT_MS = 55000
 const AGENT_CODE_CONTEXT_FILES_LIMIT = 8
 const AGENT_CODE_CONTEXT_CHARS_PER_FILE = 2200
 const AGENT_CODE_CONTEXT_CHARS_PER_FILE_LITE = 1000
-const AGENT_DISCOVERY_TREE_DEPTH = 3
 const AGENT_REPO_PATH_HINTS_LIMIT = 250
+// Only used as a bounded fallback when the single recursive tree request fails;
+// kept shallow so a rate-limited per-directory walk can't turn into a storm.
+const AGENT_FALLBACK_TREE_DEPTH = 4
 const AGENT_CHAT_PORT_NAME = 'gitmentor-agent-chat'
 
 // Get LLM config from storage
@@ -259,12 +249,24 @@ async function discoverAgentFiles(
   plan: AgentRetrievalPlan,
 ): Promise<string[]> {
   const preferredPaths = plan.targetFiles.slice(0, AGENT_CODE_CONTEXT_FILES_LIMIT)
-  const tree = await getFullDirectoryTree(
-    payload.repo.owner,
-    payload.repo.name,
-    AGENT_DISCOVERY_TREE_DEPTH,
-  ).catch(() => [])
-  const repoPaths = flattenTreeFilePaths(tree)
+
+  // Primary: one recursive tree request returns the full repo path list.
+  // Fallback (recursive call failed, e.g. rate limit): a bounded directory walk
+  // so we still get real paths without the deep-walk request storm.
+  let treePaths = await getRecursiveRepoFilePaths(payload.repo.owner, payload.repo.name)
+  if (treePaths.length === 0) {
+    const tree = await getFullDirectoryTree(
+      payload.repo.owner,
+      payload.repo.name,
+      AGENT_FALLBACK_TREE_DEPTH,
+    ).catch(() => [])
+    treePaths = flattenTreeFilePaths(tree)
+  }
+  const pathHints = collectAgentRepoPathHints(payload)
+  const repoPaths = Array.from(new Set([
+    ...treePaths,
+    ...pathHints,
+  ]))
 
   if (repoPaths.length === 0) {
     return preferredPaths
@@ -272,6 +274,7 @@ async function discoverAgentFiles(
 
   const ranked = rankCandidateFiles({
     question: `${payload.question}\n${plan.reason || ''}`,
+    searchTerms: plan.searchTerms,
     sourceMapSummary: payload.sourceMapSummary,
     readmeSummary: payload.readmeSummary,
     sessionSummary: buildAgentSessionSummaryText(payload.sessionSummary || null),
@@ -279,10 +282,48 @@ async function discoverAgentFiles(
     preferredPaths,
   })
 
-  return Array.from(new Set([
+  const selected = Array.from(new Set([
     ...preferredPaths,
     ...ranked,
   ])).slice(0, AGENT_CODE_CONTEXT_FILES_LIMIT)
+
+  console.info('[GitMentor SW] Agent discovery', {
+    treePaths: treePaths.length,
+    plannerTargets: preferredPaths,
+    searchTerms: plan.searchTerms || [],
+    selected,
+  })
+
+  return selected
+}
+
+/**
+ * Deterministic one-hop expansion: after fetching the planned files, index them,
+ * follow their imports and re-exports (`export * from './x'`) to repo files not
+ * yet fetched, and fetch those too within the remaining budget. This resolves
+ * barrel/index files that only point at the real implementation.
+ */
+async function expandAgentImportsOneHop(
+  payload: AgentChatRequestPayload,
+  fetched: RetrievedFileContext[],
+): Promise<string[]> {
+  const alreadyFetched = new Set(fetched.map((file) => file.filePath))
+  const remainingBudget = AGENT_CODE_CONTEXT_FILES_LIMIT - alreadyFetched.size
+  if (remainingBudget <= 0) return []
+
+  const repoPaths = await getRecursiveRepoFilePaths(payload.repo.owner, payload.repo.name)
+  if (repoPaths.length === 0) return []
+
+  const codeIndex = buildCodeIndex(fetched)
+  const expanded = codeIndex.files.flatMap((file) =>
+    file.status === 'indexed'
+      ? expandImports({ fromFile: file.filePath, imports: file.imports, repoPaths })
+      : [],
+  )
+
+  return Array.from(new Set(expanded))
+    .filter((filePath) => !alreadyFetched.has(filePath))
+    .slice(0, remainingBudget)
 }
 
 function buildAgentChatPrompt(payload: AgentChatRequestPayload, lang: Language): string {
@@ -409,7 +450,7 @@ function normalizeAgentResponse(
   const fallbackAnswer = lang === 'zh'
     ? '我暂时无法给出完整答案。建议先从 README 与源码地图中的核心模块开始。'
     : 'I cannot provide a complete answer right now. Start from README and the core modules in the source map.'
-  const answer = String(value.answer || '').trim().slice(0, 1800) || fallbackAnswer
+  const answer = String(value.answer || '').trim().slice(0, 2800) || fallbackAnswer
   const evidence = normalizeEvidence(value.evidence)
   let confidence = normalizeConfidence(value.confidence)
   if (evidence.length === 0) confidence = 'low'
@@ -474,10 +515,10 @@ ${historyText || '暂无'}
 ${payload.question}
 
 README 摘要：
-${String(payload.readmeSummary || '暂无').slice(0, 700)}
+${String(payload.readmeSummary || '暂无').slice(0, 900)}
 
 源码地图摘要：
-${String(payload.sourceMapSummary || '暂无').slice(0, 700)}
+${String(payload.sourceMapSummary || '暂无').slice(0, 900)}
 
 已获取源码上下文：
 ${codeContext || '暂无'}
@@ -487,7 +528,7 @@ ${failedFiles || '无'}
 
 请仅返回 JSON：
 {
-  "answer": "2-6 句可执行建议，不要固定以“先看”开头",
+  "answer": "直接、正面地回答用户问题本身；对“怎么实现/如何工作/为什么”类问题，讲清楚具体机制、关键函数和数据/调用流，而不是只罗列该看哪些文件",
   "confidence": "low|medium|high",
   "evidence": [
     {"filePath": "path/to/file", "lineStart": 1, "snippet": "短片段", "reason": "为什么相关"}
@@ -496,9 +537,11 @@ ${failedFiles || '无'}
 }
 
 规则：
-1) 优先使用已获取源码上下文回答；如果仍不确定，要明确说明。
-2) evidence 优先引用已获取文件。
-3) 不要输出 markdown 代码块。`
+1) 先正面回答问题，再给证据；不要用“先看某文件”来代替真正的解释。
+2) 以已获取源码上下文为主要依据；只有该处证据不足时才说明不确定，并降低 confidence。
+3) 回答要具体：涉及的模块、各自职责、关键调用/数据流，能引用到函数或符号名就引用。
+4) evidence 只引用“已获取源码上下文”中真实出现的文件与片段。
+5) 不要输出 markdown 代码块。`
   }
 
   return `You are a beginner-friendly GitHub learning assistant. Answer concisely and ground your answer in the provided code context.
@@ -518,10 +561,10 @@ User question:
 ${payload.question}
 
 README summary:
-${String(payload.readmeSummary || 'N/A').slice(0, 700)}
+${String(payload.readmeSummary || 'N/A').slice(0, 900)}
 
 Source map summary:
-${String(payload.sourceMapSummary || 'N/A').slice(0, 700)}
+${String(payload.sourceMapSummary || 'N/A').slice(0, 900)}
 
 Retrieved code context:
 ${codeContext || 'N/A'}
@@ -531,7 +574,7 @@ ${failedFiles || 'None'}
 
 Return JSON only:
 {
-  "answer": "2-6 actionable sentences, avoid starting with \"read first\"",
+  "answer": "Directly answer the user's actual question; for how/why/implementation questions explain the concrete mechanism, key functions, and the data/call flow instead of only listing which files to read",
   "confidence": "low|medium|high",
   "evidence": [
     {"filePath": "path/to/file", "lineStart": 1, "snippet": "short snippet", "reason": "why relevant"}
@@ -540,9 +583,11 @@ Return JSON only:
 }
 
 Rules:
-1) Use the retrieved code context as your primary grounding.
-2) Prefer evidence from fetched files.
-3) Do not output markdown code fences.`
+1) Answer the question head-on first, then cite evidence; do not substitute "look at file X" for a real explanation.
+2) Ground the answer primarily in the retrieved code context; only flag uncertainty (and lower confidence) where that evidence is thin.
+3) Be specific: name the modules involved, their responsibilities, and the key call/data flow, referencing function or symbol names where possible.
+4) evidence must only cite files and snippets that actually appear in the retrieved code context.
+5) Do not output markdown code fences.`
 }
 
 async function runAgentPromptWithFallback(params: {
@@ -623,22 +668,44 @@ async function fetchAgentRetrievedFiles(
     progress: Pick<AgentProgressEvent, 'completed' | 'total'>
   ) => Promise<void> | void,
 ): Promise<RetrievedFileContext[]> {
-  return await fetchRetrievedGithubFiles(
-    {
-      owner: payload.repo.owner,
-      repo: payload.repo.name,
-      targetFiles,
-      timeoutMs: AGENT_CODE_FETCH_TIMEOUT_MS,
-      maxFiles: AGENT_CODE_CONTEXT_FILES_LIMIT,
-      maxCharsPerFile: AGENT_CODE_CONTEXT_CHARS_PER_FILE,
-      skipDefaultBranchLookup: true,
-    },
-    {
-      getDefaultBranch,
-      getRawFileContent,
-    },
-    onProgress,
-  )
+  const fetchBatch = (files: string[]) =>
+    fetchRetrievedGithubFiles(
+      {
+        owner: payload.repo.owner,
+        repo: payload.repo.name,
+        targetFiles: files,
+        timeoutMs: AGENT_CODE_FETCH_TIMEOUT_MS,
+        maxFiles: AGENT_CODE_CONTEXT_FILES_LIMIT,
+        maxCharsPerFile: AGENT_CODE_CONTEXT_CHARS_PER_FILE,
+        skipDefaultBranchLookup: true,
+      },
+      {
+        getDefaultBranch,
+        getRawFileContent,
+      },
+      onProgress,
+    )
+
+  const fetched = await fetchBatch(targetFiles)
+
+  console.info('[GitMentor SW] Agent fetch', {
+    requested: targetFiles,
+    results: fetched.map((file) => `${file.filePath}:${file.status}${file.reason ? `(${file.reason})` : ''}`),
+  })
+
+  // One deterministic hop: follow imports/re-exports of what we just read to
+  // reach implementation files behind barrel/index files.
+  const expandedPaths = await expandAgentImportsOneHop(payload, fetched)
+  if (expandedPaths.length === 0) {
+    return fetched
+  }
+
+  const expandedFiles = await fetchBatch(expandedPaths)
+  const byPath = new Map<string, RetrievedFileContext>()
+  for (const file of [...fetched, ...expandedFiles]) {
+    byPath.set(file.filePath, file)
+  }
+  return Array.from(byPath.values())
 }
 
 async function answerAgentWithSummary(
@@ -653,6 +720,9 @@ async function answerAgentWithSummary(
     litePrompt: buildAgentChatPromptLite(payload, lang),
     retryReason: 'timeout_retried_with_compact_prompt',
     label: 'agent-summary-answer',
+    maxTokens: 900,
+    retryMaxTokens: 360,
+    stream: true,
   })
 }
 
@@ -671,166 +741,19 @@ async function answerAgentWithCode(
       maxCharsPerFile: AGENT_CODE_CONTEXT_CHARS_PER_FILE,
     }),
     litePrompt: buildAgentCodePrompt(payload, plan, retrievedFiles, lang, {
-      maxFiles: 2,
+      maxFiles: 3,
       maxCharsPerFile: AGENT_CODE_CONTEXT_CHARS_PER_FILE_LITE,
     }),
     retryReason: 'timeout_retried_with_compact_code_prompt',
     label: 'agent-code-answer',
+    maxTokens: 1400,
+    retryMaxTokens: 700,
+    timeoutMs: AGENT_FINAL_ANSWER_TIMEOUT_MS,
+    retryTimeoutMs: AGENT_FINAL_ANSWER_RETRY_TIMEOUT_MS,
+    stream: true,
   })
 }
 
-async function judgeAgentIntent(
-  config: StoredLLMConfig,
-  payload: AgentChatRequestPayload,
-  lang: Language,
-) {
-  try {
-    const response = await callLLM(config, buildAgentIntentPrompt(payload, lang), {
-      timeoutMs: AGENT_PLANNER_TIMEOUT_MS,
-      maxTokens: 260,
-      label: 'agent-intent',
-    })
-    const intent = normalizeAgentIntent(safeParseJSON(response) || {})
-    console.info('[GitMentor SW] Agent intent decision', {
-      category: intent.category,
-      confidence: intent.confidence,
-      toolCalls: intent.toolCalls.map((call) => ({
-        tool: call.tool,
-        args: call.args,
-      })),
-    })
-    return intent
-  } catch (error) {
-    console.warn('[GitMentor SW] Agent intent fallback:', error)
-    const intent = normalizeAgentIntent({
-      category: 'general',
-      reason: 'intent_fallback_use_summaries_and_path_search',
-      confidence: 'low',
-      toolCalls: [
-        { tool: 'readSummaries', args: {} },
-        { tool: 'searchRepoPaths', args: { query: payload.question, maxFiles: AGENT_CODE_CONTEXT_FILES_LIMIT } },
-      ],
-    })
-    console.info('[GitMentor SW] Agent intent decision', {
-      category: intent.category,
-      confidence: intent.confidence,
-      toolCalls: intent.toolCalls.map((call) => ({
-        tool: call.tool,
-        args: call.args,
-      })),
-      fallback: true,
-    })
-    return intent
-  }
-}
-
-async function judgeAgentSufficiency(
-  config: StoredLLMConfig,
-  payload: AgentChatRequestPayload,
-  intent: AgentIntent,
-  observations: AgentObservation[],
-  lang: Language,
-) {
-  try {
-    const response = await callLLM(
-      config,
-      buildAgentSufficiencyPrompt(payload, intent, observations, lang),
-      {
-        timeoutMs: AGENT_PLANNER_TIMEOUT_MS,
-        maxTokens: 220,
-        label: 'agent-sufficiency',
-      },
-    )
-    const decision = normalizeAgentSufficiencyDecision(safeParseJSON(response) || {})
-    console.info('[GitMentor SW] Agent sufficiency decision', {
-      enough: decision.enough,
-      confidence: decision.confidence,
-      nextToolCalls: decision.nextToolCalls.map((call) => ({
-        tool: call.tool,
-        args: call.args,
-      })),
-    })
-    return decision
-  } catch (error) {
-    console.warn('[GitMentor SW] Agent sufficiency fallback:', error)
-    const candidateFiles = latestCandidateFiles(observations).slice(0, AGENT_CODE_CONTEXT_FILES_LIMIT)
-    const fetchedFiles = observations
-      .flatMap((observation) => observation.retrievedFiles || [])
-      .filter((file) => file.status === 'fetched')
-    if (fetchedFiles.length === 0 && candidateFiles.length > 0) {
-      const decision = normalizeAgentSufficiencyDecision({
-        enough: false,
-        reason: 'sufficiency_fallback_read_candidate_files',
-        confidence: 'low',
-        nextToolCalls: [{ tool: 'readGithubFiles', args: { paths: candidateFiles } }],
-      })
-      console.info('[GitMentor SW] Agent sufficiency decision', {
-        enough: decision.enough,
-        confidence: decision.confidence,
-        nextToolCalls: decision.nextToolCalls.map((call) => ({
-          tool: call.tool,
-          args: call.args,
-        })),
-        fallback: true,
-      })
-      return decision
-    }
-    const decision = normalizeAgentSufficiencyDecision({
-      enough: observations.length > 0 || fetchedFiles.length > 0,
-      reason: 'sufficiency_fallback',
-      confidence: 'low',
-      nextToolCalls: [],
-    })
-    console.info('[GitMentor SW] Agent sufficiency decision', {
-      enough: decision.enough,
-      confidence: decision.confidence,
-      nextToolCalls: decision.nextToolCalls.map((call) => ({
-        tool: call.tool,
-        args: call.args,
-      })),
-      fallback: true,
-    })
-    return decision
-  }
-}
-
-function latestCodeIndex(observations: AgentObservation[]): AgentCodeIndex | undefined {
-  for (let index = observations.length - 1; index >= 0; index -= 1) {
-    const codeIndex = observations[index].codeIndex
-    if (codeIndex) return codeIndex
-  }
-  return undefined
-}
-
-function latestCandidateFiles(observations: AgentObservation[]): string[] {
-  for (let index = observations.length - 1; index >= 0; index -= 1) {
-    const candidateFiles = observations[index].candidateFiles
-    if (candidateFiles?.length) return candidateFiles
-  }
-  return []
-}
-
-async function withAgentTimeout<T>(
-  task: Promise<T>,
-  timeoutMs: number,
-  fallbackValue: T,
-  timeoutMessage: string,
-): Promise<T> {
-  let timer: ReturnType<typeof setTimeout> | null = null
-  try {
-    return await Promise.race([
-      task,
-      new Promise<T>((resolve) => {
-        timer = setTimeout(() => {
-          console.warn(timeoutMessage)
-          resolve(fallbackValue)
-        }, timeoutMs)
-      }),
-    ])
-  } finally {
-    if (timer) clearTimeout(timer)
-  }
-}
 
 function collectAgentRepoPathHints(payload: AgentChatRequestPayload): string[] {
   return extractRepoPathHintsFromText(
@@ -842,113 +765,6 @@ function collectAgentRepoPathHints(payload: AgentChatRequestPayload): string[] {
     ...payload.recentMessages.flatMap((message) => (message.retrievedFiles || []).map((file) => file.filePath)),
     ...payload.recentMessages.flatMap((message) => (message.evidence || []).map((item) => item.filePath || '')),
   ).slice(0, AGENT_REPO_PATH_HINTS_LIMIT)
-}
-
-function normalizeTopicProbeTerm(input: string): string {
-  return input
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9_-]+/g, '')
-}
-
-function collectAgentTopicTerms(...texts: string[]): string[] {
-  const joined = texts.join('\n').toLowerCase()
-  const terms = new Set<string>()
-
-  for (const token of joined.replace(/[^a-z0-9/_-]+/g, ' ').split(/\s+/)) {
-    const normalized = normalizeTopicProbeTerm(token)
-    if (normalized.length >= 3 && normalized.length <= 32) {
-      terms.add(normalized)
-    }
-  }
-
-  const aliases: Array<[RegExp, string[]]> = [
-    [/记忆|记住|内存/u, ['memory', 'memories']],
-    [/会话|上下文/u, ['session', 'context']],
-    [/历史|记录/u, ['history']],
-    [/存储|保存|持久化/u, ['store', 'storage', 'persist']],
-    [/配置|设置/u, ['config', 'settings']],
-    [/认证|鉴权|登录/u, ['auth', 'login']],
-    [/插件/u, ['plugin', 'plugins']],
-    [/工具/u, ['tool', 'tools']],
-  ]
-  for (const [pattern, values] of aliases) {
-    if (pattern.test(joined)) {
-      values.forEach((value) => terms.add(value))
-    }
-  }
-
-  return Array.from(terms).slice(0, 8)
-}
-
-function buildTopicDirectoryProbes(payload: AgentChatRequestPayload, queries: string[]): string[] {
-  const repoSlug = normalizeTopicProbeTerm(payload.repo.name)
-  const terms = collectAgentTopicTerms(payload.question, ...queries)
-  const dirs = new Set<string>()
-
-  for (const term of terms) {
-    const topicDirs = [
-      `src/${repoSlug}/${term}`,
-      `src/${term}`,
-      `${repoSlug}/${term}`,
-      `lib/${term}`,
-      `app/${term}`,
-      `packages/${term}`,
-      term,
-    ]
-    topicDirs.forEach((dir) => dirs.add(dir))
-  }
-
-  return Array.from(dirs).slice(0, 12)
-}
-
-async function listAgentTopicPaths(
-  payload: AgentChatRequestPayload,
-  queries: string[],
-): Promise<string[]> {
-  const probes = buildTopicDirectoryProbes(payload, queries)
-  if (probes.length === 0) return []
-
-  const results = await Promise.all(
-    probes.map((path) => getGithubWebDirectoryPaths(payload.repo.owner, payload.repo.name, path)),
-  )
-  return Array.from(new Set(results.flat())).slice(0, AGENT_REPO_PATH_HINTS_LIMIT)
-}
-
-async function listAgentRepoPaths(
-  payload: AgentChatRequestPayload,
-  depth = AGENT_DISCOVERY_TREE_DEPTH,
-): Promise<string[]> {
-  const tree = await getFullDirectoryTree(
-    payload.repo.owner,
-    payload.repo.name,
-    depth,
-  ).catch(() => [])
-  return flattenTreeFilePaths(tree)
-}
-
-async function answerAgentWithObservations(
-  config: StoredLLMConfig,
-  payload: AgentChatRequestPayload,
-  intent: AgentIntent,
-  observations: AgentObservation[],
-  lang: Language,
-): Promise<AgentChatResponsePayload> {
-  const prompt = buildAgentFinalAnswerPromptCompact(payload, intent, observations, lang)
-  const litePrompt = buildAgentFinalAnswerPromptLite(payload, intent, observations, lang)
-  return await runAgentPromptWithFallback({
-    config,
-    lang,
-    prompt,
-    litePrompt,
-    retryReason: 'timeout_retried_with_observation_prompt',
-    label: 'agent-final-answer',
-    maxTokens: 700,
-    retryMaxTokens: 360,
-    timeoutMs: AGENT_FINAL_ANSWER_TIMEOUT_MS,
-    retryTimeoutMs: AGENT_FINAL_ANSWER_RETRY_TIMEOUT_MS,
-    stream: true,
-  })
 }
 
 async function runAgentChatRequest(
@@ -966,106 +782,35 @@ async function runAgentChatRequest(
     throw new Error('LLM not configured')
   }
 
-  return await withKeepAlive(
-    async () => {
-      let repoPathsCache: string[] | null = null
-      const repoPathHints = collectAgentRepoPathHints(payload)
-      const getRepoPaths = async (depth?: number) => {
-        if (!repoPathsCache || depth) {
-          const discovery = listAgentRepoPaths(payload, depth).catch((error) => {
-            console.warn('[GitMentor SW] Agent repo path discovery fallback:', error)
-            return [] as string[]
-          })
-          const discoveredPaths = await withAgentTimeout(
-            discovery,
-            AGENT_REPO_PATH_DISCOVERY_TIMEOUT_MS,
-            [] as string[],
-            '[GitMentor SW] Agent repo path discovery timed out; falling back to summary path hints.',
-          )
-          repoPathsCache = discoveredPaths.length > 0 ? discoveredPaths : repoPathHints
-        }
-        return repoPathsCache.length > 0 ? repoPathsCache : repoPathHints
-      }
-
-      return await answerAgentQuestion(payload, {
-        planRetriever: async (runtimePayload) => await planAgentRetrieval(config, runtimePayload, lang),
-        discoverFiles: async (runtimePayload, plan) => await discoverAgentFiles(runtimePayload, plan),
-        fetchFiles: async (runtimePayload, targetFiles, onFileProgress) =>
-          await fetchAgentRetrievedFiles(runtimePayload, targetFiles, onFileProgress),
-        answerWithSummary: async (runtimePayload) => await answerAgentWithSummary(config, runtimePayload, lang),
-        answerWithCode: async ({ payload: runtimePayload, plan, retrievedFiles }) =>
-          await answerAgentWithCode(config, runtimePayload, plan, retrievedFiles, lang),
-        judgeIntent: async (runtimePayload) => await judgeAgentIntent(config, runtimePayload, lang),
-        executeToolCalls: async (runtimePayload, calls, context) => {
-          const runtimeRepoPathHints = collectAgentRepoPathHints(runtimePayload)
-          const needsRepoPaths = calls.some((call) =>
-            call.tool === 'listRepoTree' ||
-            call.tool === 'searchRepoPaths' ||
-            call.tool === 'expandImports',
-          )
-          const requiresLiveRepoTree = calls.some((call) =>
-            call.tool === 'listRepoTree' ||
-            call.tool === 'searchRepoPaths' ||
-            call.tool === 'expandImports',
-          )
-          const searchQueries = calls
-            .filter((call) => call.tool === 'searchRepoPaths')
-            .map((call) => String(call.args?.query || runtimePayload.question))
-          const repoPathsPromise = needsRepoPaths
-            ? requiresLiveRepoTree || runtimeRepoPathHints.length === 0
-              ? getRepoPaths()
-              : Promise.resolve(runtimeRepoPathHints)
-            : Promise.resolve([] as string[])
-          const topicPathsPromise = searchQueries.length > 0
-            ? withAgentTimeout(
-                listAgentTopicPaths(runtimePayload, searchQueries),
-                AGENT_TOPIC_PATH_DISCOVERY_TIMEOUT_MS,
-                [] as string[],
-                '[GitMentor SW] Agent topic path discovery timed out; continuing with tree paths.',
-              )
-            : Promise.resolve([] as string[])
-          const [treeRepoPaths, topicRepoPaths] = await Promise.all([repoPathsPromise, topicPathsPromise])
-          const repoPaths = Array.from(new Set([...treeRepoPaths, ...topicRepoPaths]))
-          const preferredFiles = latestCandidateFiles(context.observations)
-          const expandedCalls = calls.map((call) => {
-            if (call.tool === 'readGithubFiles' && (!call.args?.paths || call.args.paths.length === 0)) {
-              return {
-                ...call,
-                args: {
-                  ...(call.args || {}),
-                  paths: preferredFiles,
-                },
-              }
-            }
-            return call
-          })
-          return await executeAgentToolCalls(
-            {
-              payload: runtimePayload,
-              calls: expandedCalls,
-              repoPaths,
-              retrievedFiles: context.retrievedFiles,
-              budget: {
-                maxFiles: 8,
-                maxCharsPerFile: AGENT_CODE_CONTEXT_CHARS_PER_FILE,
-              },
-              codeIndex: latestCodeIndex(context.observations),
-            },
-            {
-              fetchFiles: async (toolPayload, targetFiles, onFileProgress) =>
-                await fetchAgentRetrievedFiles(toolPayload, targetFiles, onFileProgress),
-              listRepoTree: async (_toolPayload, depth) => await getRepoPaths(depth),
-              onProgress,
-            },
-          )
-        },
-        judgeSufficiency: async ({ payload: runtimePayload, intent, observations }) =>
-          await judgeAgentSufficiency(config, runtimePayload, intent, observations, lang),
-        answerWithObservations: async ({ payload: runtimePayload, intent, observations }) =>
-          await answerAgentWithObservations(config, runtimePayload, intent, observations, lang),
-        onProgress,
+  const requestStartedAt = Date.now()
+  const timed = async <T>(stage: string, task: () => Promise<T>): Promise<T> => {
+    const startedAt = Date.now()
+    try {
+      return await task()
+    } finally {
+      console.info('[GitMentor SW] Agent stage timing', {
+        stage,
+        ms: Date.now() - startedAt,
+        totalMs: Date.now() - requestStartedAt,
       })
-    },
+    }
+  }
+
+  return await withKeepAlive(
+    async () =>
+      await answerAgentQuestion(payload, {
+        planRetriever: async (runtimePayload) =>
+          await timed('plan', () => planAgentRetrieval(config, runtimePayload, lang)),
+        discoverFiles: async (runtimePayload, plan) =>
+          await timed('discover', () => discoverAgentFiles(runtimePayload, plan)),
+        fetchFiles: async (runtimePayload, targetFiles, onFileProgress) =>
+          await timed('fetch', () => fetchAgentRetrievedFiles(runtimePayload, targetFiles, onFileProgress)),
+        answerWithSummary: async (runtimePayload) =>
+          await timed('answer-summary', () => answerAgentWithSummary(config, runtimePayload, lang)),
+        answerWithCode: async ({ payload: runtimePayload, plan, retrievedFiles }) =>
+          await timed('answer-code', () => answerAgentWithCode(config, runtimePayload, plan, retrievedFiles, lang)),
+        onProgress,
+      }),
     pingServiceWorkerKeepAlive,
     SERVICE_WORKER_KEEPALIVE_INTERVAL_MS,
   )

@@ -150,8 +150,12 @@ test("GitHub requests include Authorization header when a token is configured", 
     await getRepoTree("acme", "widgets", "");
     await getRawFileContent("acme", "widgets", "main", "src/api/client.ts");
 
+    // API requests (api.github.com) carry the token for higher rate limits.
     assert.equal(seenHeaders[0].authorization, "Bearer ghp_test_token");
-    assert.equal(seenHeaders[1].authorization, "Bearer ghp_test_token");
+    // raw.githubusercontent.com must NOT get the token: it does not authenticate
+    // via a Bearer header for public content, and adding one turns the GET into a
+    // CORS-preflighted request that raw rejects.
+    assert.equal(seenHeaders[1].authorization, "");
   } finally {
     globalThis.fetch = originalFetch;
     (globalThis as any).localStorage = originalLocalStorage;

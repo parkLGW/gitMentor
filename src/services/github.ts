@@ -26,6 +26,7 @@ const GITHUB_RATE_LIMIT_MAX_RETRIES = 2
 const GITHUB_RATE_LIMIT_DELAY_CAP_MS = 5000
 const GITHUB_RATE_LIMIT_FALLBACK_DELAY_MS = 1000
 const GITHUB_WEB_TREE_TIMEOUT_MS = 8000
+const RECURSIVE_TREE_TIMEOUT_MS = 15000
 const FULL_TREE_CACHE_VERSION = 'v2'
 
 // Check if localStorage is available
@@ -165,9 +166,13 @@ async function fetchGithubWithRetry(
   options: RequestInit = {},
   timeoutMs: number = DEFAULT_TIMEOUT,
   maxRateLimitRetries: number = GITHUB_RATE_LIMIT_MAX_RETRIES,
+  skipAuth: boolean = false,
 ): Promise<Response> {
   let lastResponse: Response | null = null
-  const headers = await mergeGithubHeaders(options.headers)
+  // raw.githubusercontent.com does not authenticate via a Bearer header for
+  // public content, and adding one turns the GET into a CORS-preflighted
+  // request that raw rejects. Skip auth for those requests.
+  const headers = skipAuth ? new Headers(options.headers) : await mergeGithubHeaders(options.headers)
   const requestOptions: RequestInit = {
     ...options,
     headers,
@@ -274,7 +279,7 @@ export async function getRawFileContent(
     if (!url) {
       return null
     }
-    const response = await fetchGithubWithRetry(url, {}, options.timeoutMs ?? DEFAULT_TIMEOUT)
+    const response = await fetchGithubWithRetry(url, {}, options.timeoutMs ?? DEFAULT_TIMEOUT, GITHUB_RATE_LIMIT_MAX_RETRIES, true)
     if (!response.ok) {
       return null
     }
@@ -692,6 +697,63 @@ async function getGithubRecursiveDirectoryTree(
   const data = await response.json()
   const entries = Array.isArray(data?.tree) ? data.tree : []
   return buildDirectoryTreeFromGithubEntries(entries, maxDepth)
+}
+
+/**
+ * Flat list of every file path in the repo via a single recursive git/trees
+ * request (full depth, no directory-walk fallback). Returns [] if the request
+ * fails (e.g. unauthenticated API rate limit) so callers degrade gracefully
+ * instead of triggering an expensive per-directory walk.
+ */
+export async function getRecursiveRepoFilePaths(
+  owner: string,
+  repo: string,
+): Promise<string[]> {
+  const cacheKey = getCacheKey(owner, repo, `recursive_file_paths_${FULL_TREE_CACHE_VERSION}`)
+  const cached = getFromCache<string[]>(cacheKey)
+  if (cached) return cached
+
+  const url = `https://api.github.com/repos/${owner}/${repo}/git/trees/HEAD?recursive=1`
+
+  const parsePaths = async (response: Response): Promise<string[]> => {
+    if (!response.ok) return []
+    const data = await response.json()
+    const entries = Array.isArray(data?.tree) ? data.tree : []
+    return entries
+      .filter((entry: { type?: string; path?: string }) => entry?.type === 'blob' && typeof entry.path === 'string')
+      .map((entry: { path: string }) => entry.path)
+  }
+
+  // Attempt 1: authenticated (higher rate limit). Large monorepo trees can be a
+  // big JSON payload, so allow more time than the per-directory web-tree timeout.
+  let paths: string[] = []
+  let authStatus = 'error'
+  try {
+    const response = await fetchGithubWithRetry(url, {}, RECURSIVE_TREE_TIMEOUT_MS, 1)
+    authStatus = String(response.status)
+    paths = await parsePaths(response)
+  } catch (error) {
+    console.debug('Recursive repo tree (authenticated) failed:', error)
+  }
+
+  // Attempt 2: unauthenticated fallback. Recovers when a bad/expired token
+  // makes the API 401/403 (an invalid token is worse than no token here).
+  if (paths.length === 0) {
+    try {
+      const response = await fetchWithTimeout(url, { headers: { Accept: 'application/vnd.github+json' } }, RECURSIVE_TREE_TIMEOUT_MS)
+      const unauthPaths = await parsePaths(response)
+      if (unauthPaths.length > 0) {
+        console.warn(`[GitMentor] Recursive repo tree: authenticated attempt returned 0 (status ${authStatus}); unauthenticated fallback recovered ${unauthPaths.length} paths. Check that your GitHub token is valid.`)
+        paths = unauthPaths
+      }
+    } catch (error) {
+      console.debug('Recursive repo tree (unauthenticated) failed:', error)
+    }
+  }
+
+  console.info(`[GitMentor] Recursive repo tree for ${owner}/${repo}: ${paths.length} file paths`)
+  if (paths.length > 0) setCache(cacheKey, paths)
+  return paths
 }
 
 async function getGithubWebDirectoryTree(

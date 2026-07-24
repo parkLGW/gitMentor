@@ -1,15 +1,10 @@
 import type {
   AgentChatRequestPayload,
   AgentChatResponsePayload,
-  AgentIntent,
-  AgentObservation,
   AgentProgressEvent,
   AgentRetrievalPlan,
-  AgentSufficiencyDecision,
-  AgentToolCall,
   RetrievedFileContext,
 } from "../types/agent.js";
-import { AGENT_LOOP_MAX_ITERATIONS } from "./agent-timeouts.js";
 
 const MAX_CANDIDATE_FILES_TO_READ = 8;
 
@@ -35,32 +30,6 @@ export interface AnswerAgentQuestionDependencies {
     payload: AgentChatRequestPayload;
     plan: AgentRetrievalPlan;
     retrievedFiles: RetrievedFileContext[];
-  }) => Promise<AgentChatResponsePayload> | AgentChatResponsePayload;
-  judgeIntent?: (
-    payload: AgentChatRequestPayload
-  ) => Promise<AgentIntent> | AgentIntent;
-  executeToolCalls?: (
-    payload: AgentChatRequestPayload,
-    calls: AgentToolCall[],
-    context: {
-      observations: AgentObservation[];
-      retrievedFiles: RetrievedFileContext[];
-      iteration: number;
-    }
-  ) => Promise<AgentObservation[]> | AgentObservation[];
-  judgeSufficiency?: (input: {
-    payload: AgentChatRequestPayload;
-    intent: AgentIntent;
-    observations: AgentObservation[];
-    retrievedFiles: RetrievedFileContext[];
-    iteration: number;
-  }) => Promise<AgentSufficiencyDecision> | AgentSufficiencyDecision;
-  answerWithObservations?: (input: {
-    payload: AgentChatRequestPayload;
-    intent: AgentIntent;
-    observations: AgentObservation[];
-    retrievedFiles: RetrievedFileContext[];
-    sufficient: AgentSufficiencyDecision;
   }) => Promise<AgentChatResponsePayload> | AgentChatResponsePayload;
   onProgress?: (
     progress: AgentProgressEvent
@@ -339,304 +308,15 @@ function normalizeTargetFiles(targetFiles: string[]): string[] {
   ).slice(0, MAX_CANDIDATE_FILES_TO_READ);
 }
 
-function hasGenericLoopDeps(deps: AnswerAgentQuestionDependencies): boolean {
-  return Boolean(
-    deps.judgeIntent &&
-    deps.executeToolCalls &&
-    deps.judgeSufficiency &&
-    deps.answerWithObservations,
-  );
-}
-
-function mergeRetrievedFiles(
-  current: RetrievedFileContext[],
-  next: RetrievedFileContext[],
-): RetrievedFileContext[] {
-  const byPath = new Map<string, RetrievedFileContext>();
-  [...current, ...next].forEach((file) => {
-    byPath.set(file.filePath, file);
-  });
-  return Array.from(byPath.values());
-}
-
-function collectRetrievedFiles(observations: AgentObservation[]): RetrievedFileContext[] {
-  return observations.reduce<RetrievedFileContext[]>((files, observation) => {
-    return mergeRetrievedFiles(files, observation.retrievedFiles || []);
-  }, []);
-}
-
-function hasFetchedFiles(files: RetrievedFileContext[]): boolean {
-  return files.some((file) => file.status === "fetched");
-}
-
-function buildSourceEvidenceSufficiencyDecision(
-  intent: AgentIntent,
-  observations: AgentObservation[],
-  retrievedFiles: RetrievedFileContext[],
-): AgentSufficiencyDecision | null {
-  if (!hasFetchedFiles(retrievedFiles)) return null;
-  const fetchedCount = countFetchedFiles(retrievedFiles);
-  const checkedRelatedFiles =
-    hasObservationForTool(observations, "searchRepoPaths") ||
-    hasObservationForTool(observations, "expandImports");
-
-  return {
-    enough: true,
-    reason: needsCodeEvidence(intent)
-      ? checkedRelatedFiles
-        ? `Fetched source evidence from ${fetchedCount} file${fetchedCount === 1 ? "" : "s"} and checked related-file coverage; draft a grounded answer.`
-        : `Fetched source evidence from ${fetchedCount} file${fetchedCount === 1 ? "" : "s"} within the tool budget; draft a grounded answer with uncertainty.`
-      : "Fetched context is available; draft the answer.",
-    confidence: checkedRelatedFiles || fetchedCount >= 2 ? "medium" : "low",
-    nextToolCalls: [],
-  };
-}
-
-function needsCodeEvidence(intent: AgentIntent): boolean {
-  return intent.category !== "learning-path";
-}
-
-function hasObservationForTool(
-  observations: AgentObservation[],
-  tool: AgentToolCall["tool"],
-): boolean {
-  return observations.some((observation) => observation.tool === tool);
-}
-
-function latestCandidateFiles(observations: AgentObservation[]): string[] {
-  for (let index = observations.length - 1; index >= 0; index -= 1) {
-    const candidateFiles = observations[index].candidateFiles;
-    if (candidateFiles?.length) {
-      return Array.from(
-        new Set(
-          candidateFiles
-            .map((file) => String(file || "").trim().replace(/\\/g, "/"))
-            .filter(Boolean),
-        ),
-      );
-    }
-  }
-  return [];
-}
-
-function remainingCandidateFiles(
-  observations: AgentObservation[],
-  retrievedFiles: RetrievedFileContext[],
-): string[] {
-  const alreadyTried = new Set(retrievedFiles.map((file) => file.filePath));
-  return latestCandidateFiles(observations)
-    .filter((filePath) => !alreadyTried.has(filePath));
-}
-
-function shouldSearchCandidatesBeforeJudging(
-  intent: AgentIntent,
-  observations: AgentObservation[],
-  retrievedFiles: RetrievedFileContext[],
-  iteration: number,
-): AgentToolCall | null {
-  if (iteration >= AGENT_LOOP_MAX_ITERATIONS - 1) return null;
-  if (!needsCodeEvidence(intent)) return null;
-  if (hasFetchedFiles(retrievedFiles)) return null;
-  if (latestCandidateFiles(observations).length > 0) return null;
-  if (hasObservationForTool(observations, "searchRepoPaths")) return null;
-
-  return {
-    tool: "searchRepoPaths",
-    args: {
-      query: intent.reason || "",
-      maxFiles: MAX_CANDIDATE_FILES_TO_READ,
-      reason: "Find candidate source files before judging sufficiency.",
-    },
-  };
-}
-
-function shouldReadCandidatesBeforeAnswer(
-  intent: AgentIntent,
-  observations: AgentObservation[],
-  retrievedFiles: RetrievedFileContext[],
-  iteration: number,
-): AgentToolCall | null {
-  if (iteration >= AGENT_LOOP_MAX_ITERATIONS - 1) return null;
-  if (!needsCodeEvidence(intent)) return null;
-
-  const paths = remainingCandidateFiles(observations, retrievedFiles)
-    .slice(0, MAX_CANDIDATE_FILES_TO_READ);
-
-  if (paths.length === 0) return null;
-
-  return {
-    tool: "readGithubFiles",
-    args: {
-      paths,
-      reason: "Read remaining candidate files before making code-grounded claims.",
-    },
-  };
-}
-
-function shouldExpandImportsBeforeAnswer(
-  intent: AgentIntent,
-  observations: AgentObservation[],
-  retrievedFiles: RetrievedFileContext[],
-  iteration: number,
-): AgentToolCall[] | null {
-  if (iteration >= AGENT_LOOP_MAX_ITERATIONS - 1) return null;
-  if (!needsCodeEvidence(intent)) return null;
-  if (!hasFetchedFiles(retrievedFiles)) return null;
-  if (remainingCandidateFiles(observations, retrievedFiles).length > 0) return null;
-  if (hasObservationForTool(observations, "searchRepoPaths")) return null;
-  if (hasObservationForTool(observations, "expandImports")) return null;
-
-  return [
-    {
-      tool: "buildCodeIndex",
-      args: {
-        reason: "Index fetched source before deciding whether imported files are needed.",
-      },
-    },
-    {
-      tool: "expandImports",
-      args: {
-        reason: "Find imported files that may be needed for a sufficient code-grounded answer.",
-      },
-    },
-  ];
-}
-
-async function answerWithGenericLoop(
-  payload: AgentChatRequestPayload,
-  deps: AnswerAgentQuestionDependencies,
-): Promise<AgentChatResponsePayload> {
-  await emitProgress(deps, { stage: "understanding-intent" });
-  const intent = await deps.judgeIntent!(payload);
-  const observations: AgentObservation[] = [];
-  let retrievedFiles: RetrievedFileContext[] = [];
-  let nextToolCalls = intent.toolCalls;
-  let sufficient: AgentSufficiencyDecision | null = null;
-
-  for (let iteration = 0; iteration < AGENT_LOOP_MAX_ITERATIONS; iteration += 1) {
-    if (nextToolCalls.length > 0) {
-      await emitProgress(deps, {
-        stage: "searching-files",
-        note: nextToolCalls.map((call) => call.tool).join(", "),
-      });
-      const nextObservations = await deps.executeToolCalls!(payload, nextToolCalls, {
-        observations,
-        retrievedFiles,
-        iteration,
-      });
-      observations.push(...nextObservations);
-      retrievedFiles = collectRetrievedFiles(observations);
-    }
-
-    const candidateSearchCall = shouldSearchCandidatesBeforeJudging(
-      intent,
-      observations,
-      retrievedFiles,
-      iteration,
-    );
-    if (candidateSearchCall) {
-      nextToolCalls = [candidateSearchCall];
-      continue;
-    }
-
-    const candidateReadCall = shouldReadCandidatesBeforeAnswer(
-      intent,
-      observations,
-      retrievedFiles,
-      iteration,
-    );
-    if (candidateReadCall) {
-      nextToolCalls = [candidateReadCall];
-      continue;
-    }
-
-    const importExpansionCalls = shouldExpandImportsBeforeAnswer(
-      intent,
-      observations,
-      retrievedFiles,
-      iteration,
-    );
-    if (importExpansionCalls) {
-      nextToolCalls = importExpansionCalls;
-      continue;
-    }
-
-    sufficient = buildSourceEvidenceSufficiencyDecision(intent, observations, retrievedFiles)
-      ?? await deps.judgeSufficiency!({
-        payload,
-        intent,
-        observations,
-        retrievedFiles,
-        iteration,
-      });
-
-    if (sufficient.enough) {
-      await emitProgress(deps, { stage: "drafting-answer" });
-      let answer: AgentChatResponsePayload;
-      try {
-        answer = await deps.answerWithObservations!({
-          payload,
-          intent,
-          observations,
-          retrievedFiles,
-          sufficient,
-        });
-      } catch (error) {
-        if (!isRequestTimeout(error)) throw error;
-        answer = buildLocalFallbackAnswer(payload, retrievedFiles);
-      }
-      return {
-        ...answer,
-        retrievalMode: hasFetchedFiles(retrievedFiles) ? "github-code" : "summary-only",
-        retrievedFiles,
-      };
-    }
-
-    nextToolCalls = sufficient.nextToolCalls;
-    if (nextToolCalls.length === 0) break;
-  }
-
-  if (hasFetchedFiles(retrievedFiles)) {
-    await emitProgress(deps, {
-      stage: "drafting-answer",
-      note: "calling final LLM with fetched files after tool budget was exhausted",
-    });
-    let answer: AgentChatResponsePayload;
-    try {
-      answer = await deps.answerWithObservations!({
-        payload,
-        intent,
-        observations,
-        retrievedFiles,
-        sufficient: sufficient ?? {
-          enough: false,
-          reason: "Tool budget exhausted with partial evidence.",
-          confidence: "low",
-          nextToolCalls: [],
-        },
-      });
-    } catch (error) {
-      if (!isRequestTimeout(error)) throw error;
-      answer = buildLocalFallbackAnswer(payload, retrievedFiles);
-    }
-    return {
-      ...answer,
-      retrievalMode: "github-code",
-      retrievedFiles,
-    };
-  }
-
-  await emitProgress(deps, {
-    stage: "drafting-answer",
-    note: "no fetched files available for final LLM answer",
-  });
-  return {
-    ...buildLocalFallbackAnswer(payload, retrievedFiles, "no-code-evidence"),
-    retrievalMode: hasFetchedFiles(retrievedFiles) ? "github-code" : "summary-only",
-    retrievedFiles,
-  };
-}
-
+/**
+ * Single-plan, single-answer pipeline:
+ *   fast-path greeting → plan retrieval → deterministic file discovery →
+ *   fetch code → answer (with code) or answer (summary-only).
+ *
+ * There is intentionally no multi-call "agent" loop: the retrieval decision is
+ * made once by the planner, file selection is deterministic, and the answer LLM
+ * is given the full fetched code context so it can address the question directly.
+ */
 export async function answerAgentQuestion(
   payload: AgentChatRequestPayload,
   deps: AnswerAgentQuestionDependencies
@@ -644,19 +324,6 @@ export async function answerAgentQuestion(
   const fastPathAnswer = buildFastPathAgentAnswer(payload);
   if (fastPathAnswer) {
     return fastPathAnswer;
-  }
-
-  if (hasGenericLoopDeps(deps)) {
-    try {
-      return await answerWithGenericLoop(payload, deps);
-    } catch (error) {
-      if (!isRequestTimeout(error)) throw error;
-      return {
-        ...buildLocalFallbackAnswer(payload, []),
-        retrievalMode: "summary-only",
-        retrievedFiles: [],
-      };
-    }
   }
 
   const plan = await deps.planRetriever(payload);
