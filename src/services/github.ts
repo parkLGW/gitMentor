@@ -751,7 +751,7 @@ export async function getRecursiveRepoFilePaths(
     }
   }
 
-  console.info(`[GitMentor] Recursive repo tree for ${owner}/${repo}: ${paths.length} file paths`)
+  console.debug(`[GitMentor] Recursive repo tree for ${owner}/${repo}: ${paths.length} file paths`)
   if (paths.length > 0) setCache(cacheKey, paths)
   return paths
 }

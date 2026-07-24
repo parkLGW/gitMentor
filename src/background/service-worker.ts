@@ -272,6 +272,15 @@ async function discoverAgentFiles(
     return preferredPaths
   }
 
+  // Drop planner targetFiles that don't exist in the repo tree: they are
+  // hallucinations that would otherwise take the top ranking slot (and a fetch
+  // slot) only to 404. Skip this filter if the tree came back empty and we
+  // can't verify.
+  const treePathSet = new Set(treePaths)
+  const validPreferred = treePathSet.size > 0
+    ? preferredPaths.filter((filePath) => treePathSet.has(filePath))
+    : preferredPaths
+
   const ranked = rankCandidateFiles({
     question: `${payload.question}\n${plan.reason || ''}`,
     searchTerms: plan.searchTerms,
@@ -279,17 +288,18 @@ async function discoverAgentFiles(
     readmeSummary: payload.readmeSummary,
     sessionSummary: buildAgentSessionSummaryText(payload.sessionSummary || null),
     repoPaths,
-    preferredPaths,
+    preferredPaths: validPreferred,
   })
 
   const selected = Array.from(new Set([
-    ...preferredPaths,
+    ...validPreferred,
     ...ranked,
   ])).slice(0, AGENT_CODE_CONTEXT_FILES_LIMIT)
 
-  console.info('[GitMentor SW] Agent discovery', {
+  console.debug('[GitMentor SW] Agent discovery', {
     treePaths: treePaths.length,
     plannerTargets: preferredPaths,
+    droppedHallucinatedTargets: preferredPaths.filter((filePath) => !treePathSet.has(filePath)),
     searchTerms: plan.searchTerms || [],
     selected,
   })
@@ -688,7 +698,7 @@ async function fetchAgentRetrievedFiles(
 
   const fetched = await fetchBatch(targetFiles)
 
-  console.info('[GitMentor SW] Agent fetch', {
+  console.debug('[GitMentor SW] Agent fetch', {
     requested: targetFiles,
     results: fetched.map((file) => `${file.filePath}:${file.status}${file.reason ? `(${file.reason})` : ''}`),
   })
