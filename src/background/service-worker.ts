@@ -28,6 +28,7 @@ import {
   AGENT_FINAL_ANSWER_TIMEOUT_MS,
   AGENT_LLM_RETRY_TIMEOUT_MS,
   AGENT_LLM_TIMEOUT_MS,
+  AGENT_PLANNER_RETRY_TIMEOUT_MS,
   AGENT_PLANNER_TIMEOUT_MS,
   AGENT_SUMMARY_TIMEOUT_MS,
 } from '@/services/agent-timeouts'
@@ -653,22 +654,52 @@ async function planAgentRetrieval(
   payload: AgentChatRequestPayload,
   lang: Language,
 ): Promise<AgentRetrievalPlan> {
+  const prompt = buildAgentRetrievalPlannerPrompt(payload, lang)
+
+  const runPlanner = async (timeoutMs: number, label: string): Promise<AgentRetrievalPlan | null> => {
+    const response = await callLLM(config, prompt, { timeoutMs, maxTokens: 260, label })
+    const parsed = safeParseJSON(response)
+    // An unparseable response must not silently become needsCodeContext=false.
+    if (!parsed || typeof parsed !== 'object') return null
+    return parseRetrievalPlan(parsed)
+  }
+
+  let plan: AgentRetrievalPlan | null = null
   try {
-    const prompt = buildAgentRetrievalPlannerPrompt(payload, lang)
-    const response = await callLLM(config, prompt, {
-      timeoutMs: AGENT_PLANNER_TIMEOUT_MS,
-      maxTokens: 220,
-    })
-    return parseRetrievalPlan(safeParseJSON(response) || {})
+    plan = await runPlanner(AGENT_PLANNER_TIMEOUT_MS, 'agent-planner')
   } catch (error) {
-    console.warn('[GitMentor SW] Agent retrieval planner fallback:', error)
+    console.warn('[GitMentor SW] Agent retrieval planner failed; retrying:', error)
+  }
+
+  if (!plan) {
+    try {
+      plan = await runPlanner(AGENT_PLANNER_RETRY_TIMEOUT_MS, 'agent-planner:retry')
+    } catch (error) {
+      console.warn('[GitMentor SW] Agent retrieval planner retry failed:', error)
+    }
+  }
+
+  if (!plan) {
+    // Fail toward code retrieval, not away from it: answering from summaries
+    // alone is the degraded mode this agent exists to avoid. Discovery can still
+    // rank real files from the repo tree and conversation path hints.
+    console.warn('[GitMentor SW] Agent retrieval planner unavailable; defaulting to code retrieval.')
     return parseRetrievalPlan({
-      needsCodeContext: false,
+      needsCodeContext: true,
       targetFiles: [],
-      reason: 'planner_fallback_summary_only',
+      reason: 'planner_unavailable_default_to_code',
       confidence: 'low',
     })
   }
+
+  console.debug('[GitMentor SW] Agent retrieval plan', {
+    needsCodeContext: plan.needsCodeContext,
+    targetFiles: plan.targetFiles,
+    searchTerms: plan.searchTerms || [],
+    confidence: plan.confidence,
+    reason: plan.reason,
+  })
+  return plan
 }
 
 async function fetchAgentRetrievedFiles(

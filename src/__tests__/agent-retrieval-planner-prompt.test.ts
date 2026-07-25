@@ -42,3 +42,29 @@ test("planner prompt tells the model to prefer code context for repo-internal en
   assert.match(prompt, /"searchTerms"/)
   assert.match(prompt, /English keywords for matching against file names/i)
 })
+
+test("planner prompt treats usage-prerequisite questions as needing code", () => {
+  const zh = buildAgentRetrievalPlannerPrompt(
+    createPayload("这个项目搜索工作岗位需要先登录平台吗", "zh"),
+    "zh",
+  )
+  const en = buildAgentRetrievalPlannerPrompt(
+    createPayload("Do I need to log into the platform to search jobs?", "en"),
+    "en",
+  )
+
+  assert.match(zh, /需不需要先登录\/注册\/账号/)
+  assert.match(en, /whether login\/signup\/an account is required/i)
+})
+
+test("planner prompt forbids answering 'unsure' instead of requesting code", () => {
+  const zh = buildAgentRetrievalPlannerPrompt(createPayload("需要登录吗", "zh"), "zh")
+  const en = buildAgentRetrievalPlannerPrompt(createPayload("Is login required?", "en"), "en")
+
+  // Summaries not answering the question must push toward retrieval, never toward
+  // a false + "I'm not sure / go read the README" reply.
+  assert.match(zh, /没有明确回答这个问题，这恰恰说明需要读源码/)
+  assert.match(zh, /绝对不要“设为 false 然后回答不确定/)
+  assert.match(en, /that is precisely the signal that source is needed/i)
+  assert.match(en, /Never set it to false and then reply that you are unsure/i)
+})
