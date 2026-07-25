@@ -51,6 +51,31 @@ export function getFallbackRelatedFiles(message: AgentMessage): string[] {
   return Array.from(files);
 }
 
+/**
+ * Localized confidence label. The raw values are English enum strings, so
+ * rendering them as-is produces mixed-language UI like "置信度: low".
+ */
+export function formatConfidenceLabel(
+  confidence: string | undefined,
+  language: "zh" | "en",
+): string {
+  if (language !== "zh") return confidence || "low";
+  const labels: Record<string, string> = { high: "高", medium: "中", low: "低" };
+  return labels[String(confidence || "low")] || "低";
+}
+
+/**
+ * Compact a repo-relative path for a narrow chip: keep the last two segments,
+ * which carry the most identifying information (`tools/index.ts` rather than
+ * a full `packages/agent/src/harness/tools/index.ts` that overflows the popup).
+ * The full path is still shown via the element's title attribute.
+ */
+export function shortenFilePathForDisplay(filePath: string): string {
+  const segments = String(filePath || "").split("/").filter(Boolean);
+  if (segments.length <= 2) return segments.join("/");
+  return `…/${segments.slice(-2).join("/")}`;
+}
+
 export function buildRetrievalUiNote(
   message: AgentMessage,
   language: "zh" | "en",

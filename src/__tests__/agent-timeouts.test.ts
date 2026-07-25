@@ -6,19 +6,19 @@ import {
   AGENT_CODE_FETCH_TIMEOUT_MS,
   AGENT_FINAL_ANSWER_RETRY_TIMEOUT_MS,
   AGENT_FINAL_ANSWER_TIMEOUT_MS,
-  AGENT_LOOP_MAX_ITERATIONS,
+  AGENT_PLANNER_RETRY_TIMEOUT_MS,
   AGENT_PLANNER_TIMEOUT_MS,
-  AGENT_REPO_PATH_DISCOVERY_TIMEOUT_MS,
-  AGENT_TOPIC_PATH_DISCOVERY_TIMEOUT_MS,
+  AGENT_REPO_TREE_TIMEOUT_MS,
   getAgentWorstCaseRuntimeTimeoutMs,
 } from "../services/agent-timeouts.js";
 
 test("front-end agent timeout covers the worst-case background pipeline budget", () => {
+  // Mirrors the real pipeline: plan (+retry) -> discover -> fetch (+one-hop) -> answer (+retry).
   const worstCase =
     AGENT_PLANNER_TIMEOUT_MS +
-    Math.max(AGENT_REPO_PATH_DISCOVERY_TIMEOUT_MS, AGENT_TOPIC_PATH_DISCOVERY_TIMEOUT_MS) +
-    AGENT_CODE_FETCH_TIMEOUT_MS +
-    AGENT_LOOP_MAX_ITERATIONS * AGENT_PLANNER_TIMEOUT_MS +
+    AGENT_PLANNER_RETRY_TIMEOUT_MS +
+    AGENT_REPO_TREE_TIMEOUT_MS +
+    2 * AGENT_CODE_FETCH_TIMEOUT_MS +
     AGENT_FINAL_ANSWER_TIMEOUT_MS +
     AGENT_FINAL_ANSWER_RETRY_TIMEOUT_MS;
   const minimumBuffer = 30000;

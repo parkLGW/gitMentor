@@ -19,6 +19,8 @@ import {
   buildRetrievalUiNote,
   getAnalyzedFiles,
   getFallbackRelatedFiles,
+  formatConfidenceLabel,
+  shortenFilePathForDisplay,
 } from "@/services/agent-chat-view";
 import { buildAgentProgressText } from "@/services/agent-progress";
 import {
@@ -688,7 +690,8 @@ function AgentTab({ repo, language }: AgentTabProps) {
                         return (
                           <button
                             key={`${message.id}_path_${index}`}
-                            className="inline-block mr-1 mb-1 text-xs px-2 py-0.5 rounded bg-blue-50 text-blue-700 hover:bg-blue-100"
+                            title={filePath}
+                            className="inline-block max-w-full align-bottom truncate mr-1 mb-1 text-xs px-2 py-0.5 rounded bg-blue-50 text-blue-700 hover:bg-blue-100"
                             onClick={() => {
                               if (!filePath) return;
                               window.open(
@@ -697,7 +700,7 @@ function AgentTab({ repo, language }: AgentTabProps) {
                               );
                             }}
                           >
-                            {filePath}
+                            {shortenFilePathForDisplay(filePath)}
                           </button>
                         );
                       })}
@@ -709,25 +712,32 @@ function AgentTab({ repo, language }: AgentTabProps) {
                         .filter((item) => item.reason !== "related_file")
                         .slice(0, 2)
                         .map((item, index) => (
-                          <button
-                            key={`${message.id}_${index}`}
-                            className="block text-left text-xs text-blue-700 hover:underline"
-                            onClick={() => {
-                              if (!item.filePath) return;
-                              window.open(
-                                buildGithubBlobUrl(repo, item.filePath),
-                                "_blank",
-                              );
-                            }}
-                          >
-                            {item.filePath || (isZh ? "证据片段" : "Evidence")} · {item.reason}
-                          </button>
+                          <div key={`${message.id}_${index}`} className="text-xs">
+                            <button
+                              title={item.filePath}
+                              className="text-left text-blue-700 hover:underline max-w-full truncate align-bottom"
+                              onClick={() => {
+                                if (!item.filePath) return;
+                                window.open(
+                                  buildGithubBlobUrl(repo, item.filePath),
+                                  "_blank",
+                                );
+                              }}
+                            >
+                              {item.filePath
+                                ? shortenFilePathForDisplay(item.filePath)
+                                : (isZh ? "证据片段" : "Evidence")}
+                            </button>
+                            {item.reason && (
+                              <p className="text-[11px] leading-snug text-gray-500">{item.reason}</p>
+                            )}
+                          </div>
                         ))}
                     </div>
                   )}
                   {message.role === "assistant" && message.confidence && (
                     <p className="text-[11px] text-gray-500 mt-1">
-                      {isZh ? "置信度" : "Confidence"}: {message.confidence}
+                      {isZh ? "置信度" : "Confidence"}: {formatConfidenceLabel(message.confidence, language)}
                     </p>
                   )}
                 </div>
@@ -779,8 +789,8 @@ function AgentTab({ repo, language }: AgentTabProps) {
         </div>
         <p className="text-[11px] leading-snug text-gray-500">
           {isZh
-            ? "默认先使用 README + 源码地图 + 会话摘要；需要时会补充抓取 GitHub 源码"
-            : "Starts with README, source map, and session summary; fetches GitHub code when needed"}
+            ? "回答会读取相关 GitHub 源码；只有摘要已能确定回答时才跳过"
+            : "Reads the relevant GitHub source to answer; skips it only when the summaries already settle the question"}
         </p>
       </form>
 

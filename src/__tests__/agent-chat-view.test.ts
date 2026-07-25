@@ -6,6 +6,8 @@ import {
   buildRetrievalUiNote,
   getAnalyzedFiles,
   getFallbackRelatedFiles,
+  formatConfidenceLabel,
+  shortenFilePathForDisplay,
 } from "../services/agent-chat-view.js";
 
 import type { AgentMessage } from "../types/agent.js";
@@ -83,4 +85,22 @@ test("buildRetrievalUiNote localizes summary fallback and partial fetch states",
     buildRetrievalUiNote(partialMessage, "en"),
     "Used 1/2 requested GitHub files.",
   );
+});
+
+test("formatConfidenceLabel localizes the raw enum instead of showing 'low' in zh UI", () => {
+  assert.equal(formatConfidenceLabel("high", "zh"), "高");
+  assert.equal(formatConfidenceLabel("medium", "zh"), "中");
+  assert.equal(formatConfidenceLabel("low", "zh"), "低");
+  assert.equal(formatConfidenceLabel(undefined, "zh"), "低");
+  assert.equal(formatConfidenceLabel("high", "en"), "high");
+});
+
+test("shortenFilePathForDisplay keeps the identifying tail of deep paths", () => {
+  assert.equal(
+    shortenFilePathForDisplay("packages/agent/src/harness/tools/index.ts"),
+    "…/tools/index.ts",
+  );
+  assert.equal(shortenFilePathForDisplay("src/index.ts"), "src/index.ts");
+  assert.equal(shortenFilePathForDisplay("README.md"), "README.md");
+  assert.equal(shortenFilePathForDisplay(""), "");
 });
