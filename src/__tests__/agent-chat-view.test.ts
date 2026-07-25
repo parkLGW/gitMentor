@@ -7,7 +7,9 @@ import {
   getAnalyzedFiles,
   getFallbackRelatedFiles,
   formatConfidenceLabel,
+  getDisplayEvidence,
   shortenFilePathForDisplay,
+  shortenFilePathsForDisplay,
 } from "../services/agent-chat-view.js";
 
 import type { AgentMessage } from "../types/agent.js";
@@ -103,4 +105,43 @@ test("shortenFilePathForDisplay keeps the identifying tail of deep paths", () =>
   assert.equal(shortenFilePathForDisplay("src/index.ts"), "src/index.ts");
   assert.equal(shortenFilePathForDisplay("README.md"), "README.md");
   assert.equal(shortenFilePathForDisplay(""), "");
+});
+
+test("shortenFilePathsForDisplay keeps same-named files in a monorepo distinguishable", () => {
+  const labels = shortenFilePathsForDisplay([
+    "packages/cli/src/commands/search.ts",
+    "packages/web/src/commands/search.ts",
+    "packages/cli/README.md",
+  ]);
+
+  // Truncating each path independently would render the first two identically.
+  assert.notEqual(labels[0], labels[1]);
+  assert.equal(new Set(labels).size, labels.length);
+  assert.match(labels[0], /cli/);
+  assert.match(labels[1], /web/);
+});
+
+test("shortenFilePathsForDisplay still compacts when there is no collision", () => {
+  assert.deepEqual(
+    shortenFilePathsForDisplay(["packages/agent/src/harness/tools/index.ts", "README.md"]),
+    ["…/tools/index.ts", "README.md"],
+  );
+});
+
+test("getDisplayEvidence drops duplicate rows the model repeats", () => {
+  const message = createAssistantMessage({
+    evidence: [
+      { filePath: "packages/cli/README.md", reason: "明确说明认证不需要" },
+      { filePath: "packages/cli/README.md", reason: "明确说明认证不需要" },
+      { filePath: "src/auth.ts", reason: "no login path" },
+      { filePath: "src/other.ts", reason: "related_file" },
+    ],
+  });
+
+  const evidence = getDisplayEvidence(message);
+  assert.equal(evidence.length, 2);
+  assert.deepEqual(
+    evidence.map((item) => item.filePath),
+    ["packages/cli/README.md", "src/auth.ts"],
+  );
 });

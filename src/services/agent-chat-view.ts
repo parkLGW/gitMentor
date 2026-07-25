@@ -64,16 +64,60 @@ export function formatConfidenceLabel(
   return labels[String(confidence || "low")] || "低";
 }
 
+const MAX_DISPLAY_PATH_SEGMENTS = 6;
+
+function pathTail(filePath: string, segmentCount: number): string {
+  const segments = String(filePath || "").split("/").filter(Boolean);
+  if (segments.length <= segmentCount) return segments.join("/");
+  return `…/${segments.slice(-segmentCount).join("/")}`;
+}
+
 /**
- * Compact a repo-relative path for a narrow chip: keep the last two segments,
- * which carry the most identifying information (`tools/index.ts` rather than
- * a full `packages/agent/src/harness/tools/index.ts` that overflows the popup).
- * The full path is still shown via the element's title attribute.
+ * Compact a repo-relative path for a narrow chip: keep the identifying tail
+ * (`…/tools/index.ts`) rather than a full monorepo path that overflows the
+ * popup. The full path is still shown via the element's title attribute.
  */
 export function shortenFilePathForDisplay(filePath: string): string {
-  const segments = String(filePath || "").split("/").filter(Boolean);
-  if (segments.length <= 2) return segments.join("/");
-  return `…/${segments.slice(-2).join("/")}`;
+  return pathTail(filePath, 2);
+}
+
+/**
+ * Shorten a group of paths while keeping them distinguishable. Truncating each
+ * path independently makes distinct files collapse into the same label (several
+ * `…/commands/search.ts` rows in a monorepo), so grow the tail per path until
+ * it is unique within the group.
+ */
+export function shortenFilePathsForDisplay(filePaths: string[]): string[] {
+  return filePaths.map((filePath) => {
+    const others = filePaths.filter((candidate) => candidate !== filePath);
+    for (let count = 2; count <= MAX_DISPLAY_PATH_SEGMENTS; count += 1) {
+      const label = pathTail(filePath, count);
+      const collides = others.some((other) => pathTail(other, count) === label);
+      if (!collides) return label;
+    }
+    return filePath;
+  });
+}
+
+/**
+ * Evidence items to render. The model frequently returns the same file/reason
+ * twice, so de-duplicate before capping rather than showing a repeated row.
+ */
+export function getDisplayEvidence(
+  message: AgentMessage,
+  limit = 2,
+): NonNullable<AgentMessage["evidence"]> {
+  const evidence = Array.isArray(message.evidence) ? message.evidence : [];
+  const seen = new Set<string>();
+  return evidence
+    .filter((item) => item.reason !== "related_file")
+    .filter((item) => {
+      const key = `${item.filePath || ""}::${item.reason || ""}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    })
+    .slice(0, limit);
 }
 
 export function buildRetrievalUiNote(

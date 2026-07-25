@@ -20,7 +20,8 @@ import {
   getAnalyzedFiles,
   getFallbackRelatedFiles,
   formatConfidenceLabel,
-  shortenFilePathForDisplay,
+  getDisplayEvidence,
+  shortenFilePathsForDisplay,
 } from "@/services/agent-chat-view";
 import { buildAgentProgressText } from "@/services/agent-progress";
 import {
@@ -612,6 +613,10 @@ function AgentTab({ repo, language }: AgentTabProps) {
               ? []
               : getFallbackRelatedFiles(message);
             const retrievalUiNote = isUser ? null : buildRetrievalUiNote(message, language);
+            const displayEvidence = isUser ? [] : getDisplayEvidence(message);
+            const evidenceLabels = shortenFilePathsForDisplay(
+              displayEvidence.map((item) => item.filePath || ""),
+            );
 
             return (
               <div key={message.id} className={`flex ${isUser ? "justify-end" : "justify-start"}`}>
@@ -684,33 +689,38 @@ function AgentTab({ repo, language }: AgentTabProps) {
                           ? (isZh ? "已分析文件" : "Analyzed files")
                           : (isZh ? "相关文件" : "Related files")}
                       </p>
-                      {(analyzedFiles.length > 0 ? analyzedFiles : relatedFiles).map((item, index) => {
-                        const filePath = typeof item === "string" ? item : item.filePath;
-                        const branch = typeof item === "string" ? undefined : item.branch;
-                        return (
-                          <button
-                            key={`${message.id}_path_${index}`}
-                            title={filePath}
-                            className="inline-block max-w-full align-bottom truncate mr-1 mb-1 text-xs px-2 py-0.5 rounded bg-blue-50 text-blue-700 hover:bg-blue-100"
-                            onClick={() => {
-                              if (!filePath) return;
-                              window.open(
-                                buildGithubBlobUrl(repo, filePath, branch),
-                                "_blank",
-                              );
-                            }}
-                          >
-                            {shortenFilePathForDisplay(filePath)}
-                          </button>
+                      {(() => {
+                        const items = analyzedFiles.length > 0 ? analyzedFiles : relatedFiles;
+                        const paths = items.map((item) =>
+                          typeof item === "string" ? item : item.filePath,
                         );
-                      })}
+                        const labels = shortenFilePathsForDisplay(paths);
+                        return items.map((item, index) => {
+                          const filePath = paths[index];
+                          const branch = typeof item === "string" ? undefined : item.branch;
+                          return (
+                            <button
+                              key={`${message.id}_path_${index}`}
+                              title={filePath}
+                              className="inline-block max-w-full align-bottom truncate mr-1 mb-1 text-xs px-2 py-0.5 rounded bg-blue-50 text-blue-700 hover:bg-blue-100"
+                              onClick={() => {
+                                if (!filePath) return;
+                                window.open(
+                                  buildGithubBlobUrl(repo, filePath, branch),
+                                  "_blank",
+                                );
+                              }}
+                            >
+                              {labels[index]}
+                            </button>
+                          );
+                        });
+                      })()}
                     </div>
                   )}
-                  {message.evidence && message.evidence.length > 0 && (
+                  {displayEvidence.length > 0 && (
                     <div className="mt-2 space-y-1">
-                      {message.evidence
-                        .filter((item) => item.reason !== "related_file")
-                        .slice(0, 2)
+                      {displayEvidence
                         .map((item, index) => (
                           <div key={`${message.id}_${index}`} className="text-xs">
                             <button
@@ -725,7 +735,7 @@ function AgentTab({ repo, language }: AgentTabProps) {
                               }}
                             >
                               {item.filePath
-                                ? shortenFilePathForDisplay(item.filePath)
+                                ? evidenceLabels[index]
                                 : (isZh ? "证据片段" : "Evidence")}
                             </button>
                             {item.reason && (

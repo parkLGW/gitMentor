@@ -4,7 +4,7 @@ import type { AnalysisEvidence, ConfidenceLevel, DeepFileAnalysisResult, Learnin
 import type { SourceMapOutput } from '@/prompts/types'
 import { createLearningMission } from '@/services/learning-mission'
 import { normalizeOpenAICompatibleBaseUrl, resolveProviderBaseUrl } from '@/services/llm-provider-config'
-import { fetchRetrievedGithubFiles, flattenTreeFilePaths, parseRetrievalPlan, rankCandidateFiles } from '@/services/agent-code-context'
+import { fetchRetrievedGithubFiles, flattenTreeFilePaths, isInspectableRepoPath, parseRetrievalPlan, rankCandidateFiles } from '@/services/agent-code-context'
 import { answerAgentQuestion, buildFastPathAgentAnswer, buildLocalFallbackAnswer } from '@/services/agent-chat-runtime'
 import { buildAgentRetrievalPlannerPrompt } from '@/services/agent-retrieval-planner-prompt'
 import { expandImports, extractRepoPathHintsFromText } from '@/services/agent-tool-runtime'
@@ -277,10 +277,13 @@ async function discoverAgentFiles(
   // hallucinations that would otherwise take the top ranking slot (and a fetch
   // slot) only to 404. Skip this filter if the tree came back empty and we
   // can't verify.
+  // Planner targets bypass ranking, so they need the same guards applied there:
+  // they must exist in the tree, and must be inspectable as text (a binary asset
+  // like a .gif wastes a fetch slot and cannot ground an answer).
   const treePathSet = new Set(treePaths)
-  const validPreferred = treePathSet.size > 0
-    ? preferredPaths.filter((filePath) => treePathSet.has(filePath))
-    : preferredPaths
+  const validPreferred = preferredPaths
+    .filter((filePath) => treePathSet.size === 0 || treePathSet.has(filePath))
+    .filter((filePath) => isInspectableRepoPath(filePath))
 
   const ranked = rankCandidateFiles({
     question: `${payload.question}\n${plan.reason || ''}`,
