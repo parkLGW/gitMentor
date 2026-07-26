@@ -17,12 +17,13 @@ interface SecurityAuditTabProps {
   defaultBranch?: string;
 }
 
-type PolicyProfile = "strict" | "balanced" | "permissive";
-
 const labels = {
   zh: {
     title: "安全审计",
     subtitle: "检测潜在数据泄露、恶意代码与供应链风险",
+    scanScopeNote:
+      "基于静态启发式规则的扫描，覆盖常见密钥模式与高风险代码特征，非完整漏洞库，结果需人工确认。",
+    suspiciousFiles: "高风险文件",
     run: "开始审计",
     rerun: "重新审计",
     running: "审计中...",
@@ -45,37 +46,27 @@ const labels = {
     riskScore: "综合风险",
     unknown: "未知错误",
     openOnGithub: "在 GitHub 打开",
-    mode: "审计模式",
-    standard: "标准",
-    advanced: "高级",
-    profile: "策略档位",
-    strict: "严格",
-    balanced: "平衡",
-    permissive: "宽松",
-    options: "高级选项",
-    historicalScan: "历史风险推断",
-    runtimeScan: "运行时行为指标",
+    options: "扫描选项",
     policyCheck: "策略校验",
-    licenseAudit: "许可证风险检查",
-    includeDeps: "依赖安全分析",
+    includeDeps: "依赖启发式检查",
     includeSecrets: "敏感信息扫描",
     includeMalware: "恶意模式检测",
-    baseline: "基线 ID",
-    threshold: "风险阈值",
-    advancedReport: "高级报告",
-    commitRisk: "提交风险（推断）",
-    dependencyDiffRisk: "依赖变化风险",
     policyViolations: "策略违规",
-    runtimeIndicators: "运行时指标",
-    noAdvancedData: "暂无高级数据",
     savePrefs: "记住选项",
     clearPrefs: "清除选项",
     maxFindings: "最大发现数",
+    riskLabel: "风险分",
+    confidenceHigh: "高",
+    confidenceMedium: "中",
+    confidenceLow: "低",
   },
   en: {
     title: "Security Audit",
     subtitle:
       "Detect potential data leakage, malicious code, and supply-chain risks",
+    scanScopeNote:
+      "Static heuristic scan covering common secret patterns and high-risk code signatures. Not a full vulnerability database; findings need manual review.",
+    suspiciousFiles: "High-risk files",
     run: "Run Audit",
     rerun: "Re-run Audit",
     running: "Auditing...",
@@ -99,32 +90,19 @@ const labels = {
     riskScore: "Risk score",
     unknown: "Unknown error",
     openOnGithub: "Open on GitHub",
-    mode: "Mode",
-    standard: "Standard",
-    advanced: "Advanced",
-    profile: "Policy profile",
-    strict: "Strict",
-    balanced: "Balanced",
-    permissive: "Permissive",
-    options: "Advanced options",
-    historicalScan: "Historical risk inference",
-    runtimeScan: "Runtime behavior indicators",
+    options: "Scan options",
     policyCheck: "Policy checks",
-    licenseAudit: "License risk audit",
-    includeDeps: "Dependency audit",
+    includeDeps: "Dependency heuristics",
     includeSecrets: "Secret scan",
     includeMalware: "Malware heuristics",
-    baseline: "Baseline ID",
-    threshold: "Risk threshold",
-    advancedReport: "Advanced report",
-    commitRisk: "Commit risk (inferred)",
-    dependencyDiffRisk: "Dependency diff risk",
     policyViolations: "Policy violations",
-    runtimeIndicators: "Runtime indicators",
-    noAdvancedData: "No advanced data",
     savePrefs: "Remember options",
     clearPrefs: "Clear options",
     maxFindings: "Max findings",
+    riskLabel: "Risk",
+    confidenceHigh: "High",
+    confidenceMedium: "Medium",
+    confidenceLow: "Low",
   },
 };
 
@@ -160,6 +138,33 @@ function severityLabel(
     case "info":
       return t.info;
   }
+}
+
+const categoryLabels: Record<string, { zh: string; en: string }> = {
+  secret_exposure: { zh: "敏感信息泄露", en: "Secret exposure" },
+  malicious_code: { zh: "可疑代码", en: "Suspicious code" },
+  dependency_risk: { zh: "依赖风险", en: "Dependency risk" },
+  suspicious_script: { zh: "可疑脚本", en: "Suspicious script" },
+  unsafe_permission: { zh: "权限风险", en: "Permission risk" },
+  supply_chain: { zh: "供应链", en: "Supply chain" },
+  data_leakage: { zh: "数据泄露", en: "Data leakage" },
+  obfuscation: { zh: "混淆/编码", en: "Obfuscation" },
+  network_exfiltration: { zh: "外联风险", en: "Network exfiltration" },
+  unknown: { zh: "未分类", en: "Uncategorized" },
+};
+
+function categoryLabel(language: "zh" | "en", category: string): string {
+  const entry = categoryLabels[category];
+  return entry ? entry[language] : category;
+}
+
+// Heuristic confidences are coarse constants; present them as buckets rather
+// than percentages that suggest calibrated precision
+function confidenceBucket(language: "zh" | "en", confidence: number): string {
+  const t = labels[language];
+  if (confidence >= 0.9) return t.confidenceHigh;
+  if (confidence >= 0.7) return t.confidenceMedium;
+  return t.confidenceLow;
 }
 
 function formatDuration(ms: number, language: "zh" | "en"): string {
@@ -208,12 +213,14 @@ function FindingCard({
       <div className="grid grid-cols-2 gap-2 text-xs">
         <div className="bg-gray-50 rounded px-2 py-1">
           <span className="text-gray-500">{t.category}: </span>
-          <span className="text-gray-800 font-medium">{finding.category}</span>
+          <span className="text-gray-800 font-medium">
+            {categoryLabel(language, finding.category)}
+          </span>
         </div>
         <div className="bg-gray-50 rounded px-2 py-1">
           <span className="text-gray-500">{t.confidence}: </span>
           <span className="text-gray-800 font-medium">
-            {Math.round(finding.confidence * 100)}%
+            {confidenceBucket(language, finding.confidence)}
           </span>
         </div>
       </div>
@@ -271,34 +278,20 @@ function FindingCard({
 }
 
 interface AdvancedOptions {
-  useAdvancedMode: boolean;
   includeDependencyAudit: boolean;
   includeSecretsScan: boolean;
   includeMalwareHeuristics: boolean;
-  includeHistoricalScan: boolean;
-  includeRuntimeBehaviorAnalysis: boolean;
   includePolicyChecks: boolean;
-  includeLicenseRiskAudit: boolean;
-  baselineReportId: string;
-  riskScoreThreshold: number;
   maxFindings: number;
-  policyProfile: PolicyProfile;
   remember: boolean;
 }
 
 const defaultAdvancedOptions: AdvancedOptions = {
-  useAdvancedMode: true,
   includeDependencyAudit: true,
   includeSecretsScan: true,
   includeMalwareHeuristics: true,
-  includeHistoricalScan: true,
-  includeRuntimeBehaviorAnalysis: true,
   includePolicyChecks: true,
-  includeLicenseRiskAudit: true,
-  baselineReportId: "",
-  riskScoreThreshold: 70,
   maxFindings: 180,
-  policyProfile: "balanced",
   remember: true,
 };
 
@@ -318,7 +311,16 @@ function SecurityAuditTab({ repo, language, defaultBranch = "main" }: SecurityAu
   );
 
   const t = labels[language];
-  const cacheKey = StorageKeys.securityAudit(repo, language);
+  // Include the scan options in the cache key so changing options never
+  // surfaces a report produced under a different configuration
+  const optionsFingerprint = [
+    options.includeDependencyAudit ? 1 : 0,
+    options.includeSecretsScan ? 1 : 0,
+    options.includeMalwareHeuristics ? 1 : 0,
+    options.includePolicyChecks ? 1 : 0,
+    options.maxFindings,
+  ].join("-");
+  const cacheKey = `${StorageKeys.securityAudit(repo, language)}:${optionsFingerprint}`;
   const prefsKey = STORAGE_KEYS.securityAuditPrefs;
   const CACHE_TTL_MS = 12 * 60 * 60 * 1000;
 
@@ -343,10 +345,7 @@ function SecurityAuditTab({ repo, language, defaultBranch = "main" }: SecurityAu
       findings: compactFindings,
       advanced: full.advanced
         ? {
-            commitRisk: full.advanced.commitRisk?.slice(0, 6),
-            dependencyDiffRisk: full.advanced.dependencyDiffRisk?.slice(0, 6),
             policyViolations: full.advanced.policyViolations?.slice(0, 6),
-            runtimeIndicators: full.advanced.runtimeIndicators?.slice(0, 6),
           }
         : undefined,
     };
@@ -459,16 +458,10 @@ function SecurityAuditTab({ repo, language, defaultBranch = "main" }: SecurityAu
 
       const result = await runSecurityAudit(repo, {
         language,
-        useAdvancedMode: options.useAdvancedMode,
         includeDependencyAudit: options.includeDependencyAudit,
         includeSecretsScan: options.includeSecretsScan,
         includeMalwareHeuristics: options.includeMalwareHeuristics,
-        includeHistoricalScan: options.includeHistoricalScan,
-        includeRuntimeBehaviorAnalysis: options.includeRuntimeBehaviorAnalysis,
         includePolicyChecks: options.includePolicyChecks,
-        includeLicenseRiskAudit: options.includeLicenseRiskAudit,
-        baselineReportId: options.baselineReportId || undefined,
-        riskScoreThreshold: options.riskScoreThreshold,
         maxFindings: options.maxFindings,
       });
 
@@ -493,6 +486,7 @@ function SecurityAuditTab({ repo, language, defaultBranch = "main" }: SecurityAu
         <div>
           <h3 className="text-sm font-semibold text-gray-900">{t.title}</h3>
           <p className="text-xs text-gray-600 mt-1">{t.subtitle}</p>
+          <p className="text-[11px] text-gray-400 mt-1">{t.scanScopeNote}</p>
         </div>
         <div className="flex items-center gap-2">
           <Button size="sm" variant="secondary" onClick={() => setShowAdvancedOptions((v) => !v)}>
@@ -507,41 +501,6 @@ function SecurityAuditTab({ repo, language, defaultBranch = "main" }: SecurityAu
       {showAdvancedOptions && (
         <div className="border border-gray-200 rounded-lg p-3 space-y-3">
           <div className="grid grid-cols-2 gap-2 text-xs">
-            <label className="flex items-center justify-between bg-gray-50 rounded p-2">
-              <span>{t.mode}</span>
-              <select
-                value={options.useAdvancedMode ? "advanced" : "standard"}
-                onChange={(e) =>
-                  setOptions((prev) => ({
-                    ...prev,
-                    useAdvancedMode: e.target.value === "advanced",
-                  }))
-                }
-                className="border border-gray-300 rounded px-2 py-1 outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
-              >
-                <option value="standard">{t.standard}</option>
-                <option value="advanced">{t.advanced}</option>
-              </select>
-            </label>
-
-            <label className="flex items-center justify-between bg-gray-50 rounded p-2">
-              <span>{t.profile}</span>
-              <select
-                value={options.policyProfile}
-                onChange={(e) =>
-                  setOptions((prev) => ({
-                    ...prev,
-                    policyProfile: e.target.value as PolicyProfile,
-                  }))
-                }
-                className="border border-gray-300 rounded px-2 py-1 outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
-              >
-                <option value="strict">{t.strict}</option>
-                <option value="balanced">{t.balanced}</option>
-                <option value="permissive">{t.permissive}</option>
-              </select>
-            </label>
-
             <label className="flex items-center justify-between bg-gray-50 rounded p-2">
               <span>{t.maxFindings}</span>
               <input
@@ -558,35 +517,17 @@ function SecurityAuditTab({ repo, language, defaultBranch = "main" }: SecurityAu
                 className="w-20 border border-gray-300 rounded px-2 py-1 outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
               />
             </label>
-
-            <label className="flex items-center justify-between bg-gray-50 rounded p-2">
-              <span>{t.threshold}</span>
-              <input
-                type="number"
-                min={1}
-                max={100}
-                value={options.riskScoreThreshold}
-                onChange={(e) =>
-                  setOptions((prev) => ({
-                    ...prev,
-                    riskScoreThreshold: Number(e.target.value || 70),
-                  }))
-                }
-                className="w-20 border border-gray-300 rounded px-2 py-1 outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
-              />
-            </label>
           </div>
 
           <div className="grid grid-cols-2 gap-2 text-xs">
-            {[
-              ["includeDependencyAudit", t.includeDeps],
-              ["includeSecretsScan", t.includeSecrets],
-              ["includeMalwareHeuristics", t.includeMalware],
-              ["includeHistoricalScan", t.historicalScan],
-              ["includeRuntimeBehaviorAnalysis", t.runtimeScan],
-              ["includePolicyChecks", t.policyCheck],
-              ["includeLicenseRiskAudit", t.licenseAudit],
-            ].map(([key, label]) => (
+            {(
+              [
+                ["includeDependencyAudit", t.includeDeps],
+                ["includeSecretsScan", t.includeSecrets],
+                ["includeMalwareHeuristics", t.includeMalware],
+                ["includePolicyChecks", t.policyCheck],
+              ] as Array<[keyof AdvancedOptions, string]>
+            ).map(([key, label]) => (
               <label
                 key={key}
                 className="flex items-center gap-2 bg-gray-50 rounded p-2"
@@ -594,9 +535,9 @@ function SecurityAuditTab({ repo, language, defaultBranch = "main" }: SecurityAu
                 <input
                   type="checkbox"
                   className="accent-blue-600"
-                  checked={Boolean((options as any)[key])}
+                  checked={Boolean(options[key])}
                   onChange={(e) =>
-                    setOptions((prev: any) => ({
+                    setOptions((prev) => ({
                       ...prev,
                       [key]: e.target.checked,
                     }))
@@ -605,24 +546,6 @@ function SecurityAuditTab({ repo, language, defaultBranch = "main" }: SecurityAu
                 <span>{label}</span>
               </label>
             ))}
-          </div>
-
-          <div className="space-y-2">
-            <label className="text-xs font-medium text-gray-700 block">
-              {t.baseline}
-            </label>
-            <input
-              type="text"
-              value={options.baselineReportId}
-              onChange={(e) =>
-                setOptions((prev) => ({
-                  ...prev,
-                  baselineReportId: e.target.value,
-                }))
-              }
-              placeholder="optional-baseline-id"
-              className="w-full border border-gray-300 rounded px-2 py-1.5 text-xs outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
-            />
           </div>
 
           <div className="flex items-center justify-between">
@@ -709,9 +632,38 @@ function SecurityAuditTab({ repo, language, defaultBranch = "main" }: SecurityAu
           <div className="text-xs text-gray-500">
             {t.lastRun}: {formatTime(report.meta.finishedAt)} ·{" "}
             {formatDuration(report.meta.durationMs, language)} ·{" "}
-            {t.dependencies}: {report.summary.scannedDependencies} · {t.mode}:{" "}
-            {report.meta.mode === "advanced" ? t.advanced : t.standard}
+            {t.dependencies}: {report.summary.scannedDependencies}
           </div>
+
+          {report.summary.suspiciousFiles.length > 0 && (
+            <div className="border border-gray-200 rounded-lg p-3">
+              <p className="text-xs font-semibold text-gray-800 mb-2">
+                {t.suspiciousFiles}
+              </p>
+              <div className="space-y-1">
+                {report.summary.suspiciousFiles.slice(0, 8).map((file) => (
+                  <div
+                    key={file.filePath}
+                    className="text-xs bg-gray-50 rounded p-2 flex items-center justify-between gap-2"
+                  >
+                    <span className="font-mono text-gray-700 break-all">
+                      {file.filePath}
+                    </span>
+                    <span className="flex items-center gap-2 whitespace-nowrap">
+                      <span
+                        className={`px-1.5 py-0.5 rounded ${severityClasses(file.highestSeverity)}`}
+                      >
+                        {severityLabel(language, file.highestSeverity)}
+                      </span>
+                      <span className="text-gray-600">
+                        {t.riskLabel} {file.riskScore}
+                      </span>
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           {report.findings.length === 0 ? (
             <div className="bg-green-50 border border-green-200 rounded p-3 text-xs text-green-700">
@@ -754,146 +706,31 @@ function SecurityAuditTab({ repo, language, defaultBranch = "main" }: SecurityAu
             </div>
           )}
 
-          <div className="border border-gray-200 rounded-lg p-3 space-y-3">
-            <p className="text-xs font-semibold text-gray-800">
-              {t.advancedReport}
-            </p>
-
-            {report.advanced ? (
-              <>
-                <div>
-                  <p className="text-xs font-semibold text-gray-700 mb-2">
-                    {t.commitRisk}
-                  </p>
-                  {report.advanced.commitRisk &&
-                  report.advanced.commitRisk.length > 0 ? (
-                    <div className="space-y-1">
-                      {report.advanced.commitRisk
-                        .slice(0, 8)
-                        .map((item, idx) => (
-                          <div
-                            key={idx}
-                            className="text-xs bg-gray-50 rounded p-2 flex justify-between"
-                          >
-                            <span className="font-mono text-gray-700">
-                              {item.commitSha.slice(0, 16)}...
-                            </span>
-                            <span className="text-gray-700">
-                              risk {item.riskScore}
-                            </span>
-                          </div>
-                        ))}
+          {report.advanced?.policyViolations &&
+            report.advanced.policyViolations.length > 0 && (
+              <div className="border border-gray-200 rounded-lg p-3 space-y-2">
+                <p className="text-xs font-semibold text-gray-800">
+                  {t.policyViolations}
+                </p>
+                <div className="space-y-1">
+                  {report.advanced.policyViolations.slice(0, 8).map((item, idx) => (
+                    <div key={idx} className="text-xs bg-gray-50 rounded p-2">
+                      <div className="flex items-center justify-between">
+                        <span className="text-gray-800 font-medium">
+                          {item.title}
+                        </span>
+                        <span
+                          className={`px-1.5 py-0.5 rounded ${severityClasses(item.severity)}`}
+                        >
+                          {severityLabel(language, item.severity)}
+                        </span>
+                      </div>
+                      <p className="text-gray-600 mt-1">{item.description}</p>
                     </div>
-                  ) : (
-                    <p className="text-xs text-gray-500">{t.noAdvancedData}</p>
-                  )}
+                  ))}
                 </div>
-
-                <div>
-                  <p className="text-xs font-semibold text-gray-700 mb-2">
-                    {t.dependencyDiffRisk}
-                  </p>
-                  {report.advanced.dependencyDiffRisk &&
-                  report.advanced.dependencyDiffRisk.length > 0 ? (
-                    <div className="space-y-1">
-                      {report.advanced.dependencyDiffRisk
-                        .slice(0, 8)
-                        .map((item, idx) => (
-                          <div
-                            key={idx}
-                            className="text-xs bg-gray-50 rounded p-2 flex justify-between"
-                          >
-                            <span className="font-mono text-gray-700">
-                              {item.name}{" "}
-                              {item.toVersion ? `@${item.toVersion}` : ""}
-                            </span>
-                            <span className="text-gray-700">
-                              risk {item.riskScore}
-                            </span>
-                          </div>
-                        ))}
-                    </div>
-                  ) : (
-                    <p className="text-xs text-gray-500">{t.noAdvancedData}</p>
-                  )}
-                </div>
-
-                <div>
-                  <p className="text-xs font-semibold text-gray-700 mb-2">
-                    {t.policyViolations}
-                  </p>
-                  {report.advanced.policyViolations &&
-                  report.advanced.policyViolations.length > 0 ? (
-                    <div className="space-y-1">
-                      {report.advanced.policyViolations
-                        .slice(0, 8)
-                        .map((item, idx) => (
-                          <div
-                            key={idx}
-                            className="text-xs bg-gray-50 rounded p-2"
-                          >
-                            <div className="flex items-center justify-between">
-                              <span className="text-gray-800 font-medium">
-                                {item.title}
-                              </span>
-                              <span
-                                className={`px-1.5 py-0.5 rounded ${severityClasses(item.severity)}`}
-                              >
-                                {severityLabel(language, item.severity)}
-                              </span>
-                            </div>
-                            <p className="text-gray-600 mt-1">
-                              {item.description}
-                            </p>
-                          </div>
-                        ))}
-                    </div>
-                  ) : (
-                    <p className="text-xs text-gray-500">{t.noAdvancedData}</p>
-                  )}
-                </div>
-
-                <div>
-                  <p className="text-xs font-semibold text-gray-700 mb-2">
-                    {t.runtimeIndicators}
-                  </p>
-                  {report.advanced.runtimeIndicators &&
-                  report.advanced.runtimeIndicators.length > 0 ? (
-                    <div className="space-y-1">
-                      {report.advanced.runtimeIndicators
-                        .slice(0, 8)
-                        .map((item, idx) => (
-                          <div
-                            key={idx}
-                            className="text-xs bg-gray-50 rounded p-2"
-                          >
-                            <div className="flex items-center justify-between">
-                              <span className="text-gray-800">
-                                {item.indicator}
-                              </span>
-                              <span
-                                className={`px-1.5 py-0.5 rounded ${severityClasses(item.severity)}`}
-                              >
-                                {severityLabel(language, item.severity)}
-                              </span>
-                            </div>
-                            {item.evidence && (
-                              <p className="text-gray-600 mt-1 line-clamp-2">
-                                {item.evidence}
-                              </p>
-                            )}
-                          </div>
-                        ))}
-                    </div>
-                  ) : (
-                    <p className="text-xs text-gray-500">{t.noAdvancedData}</p>
-                  )}
-                </div>
-              </>
-            ) : (
-              <p className="text-xs text-gray-500">{t.noAdvancedData}</p>
+              </div>
             )}
-          </div>
         </>
       )}
     </div>

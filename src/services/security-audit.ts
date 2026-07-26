@@ -2,7 +2,6 @@ import {
   getFullDirectoryTree,
   getFileContent,
   getPackageJson,
-  getRepoTree,
   TreeNode,
 } from "@/services/github";
 import {
@@ -16,8 +15,10 @@ import {
   SecuritySeverity,
 } from "@/types/security";
 
-const SCANNER_VERSION = "2.0.0-advanced";
-const RULESET_VERSION = "advanced-ruleset-2026.03";
+// Static heuristic scanner: no AI, no git-history or runtime analysis is
+// performed — the report metadata must never claim otherwise
+const SCANNER_VERSION = "2.1.0-static";
+const RULESET_VERSION = "static-ruleset-2026.07";
 
 const DEFAULT_OPTIONS: Required<
   Pick<
@@ -25,30 +26,18 @@ const DEFAULT_OPTIONS: Required<
     | "includeDependencyAudit"
     | "includeSecretsScan"
     | "includeMalwareHeuristics"
-    | "includeHistoricalScan"
-    | "includeRuntimeBehaviorAnalysis"
     | "includePolicyChecks"
-    | "includeLicenseRiskAudit"
-    | "useAdvancedMode"
     | "maxFileSizeKB"
     | "maxFindings"
-    | "maxCommitsToScan"
-    | "maxFilesPerCommit"
     | "language"
   >
 > = {
   includeDependencyAudit: true,
   includeSecretsScan: true,
   includeMalwareHeuristics: true,
-  includeHistoricalScan: true,
-  includeRuntimeBehaviorAnalysis: true,
   includePolicyChecks: true,
-  includeLicenseRiskAudit: true,
-  useAdvancedMode: true,
   maxFileSizeKB: 600,
   maxFindings: 180,
-  maxCommitsToScan: 30,
-  maxFilesPerCommit: 25,
   language: "en",
 };
 
@@ -379,116 +368,6 @@ function inferRiskPolicyViolations(
   return violations;
 }
 
-function inferRuntimeIndicators(
-  language: "zh" | "en",
-  findings: SecurityFinding[],
-) {
-  const indicators: NonNullable<
-    SecurityAuditReport["advanced"]
-  >["runtimeIndicators"] = [];
-  const behavior = findings.filter(
-    (f) =>
-      f.category === "malicious_code" ||
-      f.category === "network_exfiltration" ||
-      f.category === "obfuscation",
-  );
-
-  for (const f of behavior.slice(0, 12)) {
-    indicators.push({
-      indicator: f.title,
-      severity: f.severity,
-      confidence: f.confidence,
-      evidence: f.evidence[0]?.location?.snippet || f.evidence[0]?.message,
-    });
-  }
-
-  if (indicators.length === 0) {
-    indicators.push({
-      indicator: t(
-        language,
-        "未检测到明显运行时恶意指标",
-        "No clear runtime malicious indicators",
-      ),
-      severity: "info",
-      confidence: 0.6,
-      evidence: t(
-        language,
-        "启发式检测未命中关键恶意模式",
-        "Heuristic checks did not hit high-risk runtime signatures",
-      ),
-    });
-  }
-
-  return indicators;
-}
-
-function inferCommitRisk(
-  language: "zh" | "en",
-  findings: SecurityFinding[],
-  maxCommits: number,
-): NonNullable<SecurityAuditReport["advanced"]>["commitRisk"] {
-  // Advanced mode without git history API: emulate commit risk buckets from hot files.
-  const byFile = new Map<string, { score: number; count: number }>();
-  findings.forEach((f) => {
-    const file = f.evidence[0]?.location?.filePath;
-    if (!file) return;
-    const prev = byFile.get(file) || { score: 0, count: 0 };
-    byFile.set(file, {
-      score: prev.score + normalizeSeverityWeight(f.severity),
-      count: prev.count + 1,
-    });
-  });
-
-  const sorted = Array.from(byFile.entries())
-    .sort((a, b) => b[1].score - a[1].score)
-    .slice(0, Math.max(3, maxCommits));
-  return sorted.map(([filePath, v], i) => ({
-    commitSha: `simulated-${i + 1}-${filePath.replace(/[^a-zA-Z0-9]/g, "").slice(0, 10)}`,
-    author: t(language, "未知作者", "Unknown author"),
-    timestamp: Date.now() - i * 3600_000,
-    riskScore: Math.min(100, Math.round(v.score / 1.6)),
-    findingsCount: v.count,
-  }));
-}
-
-function inferDependencyDiffRisk(
-  language: "zh" | "en",
-  pkg: any,
-): NonNullable<SecurityAuditReport["advanced"]>["dependencyDiffRisk"] {
-  const result: NonNullable<
-    SecurityAuditReport["advanced"]
-  >["dependencyDiffRisk"] = [];
-  const all = {
-    ...(pkg?.dependencies || {}),
-    ...(pkg?.devDependencies || {}),
-  } as Record<string, string>;
-
-  Object.entries(all).forEach(([name, version]) => {
-    if (SUSPICIOUS_DEPENDENCIES.has(name)) {
-      result.push({
-        name,
-        toVersion: version,
-        riskScore: 70,
-        reason: t(
-          language,
-          "历史上存在供应链风险事件",
-          "Historically linked to supply-chain incidents",
-        ),
-      });
-    }
-    if (/^(latest|\*)$/i.test(version)) {
-      result.push({
-        name,
-        toVersion: version,
-        riskScore: 45,
-        reason: t(language, "依赖版本未锁定", "Unpinned dependency version"),
-      });
-    }
-  });
-
-  return result.slice(0, 20);
-}
-
 function applyCustomRules(
   content: string,
   filePath: string,
@@ -548,99 +427,130 @@ function applyCustomRules(
   return findings;
 }
 
+// Cap per pattern per file so one noisy file cannot flood the report, while
+// still reporting every distinct credential (the old code only took the first)
+const MAX_MATCHES_PER_PATTERN = 5;
+
+// Mask the matched credential so the report never carries the plaintext value
+// (findings are cached to localStorage and rendered in the UI)
+function maskSecret(value: string): string {
+  if (value.length <= 8) return "••••••••";
+  return `${value.slice(0, 4)}${"•".repeat(Math.min(24, value.length - 6))}${value.slice(-2)}`;
+}
+
+function maskedSecretSnippet(content: string, index: number, matched: string): string {
+  const snippet = getSnippet(content, index);
+  return matched ? snippet.split(matched).join(maskSecret(matched)) : snippet;
+}
+
+function collectMatches(regex: RegExp, content: string): RegExpExecArray[] {
+  const matches: RegExpExecArray[] = [];
+  regex.lastIndex = 0;
+  let match: RegExpExecArray | null;
+  while ((match = regex.exec(content)) !== null && matches.length < MAX_MATCHES_PER_PATTERN) {
+    matches.push(match);
+    if (match.index === regex.lastIndex) regex.lastIndex += 1;
+  }
+  regex.lastIndex = 0;
+  return matches;
+}
+
 function analyzeContentPatterns(
   language: "zh" | "en",
   filePath: string,
   content: string,
+  flags: { secrets: boolean; malware: boolean },
 ): SecurityFinding[] {
   const findings: SecurityFinding[] = [];
 
-  for (const pattern of SECRET_PATTERNS) {
-    const match = pattern.regex.exec(content);
-    pattern.regex.lastIndex = 0;
-    if (!match || match.index === undefined) continue;
-
-    const line = getLineNumber(content, match.index);
-    findings.push(
-      createFinding({
-        title: t(
-          language,
-          `敏感信息暴露: ${pattern.name}`,
-          `Potential secret exposure: ${pattern.name}`,
-        ),
-        description: t(
-          language,
-          "代码中发现疑似敏感凭据，可能导致账户或数据被滥用。",
-          "Potential credential found in source, which may lead to account/data abuse.",
-        ),
-        severity: pattern.severity,
-        category: pattern.category,
-        recommendation: pattern.recommendation[language],
-        confidence: pattern.name === "Generic API Key Assignment" ? 0.65 : 0.95,
-        evidence: [
-          {
-            type: "code",
-            message: pattern.name,
-            location: {
-              filePath,
-              lineStart: line,
-              lineEnd: line,
-              snippet: getSnippet(content, match.index),
-            },
-          },
-        ],
-        cwe: "CWE-798",
-        impact: t(
-          language,
-          "可能造成凭据泄露和未授权访问。",
-          "May result in credential leakage and unauthorized access.",
-        ),
-        tags: ["secret", "credential"],
-      }),
-    );
+  if (flags.secrets) {
+    for (const pattern of SECRET_PATTERNS) {
+      for (const match of collectMatches(pattern.regex, content)) {
+        const line = getLineNumber(content, match.index);
+        findings.push(
+          createFinding({
+            title: t(
+              language,
+              `敏感信息暴露: ${pattern.name}`,
+              `Potential secret exposure: ${pattern.name}`,
+            ),
+            description: t(
+              language,
+              "代码中发现疑似敏感凭据，可能导致账户或数据被滥用。",
+              "Potential credential found in source, which may lead to account/data abuse.",
+            ),
+            severity: pattern.severity,
+            category: pattern.category,
+            recommendation: pattern.recommendation[language],
+            confidence: pattern.name === "Generic API Key Assignment" ? 0.65 : 0.95,
+            evidence: [
+              {
+                type: "code",
+                message: pattern.name,
+                location: {
+                  filePath,
+                  lineStart: line,
+                  lineEnd: line,
+                  snippet: maskedSecretSnippet(content, match.index, match[0]),
+                },
+              },
+            ],
+            cwe: "CWE-798",
+            impact: t(
+              language,
+              "可能造成凭据泄露和未授权访问。",
+              "May result in credential leakage and unauthorized access.",
+            ),
+            tags: ["secret", "credential"],
+          }),
+        );
+      }
+    }
   }
 
-  for (const pattern of MALICIOUS_PATTERNS) {
-    const match = pattern.regex.exec(content);
-    pattern.regex.lastIndex = 0;
-    if (!match || match.index === undefined) continue;
-
-    const line = getLineNumber(content, match.index);
-    findings.push(
-      createFinding({
-        title: t(
-          language,
-          `可疑行为: ${pattern.name}`,
-          `Suspicious behavior: ${pattern.name}`,
-        ),
-        description: t(
-          language,
-          "检测到可能用于恶意行为或高风险执行链的代码模式。",
-          "Detected code pattern often used in malicious/high-risk execution chains.",
-        ),
-        severity: pattern.severity,
-        category: pattern.category,
-        recommendation: pattern.recommendation[language],
-        confidence: 0.82,
-        evidence: [
-          {
-            type: "behavior",
-            message: pattern.name,
-            location: {
-              filePath,
-              lineStart: line,
-              lineEnd: line,
-              snippet: getSnippet(content, match.index),
-            },
-          },
-        ],
-        cwe: "CWE-94",
-        tags: ["behavior", "execution"],
-      }),
-    );
+  if (flags.malware) {
+    for (const pattern of MALICIOUS_PATTERNS) {
+      for (const match of collectMatches(pattern.regex, content)) {
+        const line = getLineNumber(content, match.index);
+        findings.push(
+          createFinding({
+            title: t(
+              language,
+              `可疑行为: ${pattern.name}`,
+              `Suspicious behavior: ${pattern.name}`,
+            ),
+            description: t(
+              language,
+              "检测到可能用于恶意行为或高风险执行链的代码模式（启发式，需人工确认）。",
+              "Detected code pattern often used in malicious/high-risk execution chains (heuristic; needs manual review).",
+            ),
+            severity: pattern.severity,
+            category: pattern.category,
+            recommendation: pattern.recommendation[language],
+            confidence: 0.82,
+            evidence: [
+              {
+                type: "behavior",
+                message: pattern.name,
+                location: {
+                  filePath,
+                  lineStart: line,
+                  lineEnd: line,
+                  snippet: getSnippet(content, match.index),
+                },
+              },
+            ],
+            cwe: "CWE-94",
+            tags: ["behavior", "execution"],
+          }),
+        );
+      }
+    }
   }
 
-  const longBase64 = /(?:[A-Za-z0-9+/]{200,}={0,2})/g.exec(content);
+  const longBase64 = flags.malware
+    ? /(?:[A-Za-z0-9+/]{200,}={0,2})/g.exec(content)
+    : null;
   if (longBase64 && longBase64.index !== undefined) {
     findings.push(
       createFinding({
@@ -678,6 +588,16 @@ function analyzeContentPatterns(
     );
   }
 
+  return findings;
+}
+
+// Path-based check: runs for every target file even when its content cannot
+// be fetched (binary key stores, download failures)
+function analyzeSensitiveFilePath(
+  language: "zh" | "en",
+  filePath: string,
+): SecurityFinding[] {
+  const findings: SecurityFinding[] = [];
   const fileName = filePath.split("/").pop() || filePath;
   const isEnvExampleFile =
     /^\.env(?:\.[\w-]+)?\.(?:example|sample|template)$/i.test(fileName);
@@ -757,6 +677,15 @@ function analyzeContentPatterns(
   return findings;
 }
 
+function isSensitiveFilePath(filePath: string): boolean {
+  const fileName = filePath.split("/").pop() || filePath;
+  return (
+    /\.(pem|key|p12|pfx)$/i.test(filePath) ||
+    /(?:^|\/)id_rsa(?:\.pub)?$/i.test(filePath) ||
+    /^\.env(?:\.|$)/i.test(fileName)
+  );
+}
+
 function analyzeDependencies(
   language: "zh" | "en",
   dependencies: Record<string, string> | undefined,
@@ -771,15 +700,15 @@ function analyzeDependencies(
         createFinding({
           title: t(
             language,
-            `历史高风险依赖: ${name}`,
-            `Historically risky dependency: ${name}`,
+            `历史上有过安全事件的依赖: ${name}`,
+            `Dependency with past security incidents: ${name}`,
           ),
           description: t(
             language,
-            `${name} 曾出现过安全事件，建议重点审查。`,
-            `${name} has a history of security incidents and should be reviewed.`,
+            `${name} 历史版本发生过供应链安全事件；这不代表当前版本有漏洞，请核对所用版本与官方公告。`,
+            `${name} had supply-chain incidents in past versions; this does not mean the current version is vulnerable — verify your version against advisories.`,
           ),
-          severity: "medium",
+          severity: "low",
           category: "dependency_risk",
           recommendation: t(
             language,
@@ -1256,6 +1185,9 @@ export async function runSecurityAudit(
     )
       return false;
     if (denylistRegex.some((rx) => rx.test(filePath))) return false;
+    // Sensitive files (.pem/.env/id_rsa/...) must be scanned even though
+    // their extensions are not in the code whitelist
+    if (isSensitiveFilePath(filePath)) return true;
     const ext = getExtension(filePath);
     return ext ? CODE_EXTENSIONS.has(ext) : true;
   });
@@ -1269,16 +1201,22 @@ export async function runSecurityAudit(
     if (index >= targetFiles.length || pendingContent.has(index)) return;
     pendingContent.set(
       index,
-      getFileContent(repo.owner, repo.name, targetFiles[index], 480).catch(
+      getFileContent(repo.owner, repo.name, targetFiles[index], 2000).catch(
         () => null,
       ),
     );
   };
 
+  // No early break on maxFindings here: truncating during collection lets
+  // low-severity findings from early files crowd out critical findings in
+  // later files. Everything is collected, then sorted by severity and sliced.
   for (let i = 0; i < targetFiles.length; i++) {
-    if (findings.length >= merged.maxFindings) break;
     for (let j = i; j < i + FETCH_AHEAD; j++) queueContentFetch(j);
     const filePath = targetFiles[i];
+
+    // Path-based sensitive-file check runs even when content is unavailable
+    findings.push(...analyzeSensitiveFilePath(language, filePath));
+
     const content = await pendingContent.get(i)!;
     pendingContent.delete(i);
     if (!content) continue;
@@ -1288,7 +1226,12 @@ export async function runSecurityAudit(
     scannedFiles += 1;
 
     if (merged.includeSecretsScan || merged.includeMalwareHeuristics) {
-      findings.push(...analyzeContentPatterns(language, filePath, content));
+      findings.push(
+        ...analyzeContentPatterns(language, filePath, content, {
+          secrets: merged.includeSecretsScan,
+          malware: merged.includeMalwareHeuristics,
+        }),
+      );
     }
 
     findings.push(...applyCustomRules(content, filePath, merged, language));
@@ -1321,75 +1264,6 @@ export async function runSecurityAudit(
     ...(await scanManifestPermissions(repo.owner, repo.name, language)),
   );
 
-  const rootItems = await getRepoTree(repo.owner, repo.name, "").catch(
-    () => [],
-  );
-  if (Array.isArray(rootItems)) {
-    for (const item of rootItems) {
-      const name = String(item?.name || "");
-      const isEnvExample =
-        /^\.env(?:\.[\w-]+)?\.(?:example|sample|template)$/i.test(name);
-      const isSensitiveEnv = /^\.env(?:\.|$)/i.test(name) && !isEnvExample;
-      const isSensitiveKey = /id_rsa|\.pem$|\.p12$|\.pfx$/i.test(name);
-
-      if (isSensitiveEnv || isSensitiveKey) {
-        findings.push(
-          createFinding({
-            title: t(
-              language,
-              `敏感文件出现在仓库根目录: ${name}`,
-              `Sensitive file in repository root: ${name}`,
-            ),
-            description: t(
-              language,
-              "敏感文件应避免提交到公开仓库。",
-              "Sensitive files should never be committed to public repositories.",
-            ),
-            severity: isSensitiveEnv ? "high" : "critical",
-            category: "data_leakage",
-            recommendation: t(
-              language,
-              "删除该文件并重置相关凭据，使用 .gitignore 防止再次提交。",
-              "Remove this file, rotate credentials, and enforce .gitignore to prevent recurrence.",
-            ),
-            confidence: isSensitiveEnv ? 0.85 : 0.96,
-            evidence: [
-              { type: "metadata", message: name, location: { filePath: name } },
-            ],
-            cwe: "CWE-200",
-          }),
-        );
-      } else if (isEnvExample) {
-        findings.push(
-          createFinding({
-            title: t(
-              language,
-              `.env 示例文件: ${name}`,
-              `.env example file detected: ${name}`,
-            ),
-            description: t(
-              language,
-              "检测到环境变量示例文件。按当前威胁模型此项默认不视为高风险，请确认仅包含占位符。",
-              "Environment example file detected. Under this threat model this is not high-risk by default; ensure placeholders only.",
-            ),
-            severity: "info",
-            category: "data_leakage",
-            recommendation: t(
-              language,
-              "保留占位符值，避免在示例文件中写入真实凭据。",
-              "Keep placeholder values only and avoid real credentials in example files.",
-            ),
-            confidence: 0.98,
-            evidence: [
-              { type: "metadata", message: name, location: { filePath: name } },
-            ],
-            cwe: "CWE-200",
-          }),
-        );
-      }
-    }
-  }
-
   const uniqueFindings = dedupeFindings(findings)
     .sort(
       (a, b) =>
@@ -1405,27 +1279,9 @@ export async function runSecurityAudit(
   );
   const finishedAt = Date.now();
 
-  const advancedMode = merged.useAdvancedMode === true;
-
-  const commitRisk =
-    advancedMode && merged.includeHistoricalScan
-      ? inferCommitRisk(language, uniqueFindings, merged.maxCommitsToScan)
-      : [];
-
-  const dependencyDiffRisk =
-    advancedMode && merged.includeDependencyAudit && pkg
-      ? inferDependencyDiffRisk(language, pkg)
-      : [];
-
-  const policyViolations =
-    advancedMode && merged.includePolicyChecks
-      ? inferRiskPolicyViolations(language, uniqueFindings, summary)
-      : [];
-
-  const runtimeIndicators =
-    advancedMode && merged.includeRuntimeBehaviorAnalysis
-      ? inferRuntimeIndicators(language, uniqueFindings)
-      : [];
+  const policyViolations = merged.includePolicyChecks
+    ? inferRiskPolicyViolations(language, uniqueFindings, summary)
+    : [];
 
   return {
     meta: {
@@ -1438,24 +1294,16 @@ export async function runSecurityAudit(
       durationMs: finishedAt - startedAt,
       scannerVersion: SCANNER_VERSION,
       language,
-      mode: advancedMode ? "advanced" : "standard",
-      source: "hybrid",
+      // This is a static heuristic scan: no AI, no git history, no runtime
+      // analysis — the metadata must say so
+      mode: "standard",
+      source: "local",
       rulesetVersion: RULESET_VERSION,
-      baselineReportId: merged.baselineReportId,
-      comparedWithBaseline: !!merged.baselineReportId,
-      policyProfile: "balanced",
       generatedBy: "GitMentor Security Engine",
     },
     summary,
     findings: uniqueFindings,
     nextActions: buildNextActions(language, summary),
-    advanced: advancedMode
-      ? {
-          commitRisk,
-          dependencyDiffRisk,
-          policyViolations,
-          runtimeIndicators,
-        }
-      : undefined,
+    advanced: policyViolations.length > 0 ? { policyViolations } : undefined,
   };
 }
