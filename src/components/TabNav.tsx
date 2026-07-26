@@ -46,7 +46,7 @@ function TabNav({ activeTab, setActiveTab, language }: TabNavProps) {
           }
           className={`flex-1 px-3 py-2 text-sm font-medium text-center transition ${
             activeTab === tab.id
-              ? "border-b-2 border-gray-800 text-gray-900"
+              ? "border-b-2 border-blue-600 text-gray-900"
               : "text-gray-500 hover:text-gray-700"
           }`}
         >

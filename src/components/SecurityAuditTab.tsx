@@ -9,6 +9,7 @@ import {
 import { STORAGE_KEYS, STORAGE_PREFIXES, StorageKeys } from "@/constants/storage";
 import { buildGithubBlobUrl } from "@/services/github-url";
 import { getJsonCache } from "@/utils/local-cache";
+import { Button } from "@/components/ui/Button";
 
 interface SecurityAuditTabProps {
   repo: { owner: string; name: string };
@@ -494,19 +495,12 @@ function SecurityAuditTab({ repo, language, defaultBranch = "main" }: SecurityAu
           <p className="text-xs text-gray-600 mt-1">{t.subtitle}</p>
         </div>
         <div className="flex items-center gap-2">
-          <button
-            onClick={() => setShowAdvancedOptions((v) => !v)}
-            className="px-3 py-1.5 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded text-xs font-medium transition"
-          >
+          <Button size="sm" variant="secondary" onClick={() => setShowAdvancedOptions((v) => !v)}>
             {t.options}
-          </button>
-          <button
-            onClick={() => runAudit(true)}
-            disabled={loading}
-            className="px-3 py-1.5 bg-gray-800 hover:bg-gray-700 disabled:bg-gray-400 text-white rounded text-xs font-medium transition"
-          >
+          </Button>
+          <Button size="sm" onClick={() => runAudit(true)} disabled={loading}>
             {loading ? t.running : report ? t.rerun : t.run}
-          </button>
+          </Button>
         </div>
       </div>
 

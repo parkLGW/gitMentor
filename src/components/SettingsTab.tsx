@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { Button } from '@/components/ui/Button'
 import { llmManager } from '@/services/llm'
 import { LLMConfig, LLMPresetType, LLMProtocolType } from '@/types/llm'
 import { migrateLegacyLLMConfig } from '@/services/llm-config-migration'
@@ -392,10 +393,6 @@ function SettingsTab({ language }: SettingsTabProps) {
         <p className="text-xs text-blue-900">{t.info}</p>
       </div>
 
-      <div className="bg-amber-50 border border-amber-200 rounded-lg p-3">
-        <p className="text-xs text-amber-900">{t.githubTokenTip}</p>
-      </div>
-
       <div className="bg-gray-50 border border-gray-200 rounded-lg p-3">
         <p className="text-xs font-semibold text-gray-600 mb-1">{t.selectionDetails}</p>
         <p className="text-sm font-semibold text-gray-900">
@@ -524,7 +521,7 @@ function SettingsTab({ language }: SettingsTabProps) {
           className="w-full px-2 py-2 border border-gray-300 rounded text-sm"
         />
         <p className="text-xs text-gray-500 mt-1">
-          {t.githubTokenHint}
+          {t.githubTokenHint} {t.githubTokenTip}
         </p>
       </div>
 
@@ -535,31 +532,22 @@ function SettingsTab({ language }: SettingsTabProps) {
       )}
 
       <div className="space-y-2">
-        <button
-          onClick={handleTest}
-          disabled={testing}
-          className="w-full py-2 px-3 bg-blue-500 hover:bg-blue-600 disabled:bg-gray-400 text-white rounded text-sm font-medium transition"
-        >
-          {testing ? t.testing : t.testConnection}
-        </button>
-
-        <button
-          onClick={handleSave}
-          disabled={saving}
-          className="w-full py-2 px-3 bg-green-500 hover:bg-green-600 disabled:bg-gray-400 text-white rounded text-sm font-medium transition"
-        >
+        <Button fullWidth onClick={handleSave} disabled={saving}>
           {saving ? t.saving : t.save}
-        </button>
+        </Button>
 
-        <button
+        <Button fullWidth variant="secondary" onClick={handleTest} disabled={testing}>
+          {testing ? t.testing : t.testConnection}
+        </Button>
+
+        <Button
+          fullWidth
+          variant={clearConfirming ? 'danger' : 'secondary'}
           onClick={handleClear}
           disabled={clearing}
-          className={`w-full py-2 px-3 disabled:bg-gray-300 text-white rounded text-sm font-medium transition ${
-            clearConfirming ? 'bg-red-500 hover:bg-red-600' : 'bg-gray-400 hover:bg-gray-500'
-          }`}
         >
           {clearing ? t.clearing : clearConfirming ? t.clearConfirmBtn : t.clear}
-        </button>
+        </Button>
       </div>
 
       {notice && (

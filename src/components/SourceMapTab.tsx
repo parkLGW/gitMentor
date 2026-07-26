@@ -20,6 +20,7 @@ import { AnalysisEvidence, ConfidenceLevel, LearningMission as LearningMissionTy
 import { StorageKeys } from '@/constants/storage'
 import { getJsonCache, setJsonCacheWithEviction } from '@/utils/local-cache'
 import { useLLMReady } from '@/hooks/useLLMReady'
+import { Button } from '@/components/ui/Button'
 import { buildGithubBlobUrl } from '@/services/github-url'
 
 interface SourceMapTabProps {
@@ -657,13 +658,9 @@ function SourceMapTab({ repo, language, defaultBranch = 'main' }: SourceMapTabPr
                 <p className="text-sm text-gray-500">
                   {isZh ? '暂无架构图' : 'No diagram available'}
                 </p>
-                <button
-                  onClick={handleRegenerate}
-                  disabled={analyzing}
-                  className="mt-3 text-xs px-3 py-1.5 bg-gray-800 hover:bg-gray-700 disabled:opacity-50 text-white rounded"
-                >
+                <Button size="sm" className="mt-3" onClick={handleRegenerate} disabled={analyzing}>
                   {analyzing ? (isZh ? '生成中...' : 'Generating...') : (isZh ? '生成' : 'Generate')}
-                </button>
+                </Button>
               </div>
             )}
 

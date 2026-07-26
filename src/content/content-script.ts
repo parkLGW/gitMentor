@@ -80,6 +80,50 @@ const uiTranslations = {
 
 type UITranslationKey = keyof typeof uiTranslations.en
 
+function isGithubDarkMode(): boolean {
+  const mode = document.documentElement.getAttribute('data-color-mode')
+  if (mode === 'dark') return true
+  if (mode === 'light') return false
+  return window.matchMedia('(prefers-color-scheme: dark)').matches
+}
+
+// Remaps the light-palette inline styles to GitHub dark equivalents.
+// Identity in light mode, so the light style strings stay the single source
+// of truth and only this table needs updating for new colors.
+function themedStyle(style: string): string {
+  if (!isGithubDarkMode()) return style
+  return style
+    .replace(/background:\s*#24292e/gi, 'background:#e6edf3')
+    .replace(/color:\s*white/gi, 'color:#0d1117')
+    .replace(/background:\s*white\b/gi, 'background:#0d1117')
+    .replace(/background:\s*#fff\b/gi, 'background:#161b22')
+    .replace(/color:\s*#24292e/gi, 'color:#e6edf3')
+    .replace(/#24292f/gi, '#e6edf3')
+    .replace(/#f6f8fa/gi, '#21262d')
+    .replace(/#f0f2f5/gi, '#21262d')
+    .replace(/#d8dee4/gi, '#30363d')
+    .replace(/#eaeef2/gi, '#30363d')
+    .replace(/#e1e4e8/gi, '#30363d')
+    .replace(/#57606a/gi, '#8b949e')
+    .replace(/#8c959f/gi, '#6e7681')
+    .replace(/#666\b/gi, '#8b949e')
+    .replace(/#ffebe9/gi, '#3c1618')
+    .replace(/#ffeef0/gi, '#3c1618')
+    .replace(/#ffcecb/gi, '#8e1519')
+    .replace(/#cf222e/gi, '#ff7b72')
+    .replace(/#d73a49/gi, '#ff7b72')
+    .replace(/#ddf4ff/gi, '#0c2d6b')
+    .replace(/#b6e3ff/gi, '#1f6feb')
+    .replace(/#0969da/gi, '#79c0ff')
+    .replace(/#fff8c5/gi, '#3b2e00')
+    .replace(/#f0d98c/gi, '#9e6a03')
+    .replace(/#9a6700/gi, '#e3b341')
+    .replace(/#f0f7ff/gi, '#121d2f')
+    .replace(/#374151/gi, '#c9d1d9')
+    .replace(/#334155/gi, '#c9d1d9')
+    .replace(/#4b5563/gi, '#8b949e')
+}
+
 function getText(key: UITranslationKey) {
   return uiTranslations[currentLanguage][key]
 }
@@ -133,7 +177,7 @@ function showFileSidebarCollapsedHandle(fileInfo: FileInfo, dismissedFileSidebar
   handle.type = 'button'
   handle.textContent = 'GitMentor'
   handle.title = currentLanguage === 'zh' ? '重新打开文件理解侧栏' : 'Reopen file insight sidebar'
-  handle.style.cssText = `
+  handle.style.cssText = themedStyle(`
     position: fixed;
     right: 0;
     top: 96px;
@@ -149,7 +193,7 @@ function showFileSidebarCollapsedHandle(fileInfo: FileInfo, dismissedFileSidebar
     font-weight: 600;
     cursor: pointer;
     box-shadow: -2px 0 8px rgba(0, 0, 0, 0.16);
-  `
+  `)
   handle.addEventListener('click', () => {
     sessionStorage.removeItem(dismissedFileSidebarKey)
     handle.remove()
@@ -271,7 +315,7 @@ async function injectFileSidebarForFile(fileInfo: FileInfo) {
   // Create sidebar container
   const sidebar = document.createElement('div')
   sidebar.id = 'gitmentor-file-sidebar'
-  sidebar.style.cssText = `
+  sidebar.style.cssText = themedStyle(`
     position: fixed;
     right: 0;
     top: 0;
@@ -283,21 +327,21 @@ async function injectFileSidebarForFile(fileInfo: FileInfo) {
     overflow-y: auto;
     box-shadow: -2px 0 8px rgba(0, 0, 0, 0.1);
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
-  `
-  
+  `)
+
   // Header
   const header = document.createElement('div')
-  header.style.cssText = `
+  header.style.cssText = themedStyle(`
     padding: 16px;
     border-bottom: 1px solid #e1e4e8;
     position: sticky;
     top: 0;
     background: #f6f8fa;
     z-index: 100;
-  `
-  header.innerHTML = `
+  `)
+  header.innerHTML = themedStyle(`
     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-      <div style="font-size: 14px; font-weight: 600;">📚 GitMentor</div>
+      <div style="font-size: 14px; font-weight: 600; color: #24292e;">GitMentor</div>
       <button id="gitmentor-sidebar-close" style="
         background: none;
         border: none;
@@ -310,16 +354,16 @@ async function injectFileSidebarForFile(fileInfo: FileInfo) {
     <div style="font-size: 12px; color: #666; margin-top: 8px; word-break: break-all;">
       ${fileInfo.path}
     </div>
-  `
-  
+  `)
+
   // Content area
   const content = document.createElement('div')
   content.id = 'gitmentor-file-content'
-  content.style.cssText = `
+  content.style.cssText = themedStyle(`
     padding: 16px;
     font-size: 13px;
     color: #24292e;
-  `
+  `)
   renderFileLoading(content)
   
   sidebar.appendChild(header)
@@ -339,15 +383,15 @@ async function injectFileSidebarForFile(fileInfo: FileInfo) {
 
 function createSectionTitle(text: string): HTMLHeadingElement {
   const title = document.createElement('h4')
-  title.style.cssText =
-    'font-size:13px;font-weight:600;margin:0 0 8px 0;color:#24292e;'
+  title.style.cssText = themedStyle(
+    'font-size:13px;font-weight:600;margin:0 0 8px 0;color:#24292e;')
   title.textContent = text
   return title
 }
 
 function createText(text: string, style = ''): HTMLParagraphElement {
   const p = document.createElement('p')
-  p.style.cssText = style
+  p.style.cssText = themedStyle(style)
   p.textContent = text
   return p
 }
@@ -593,31 +637,31 @@ async function isLLMConfigured(): Promise<boolean> {
 }
 
 function renderFileLoading(container: HTMLElement) {
-  container.innerHTML = `
+  container.innerHTML = themedStyle(`
     <div style="padding:16px;background:#f6f8fa;border:1px solid #d8dee4;border-radius:8px;text-align:center;color:#57606a;font-size:12px;">
       <div style="display:inline-block;width:16px;height:16px;border:2px solid #57606a;border-top-color:transparent;border-radius:50%;animation:gitmentor-spin 1s linear infinite;margin-right:8px;vertical-align:middle;"></div>
       ${getText('readingFile')}
     </div>
     <style>@keyframes gitmentor-spin { to { transform: rotate(360deg); } }</style>
-  `
+  `)
 }
 
 function createCard(): HTMLDivElement {
   const card = document.createElement('div')
-  card.style.cssText =
-    'padding:12px;background:#fff;border:1px solid #d8dee4;border-radius:8px;'
+  card.style.cssText = themedStyle(
+    'padding:12px;background:#fff;border:1px solid #d8dee4;border-radius:8px;')
   return card
 }
 
 function createMetric(label: string, value: string | number): HTMLDivElement {
   const box = document.createElement('div')
-  box.style.cssText =
-    'min-width:86px;flex:1;padding:8px;background:#f6f8fa;border-radius:6px;border:1px solid #eaeef2;'
+  box.style.cssText = themedStyle(
+    'min-width:86px;flex:1;padding:8px;background:#f6f8fa;border-radius:6px;border:1px solid #eaeef2;')
   const valueEl = document.createElement('div')
-  valueEl.style.cssText = 'font-size:15px;font-weight:600;color:#24292f;line-height:1.2;'
+  valueEl.style.cssText = themedStyle('font-size:15px;font-weight:600;color:#24292f;line-height:1.2;')
   valueEl.textContent = String(value)
   const labelEl = document.createElement('div')
-  labelEl.style.cssText = 'font-size:10px;color:#57606a;margin-top:2px;'
+  labelEl.style.cssText = themedStyle('font-size:10px;color:#57606a;margin-top:2px;')
   labelEl.textContent = label
   box.append(valueEl, labelEl)
   return box
@@ -630,8 +674,8 @@ function createChip(text: string, tone: 'blue' | 'gray' | 'amber' = 'gray'): HTM
     gray: 'background:#f6f8fa;color:#57606a;border-color:#d8dee4;',
     amber: 'background:#fff8c5;color:#9a6700;border-color:#f0d98c;',
   }
-  chip.style.cssText =
-    `display:inline-flex;align-items:center;max-width:100%;padding:3px 8px;border:1px solid;border-radius:999px;font-size:11px;line-height:1.4;word-break:break-word;${colors[tone]}`
+  chip.style.cssText = themedStyle(
+    `display:inline-flex;align-items:center;max-width:100%;padding:3px 8px;border:1px solid;border-radius:999px;font-size:11px;line-height:1.4;word-break:break-word;${colors[tone]}`)
   chip.textContent = text
   return chip
 }
@@ -652,7 +696,7 @@ function createPrimaryButton(text: string, disabled = false): HTMLButtonElement 
   const button = document.createElement('button')
   button.textContent = text
   button.disabled = disabled
-  button.style.cssText = `
+  button.style.cssText = themedStyle(`
     width: 100%;
     padding: 10px 14px;
     background: ${disabled ? '#f6f8fa' : '#24292e'};
@@ -662,15 +706,15 @@ function createPrimaryButton(text: string, disabled = false): HTMLButtonElement 
     font-size: 13px;
     font-weight: 600;
     cursor: ${disabled ? 'not-allowed' : 'pointer'};
-  `
+  `)
   return button
 }
 
 function renderInsightError(container: HTMLElement, message: string) {
   container.replaceChildren()
   const error = document.createElement('div')
-  error.style.cssText =
-    'color:#cf222e;padding:12px;background:#ffebe9;border:1px solid #ffcecb;border-radius:8px;font-size:12px;line-height:1.5;'
+  error.style.cssText = themedStyle(
+    'color:#cf222e;padding:12px;background:#ffebe9;border:1px solid #ffcecb;border-radius:8px;font-size:12px;line-height:1.5;')
   error.textContent = message
   container.appendChild(error)
 }
@@ -710,8 +754,8 @@ function renderQuestionAnswer(
       }
 
       const answer = document.createElement('div')
-      answer.style.cssText =
-        'padding:10px;background:#f6f8fa;border:1px solid #d8dee4;border-radius:8px;font-size:12px;line-height:1.6;color:#24292f;white-space:pre-wrap;word-break:break-word;'
+      answer.style.cssText = themedStyle(
+        'padding:10px;background:#f6f8fa;border:1px solid #d8dee4;border-radius:8px;font-size:12px;line-height:1.6;color:#24292f;white-space:pre-wrap;word-break:break-word;')
       answer.textContent = qaResult.answer
       target.replaceChildren(answer)
     },
@@ -741,8 +785,8 @@ function renderFileInsight(
     ),
   )
   const path = document.createElement('div')
-  path.style.cssText =
-    'font-family:ui-monospace,SFMono-Regular,SFMono,Consolas,monospace;font-size:12px;color:#24292f;background:#f6f8fa;border-radius:6px;padding:8px;word-break:break-all;'
+  path.style.cssText = themedStyle(
+    'font-family:ui-monospace,SFMono-Regular,SFMono,Consolas,monospace;font-size:12px;color:#24292f;background:#f6f8fa;border-radius:6px;padding:8px;word-break:break-all;')
   path.textContent = insight.filePath
   overview.appendChild(path)
   const overviewChips = document.createElement('div')
@@ -779,11 +823,11 @@ function renderFileInsight(
     list.style.cssText = 'display:flex;flex-direction:column;gap:6px;'
     insight.symbols.slice(0, 10).forEach((symbol) => {
       const row = document.createElement('div')
-      row.style.cssText =
-        'display:flex;align-items:center;gap:6px;padding:7px 8px;background:#f6f8fa;border-radius:6px;min-width:0;'
+      row.style.cssText = themedStyle(
+        'display:flex;align-items:center;gap:6px;padding:7px 8px;background:#f6f8fa;border-radius:6px;min-width:0;')
       const name = document.createElement('span')
-      name.style.cssText =
-        'flex:1;min-width:0;font-family:ui-monospace,SFMono-Regular,SFMono,Consolas,monospace;font-size:12px;color:#0969da;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;'
+      name.style.cssText = themedStyle(
+        'flex:1;min-width:0;font-family:ui-monospace,SFMono-Regular,SFMono,Consolas,monospace;font-size:12px;color:#0969da;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;')
       name.textContent = symbol.name
       row.append(name, createChip(symbol.kind, 'gray'), createChip(`L${symbol.lineStart}`, 'blue'))
       list.appendChild(row)
@@ -839,18 +883,18 @@ function renderFileInsight(
     const button = document.createElement('button')
     button.textContent = question
     button.disabled = !llmConfigured
-    button.style.cssText = `
+    button.style.cssText = themedStyle(`
       width:100%;
       text-align:left;
       padding:8px 10px;
       border:1px solid #d8dee4;
       border-radius:6px;
-      background:${llmConfigured ? '#f6f8fa' : '#f6f8fa'};
+      background:#f6f8fa;
       color:${llmConfigured ? '#24292f' : '#8c959f'};
       font-size:12px;
       line-height:1.4;
       cursor:${llmConfigured ? 'pointer' : 'not-allowed'};
-    `
+    `)
     if (llmConfigured) {
       button.addEventListener('click', () => renderQuestionAnswer(response, fileData, question))
     }
@@ -873,8 +917,8 @@ function renderDeepAnalysis(
   wrapper.style.cssText = 'display:flex;flex-direction:column;gap:12px;'
 
   const roleCard = document.createElement('div')
-  roleCard.style.cssText =
-    'padding:14px;background:#f0f7ff;border-radius:8px;border-left:4px solid #0969da;'
+  roleCard.style.cssText = themedStyle(
+    'padding:14px;background:#f0f7ff;border-radius:8px;border-left:4px solid #0969da;')
   roleCard.appendChild(createSectionTitle(currentLanguage === 'zh' ? '这个文件做什么' : 'What This File Does'))
   roleCard.appendChild(
     createText(
@@ -908,8 +952,8 @@ function renderDeepAnalysis(
       const row = document.createElement('div')
       row.style.cssText = 'display:flex;gap:8px;align-items:flex-start;'
       const badge = document.createElement('div')
-      badge.style.cssText =
-        'width:22px;height:22px;border-radius:50%;background:#0969da;color:white;font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:1px;'
+      badge.style.cssText = themedStyle(
+        'width:22px;height:22px;border-radius:50%;background:#0969da;color:white;font-size:11px;font-weight:700;display:flex;align-items:center;justify-content:center;flex-shrink:0;margin-top:1px;')
       badge.textContent = String(step.step)
       const body = document.createElement('div')
       body.style.cssText = 'flex:1;min-width:0;'
@@ -933,11 +977,11 @@ function renderDeepAnalysis(
     section.appendChild(createSectionTitle(currentLanguage === 'zh' ? '关键实现' : 'Key Implementation'))
     analysis.components.slice(0, 8).forEach((component) => {
       const row = document.createElement('div')
-      row.style.cssText = 'padding:8px;background:#f6f8fa;border-radius:6px;margin-bottom:6px;'
+      row.style.cssText = themedStyle('padding:8px;background:#f6f8fa;border-radius:6px;margin-bottom:6px;')
       const heading = document.createElement('div')
       heading.style.cssText = 'display:flex;align-items:center;gap:6px;'
       const name = document.createElement('span')
-      name.style.cssText = 'font-family:monospace;font-size:12px;font-weight:600;color:#0969da;'
+      name.style.cssText = themedStyle('font-family:monospace;font-size:12px;font-weight:600;color:#0969da;')
       name.textContent = component.name
       heading.append(name, createChip(component.type, 'gray'))
       row.appendChild(heading)
@@ -955,7 +999,7 @@ function renderDeepAnalysis(
     const section = createCard()
     section.appendChild(createSectionTitle(currentLanguage === 'zh' ? '为什么这样设计' : 'Why This Design'))
     const list = document.createElement('ul')
-    list.style.cssText = 'margin:0;padding-left:16px;font-size:12px;color:#57606a;line-height:1.6;'
+    list.style.cssText = themedStyle('margin:0;padding-left:16px;font-size:12px;color:#57606a;line-height:1.6;')
     analysis.designNotes.slice(0, 4).forEach((note) => {
       const li = document.createElement('li')
       li.textContent = note
@@ -982,13 +1026,13 @@ function renderDeepAnalysis(
     section.appendChild(createSectionTitle(currentLanguage === 'zh' ? '支撑证据' : 'Evidence'))
     analysis.evidence.slice(0, 2).forEach((item) => {
       const box = document.createElement('div')
-      box.style.cssText = 'padding:8px;background:#f6f8fa;border-radius:6px;margin-bottom:6px;'
+      box.style.cssText = themedStyle('padding:8px;background:#f6f8fa;border-radius:6px;margin-bottom:6px;')
       const fileLine = `${item.filePath || fileData.fileName}${item.lineStart ? `:${item.lineStart}` : ''}`
       box.appendChild(createText(fileLine, 'font-size:11px;color:#374151;font-family:monospace;margin:0 0 4px 0;'))
       box.appendChild(createText(item.reason, 'font-size:11px;color:#4b5563;margin:0 0 4px 0;'))
       const snippet = document.createElement('pre')
-      snippet.style.cssText =
-        'font-size:11px;color:#334155;background:#fff;padding:6px;border-radius:4px;white-space:pre-wrap;word-break:break-word;margin:0;'
+      snippet.style.cssText = themedStyle(
+        'font-size:11px;color:#334155;background:#fff;padding:6px;border-radius:4px;white-space:pre-wrap;word-break:break-word;margin:0;')
       snippet.textContent = item.snippet
       box.appendChild(snippet)
       section.appendChild(box)
@@ -1000,7 +1044,7 @@ function renderDeepAnalysis(
     const section = createCard()
     section.appendChild(createSectionTitle(currentLanguage === 'zh' ? '继续看' : 'Next Reading'))
     const list = document.createElement('ul')
-    list.style.cssText = 'margin:0;padding-left:16px;font-size:12px;color:#666;line-height:1.6;'
+    list.style.cssText = themedStyle('margin:0;padding-left:16px;font-size:12px;color:#666;line-height:1.6;')
     analysis.suggestions.slice(0, 5).forEach((suggestion) => {
       const li = document.createElement('li')
       li.textContent = suggestion
@@ -1011,7 +1055,7 @@ function renderDeepAnalysis(
   }
 
   const qaSection = document.createElement('div')
-  qaSection.style.cssText = 'margin-top:8px;padding-top:12px;border-top:1px solid #e1e4e8;'
+  qaSection.style.cssText = themedStyle('margin-top:8px;padding-top:12px;border-top:1px solid #e1e4e8;')
   qaSection.appendChild(createSectionTitle(currentLanguage === 'zh' ? '提问' : 'Ask a Question'))
 
   const row = document.createElement('div')
@@ -1019,13 +1063,13 @@ function renderDeepAnalysis(
   const input = document.createElement('input')
   input.id = 'gitmentor-question-input'
   input.placeholder = currentLanguage === 'zh' ? '关于此文件提问...' : 'Ask about this file...'
-  input.style.cssText =
-    'flex:1;padding:8px 12px;border:1px solid #e1e4e8;border-radius:6px;font-size:12px;outline:none;'
+  input.style.cssText = themedStyle(
+    'flex:1;padding:8px 12px;border:1px solid #e1e4e8;border-radius:6px;font-size:12px;outline:none;background:#fff;color:#24292e;')
   const askBtn = document.createElement('button')
   askBtn.id = 'gitmentor-ask-btn'
   askBtn.textContent = currentLanguage === 'zh' ? '提问' : 'Ask'
-  askBtn.style.cssText =
-    'padding:8px 16px;background:#24292e;color:white;border:none;border-radius:6px;font-size:12px;cursor:pointer;'
+  askBtn.style.cssText = themedStyle(
+    'padding:8px 16px;background:#24292e;color:white;border:none;border-radius:6px;font-size:12px;cursor:pointer;')
   row.append(input, askBtn)
   qaSection.appendChild(row)
 
@@ -1057,18 +1101,18 @@ async function performDeepAnalysis(contentDiv: HTMLElement, fileData: any) {
   
   // Check extension context
   if (!isExtensionContextValid()) {
-    contentDiv.innerHTML = `<div style="color: #d73a49; padding: 12px; background: #ffeef0; border-radius: 4px; font-size: 12px;">Extension context unavailable. Please refresh the page.</div>`
+    renderInsightError(contentDiv, 'Extension context unavailable. Please refresh the page.')
     showReloadPrompt()
     return
   }
-  
+
   // Show loading state
-  contentDiv.innerHTML = `
+  contentDiv.innerHTML = themedStyle(`
     <div style="padding: 12px; background: #f0f2f5; border-radius: 4px; text-align: center; font-size: 12px; color: #666;">
-      🤖 ${getText('deepAnalysisInProgress')}
+      ${getText('deepAnalysisInProgress')}
       <div style="margin-top: 8px; font-size: 11px;">${getText('mayTakeMoment')}</div>
     </div>
-  `
+  `)
   
     // Request deep analysis from service worker
   chrome.runtime.sendMessage({
@@ -1144,7 +1188,7 @@ async function fetchAndAnalyzeFile(fileInfo: FileInfo, contentDiv: HTMLElement) 
     
     // Check extension context before sending message
     if (!isExtensionContextValid()) {
-      contentDiv.innerHTML = `<div style="color: #d73a49; padding: 12px; background: #ffeef0; border-radius: 4px; font-size: 12px;">Extension context unavailable. Please refresh the page.</div>`
+      renderInsightError(contentDiv, 'Extension context unavailable. Please refresh the page.')
       showReloadPrompt()
       return
     }

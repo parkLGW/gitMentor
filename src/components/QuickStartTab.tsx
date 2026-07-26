@@ -1,6 +1,7 @@
 // Quick Start Tab - AI 生成的快速入门指南
 import { useState, useEffect, useRef } from "react";
 import { LoadingSpinner } from "./LoadingSpinner";
+import { Button } from "@/components/ui/Button";
 import { collectQuickContext } from "@/services/context-collector";
 import { getRepoInfo } from "@/services/github";
 import { AIAnalysisService, QuickStartGuide } from "@/services/ai-analysis";
@@ -253,11 +254,7 @@ Description: ${repoInfo.description || "N/A"}`;
     return (
       <div className="text-center py-8">
         <p className="text-red-500 text-sm mb-4">{error}</p>
-        <button
-          onClick={handleRefresh}
-          disabled={refreshing}
-          className="px-4 py-2 bg-gray-800 text-white text-sm rounded hover:bg-gray-700 disabled:opacity-50"
-        >
+        <Button onClick={handleRefresh} disabled={refreshing}>
           {refreshing
             ? isZh
               ? "重试中..."
@@ -265,7 +262,7 @@ Description: ${repoInfo.description || "N/A"}`;
             : isZh
               ? "重试"
               : "Retry"}
-        </button>
+        </Button>
       </div>
     );
   }
@@ -285,10 +282,12 @@ Description: ${repoInfo.description || "N/A"}`;
         <span className="text-xs text-gray-500">
           {isZh ? "AI 生成" : "AI Generated"}
         </span>
-        <button
+        <Button
+          size="sm"
+          variant="secondary"
           onClick={handleRefresh}
           disabled={refreshing}
-          className="text-xs px-3 py-1 bg-gray-100 hover:bg-gray-200 disabled:opacity-50 text-gray-700 rounded transition flex items-center gap-1"
+          className="flex items-center gap-1"
         >
           {refreshing ? (
             <>
@@ -300,7 +299,7 @@ Description: ${repoInfo.description || "N/A"}`;
           ) : (
             "Refresh"
           )}
-        </button>
+        </Button>
       </div>
 
       {/* Prerequisites */}
