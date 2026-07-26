@@ -1,10 +1,18 @@
 // Base LLM Provider implementations
 
-import { LLMConfig, LLMProtocolType, LLMProvider, LLMResponse } from '@/types/llm'
+import { LLMConfig, LLMProtocolType, LLMProvider, LLMResponse, NormalizedLLMConfig } from '@/types/llm'
 import { migrateLegacyLLMConfig } from '@/services/llm-config-migration'
-import { normalizeOpenAICompatibleBaseUrl, resolveProviderBaseUrl } from '@/services/llm-provider-config'
+import {
+  getPresetSettings,
+  normalizeOpenAICompatibleBaseUrl,
+  resolveProviderBaseUrl,
+} from '@/services/llm-provider-config'
 import { resolveClaudeCompatibleMessagesUrl } from '@/services/claude-compatible-utils'
 import { shouldFallbackCustomStreaming } from '@/services/custom-openai-utils'
+
+function resolveModel(normalized: NormalizedLLMConfig): string {
+  return normalized.model || getPresetSettings(normalized.preset).defaultModel
+}
 
 export abstract class BaseLLMProvider implements LLMProvider {
   abstract name: string
@@ -41,6 +49,10 @@ export abstract class BaseLLMProvider implements LLMProvider {
   }
 }
 
+// Presets where the API key is optional or absent; skip the Authorization
+// header entirely when no key is configured
+const OPTIONAL_KEY_PRESETS = new Set(['custom-openai', 'custom-local', 'ollama', 'lmstudio'])
+
 export class OpenAICompatibleProvider extends BaseLLMProvider {
   name = 'OpenAI-Compatible Protocol'
   type: LLMProtocolType = 'openai'
@@ -57,10 +69,21 @@ export class OpenAICompatibleProvider extends BaseLLMProvider {
         return 'https://api.siliconflow.cn/v1/chat/completions'
       case 'zhipu':
         return 'https://open.bigmodel.cn/api/paas/v4/chat/completions'
+      // Local runtimes (Ollama, LM Studio) expose OpenAI-compatible endpoints,
+      // so the local protocol shares this provider
+      case 'ollama': {
+        const baseUrl = resolveProviderBaseUrl('ollama', normalized.baseUrl) || 'http://localhost:11434'
+        return `${baseUrl}/v1/chat/completions`
+      }
+      case 'lmstudio': {
+        const baseUrl = resolveProviderBaseUrl('lmstudio', normalized.baseUrl) || 'http://localhost:1234'
+        return `${baseUrl}/v1/chat/completions`
+      }
+      case 'custom-local':
       case 'custom-openai': {
         const baseUrl = normalizeOpenAICompatibleBaseUrl(normalized.baseUrl || '')
         if (!baseUrl) {
-          throw new Error('Custom provider base URL is required')
+          throw new Error('OpenAI-compatible base URL is required')
         }
         return `${baseUrl}/chat/completions`
       }
@@ -73,13 +96,12 @@ export class OpenAICompatibleProvider extends BaseLLMProvider {
   private buildHeaders(config: LLMConfig): Record<string, string> {
     const normalized = migrateLegacyLLMConfig(config)
     const apiKey = normalized.apiKey || ''
-    const isCustom = normalized.preset === 'custom-openai'
 
     const headers: Record<string, string> = {
       'Content-Type': 'application/json',
     }
 
-    if (!isCustom || apiKey) {
+    if (apiKey || !OPTIONAL_KEY_PRESETS.has(normalized.preset)) {
       headers.Authorization = `Bearer ${apiKey}`
     }
 
@@ -96,17 +118,7 @@ export class OpenAICompatibleProvider extends BaseLLMProvider {
         method: 'POST',
         headers: this.buildHeaders(config),
         body: JSON.stringify({
-          model:
-            normalized.model ||
-            (normalized.preset === 'deepseek'
-              ? 'deepseek-chat'
-              : normalized.preset === 'siliconflow'
-                ? 'Qwen/Qwen2.5-72B-Instruct'
-                : normalized.preset === 'zhipu'
-                  ? 'glm-4'
-                  : normalized.preset === 'custom-openai'
-                    ? 'gpt-4o-mini'
-                    : 'gpt-4o-mini'),
+          model: resolveModel(normalized),
           max_tokens: normalized.maxTokens || 2000,
           temperature: normalized.temperature ?? 0.7,
           messages: [
@@ -151,17 +163,7 @@ export class OpenAICompatibleProvider extends BaseLLMProvider {
         method: 'POST',
         headers: this.buildHeaders(config),
         body: JSON.stringify({
-          model:
-            normalized.model ||
-            (normalized.preset === 'deepseek'
-              ? 'deepseek-chat'
-              : normalized.preset === 'siliconflow'
-                ? 'Qwen/Qwen2.5-72B-Instruct'
-                : normalized.preset === 'zhipu'
-                  ? 'glm-4'
-                  : normalized.preset === 'custom-openai'
-                    ? 'gpt-4o-mini'
-                    : 'gpt-4o-mini'),
+          model: resolveModel(normalized),
           max_tokens: normalized.maxTokens || 2000,
           temperature: normalized.temperature ?? 0.7,
           stream: true,
@@ -173,7 +175,10 @@ export class OpenAICompatibleProvider extends BaseLLMProvider {
       })
 
       if (!response.ok) {
-        if (normalized.preset === 'custom-openai' && shouldFallbackCustomStreaming(response.status)) {
+        if (
+          (normalized.preset === 'custom-openai' || normalized.preset === 'custom-local') &&
+          shouldFallbackCustomStreaming(response.status)
+        ) {
           const fallback = await this.complete(prompt, systemPrompt)
           if (fallback.content) yield fallback.content
           return
@@ -223,21 +228,19 @@ export class OpenAICompatibleProvider extends BaseLLMProvider {
       const apiUrl = this.resolveApiUrl(config)
       const normalized = migrateLegacyLLMConfig(config)
 
+      // Local runtimes: probe the models listing instead of a chat completion,
+      // so the test does not force a model load (or fail on an unpulled model)
+      if (normalized.preset === 'ollama' || normalized.preset === 'lmstudio') {
+        const modelsUrl = apiUrl.replace(/\/chat\/completions$/, '/models')
+        const response = await fetch(modelsUrl, { headers: this.buildHeaders(config) })
+        return response.ok
+      }
+
       const response = await fetch(apiUrl, {
         method: 'POST',
         headers: this.buildHeaders(config),
         body: JSON.stringify({
-          model:
-            normalized.model ||
-            (normalized.preset === 'deepseek'
-              ? 'deepseek-chat'
-              : normalized.preset === 'siliconflow'
-                ? 'Qwen/Qwen2.5-72B-Instruct'
-                : normalized.preset === 'zhipu'
-                  ? 'glm-4'
-                  : normalized.preset === 'custom-openai'
-                    ? 'gpt-4o-mini'
-                    : 'gpt-4o-mini'),
+          model: resolveModel(normalized),
           max_tokens: 1,
           temperature: 0,
           messages: [{ role: 'user', content: 'ping' }],
@@ -290,7 +293,7 @@ export class ClaudeCompatibleProvider extends BaseLLMProvider {
         method: 'POST',
         headers: this.buildHeaders(config),
         body: JSON.stringify({
-          model: normalized.model || 'claude-3-sonnet-20240229',
+          model: resolveModel(normalized),
           max_tokens: normalized.maxTokens || 2000,
           system: this.createSystemPrompt(systemPrompt),
           messages: [{ role: 'user', content: prompt }],
@@ -332,7 +335,7 @@ export class ClaudeCompatibleProvider extends BaseLLMProvider {
         method: 'POST',
         headers: this.buildHeaders(config),
         body: JSON.stringify({
-          model: normalized.model || 'claude-3-sonnet-20240229',
+          model: resolveModel(normalized),
           max_tokens: normalized.maxTokens || 2000,
           system: this.createSystemPrompt(systemPrompt),
           messages: [{ role: 'user', content: prompt }],
@@ -385,253 +388,12 @@ export class ClaudeCompatibleProvider extends BaseLLMProvider {
         method: 'POST',
         headers: this.buildHeaders(config),
         body: JSON.stringify({
-          model: normalized.model || 'claude-3-sonnet-20240229',
+          model: resolveModel(normalized),
           max_tokens: 20,
           messages: [{ role: 'user', content: 'Say "ok"' }],
         }),
       })
 
-      return response.ok
-    } catch {
-      return false
-    }
-  }
-}
-
-export class LocalProvider extends BaseLLMProvider {
-  name = 'Local Protocol'
-  type: LLMProtocolType = 'local'
-
-  private isOllama(config: LLMConfig): boolean {
-    const normalized = migrateLegacyLLMConfig(config)
-    return normalized.localMode === 'ollama' || normalized.preset === 'ollama'
-  }
-
-  async complete(prompt: string, systemPrompt?: string, signal?: AbortSignal): Promise<LLMResponse> {
-    const config = this.getConfig()
-    const normalized = migrateLegacyLLMConfig(config)
-
-    if (this.isOllama(config)) {
-      const baseUrl = resolveProviderBaseUrl('ollama', normalized.baseUrl) || 'http://localhost:11434'
-      const response = await fetch(`${baseUrl}/api/generate`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model: normalized.model || 'mistral',
-          prompt: `${this.createSystemPrompt(systemPrompt)}\n\n${prompt}`,
-          stream: false,
-        }),
-        signal,
-      })
-
-      if (!response.ok) {
-        throw new Error(`Ollama API error: ${response.statusText}`)
-      }
-
-      const data = await response.json()
-      return {
-        content: data.response || '',
-        model: normalized.model || 'mistral',
-      }
-    }
-
-    const baseUrl =
-      normalized.preset === 'custom-local'
-        ? normalizeOpenAICompatibleBaseUrl(normalized.baseUrl || '')
-        : (resolveProviderBaseUrl('lmstudio', normalized.baseUrl) || 'http://localhost:1234').replace(/\/+$/, '')
-
-    if (!baseUrl) {
-      throw new Error('Local OpenAI-compatible base URL is required')
-    }
-
-    const apiUrl =
-      normalized.preset === 'custom-local' ? `${baseUrl}/chat/completions` : `${baseUrl}/v1/chat/completions`
-
-    const headers: Record<string, string> = { 'Content-Type': 'application/json' }
-    if (normalized.apiKey) {
-      headers.Authorization = `Bearer ${normalized.apiKey}`
-    }
-
-    const response = await fetch(apiUrl, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
-        model: normalized.model || 'local-model',
-        temperature: normalized.temperature ?? 0.7,
-        max_tokens: normalized.maxTokens || 2000,
-        messages: [
-          { role: 'system', content: this.createSystemPrompt(systemPrompt) },
-          { role: 'user', content: prompt },
-        ],
-      }),
-      signal,
-    })
-
-    if (!response.ok) {
-      throw new Error(`Local OpenAI-compatible API error: ${response.statusText}`)
-    }
-
-    const data = await response.json()
-    return {
-      content: data.choices?.[0]?.message?.content || '',
-      model: normalized.model || 'local-model',
-      tokensUsed: {
-        prompt: data.usage?.prompt_tokens || 0,
-        completion: data.usage?.completion_tokens || 0,
-        total: data.usage?.total_tokens || 0,
-      },
-    }
-  }
-
-  async *stream(prompt: string, systemPrompt?: string): AsyncGenerator<string> {
-    const config = this.getConfig()
-    const normalized = migrateLegacyLLMConfig(config)
-
-    if (this.isOllama(config)) {
-      const baseUrl = resolveProviderBaseUrl('ollama', normalized.baseUrl) || 'http://localhost:11434'
-      const response = await fetch(`${baseUrl}/api/generate`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          model: normalized.model || 'mistral',
-          prompt: `${this.createSystemPrompt(systemPrompt)}\n\n${prompt}`,
-          stream: true,
-        }),
-      })
-
-      if (!response.ok) {
-        throw new Error(`Ollama API error: ${response.statusText}`)
-      }
-
-      const reader = response.body?.getReader()
-      if (!reader) throw new Error('No response body')
-
-      const decoder = new TextDecoder()
-      let buffer = ''
-
-      while (true) {
-        const { done, value } = await reader.read()
-        if (done) break
-
-        buffer += decoder.decode(value, { stream: true })
-        const lines = buffer.split('\n')
-        buffer = lines.pop() || ''
-
-        for (const line of lines) {
-          if (!line.trim()) continue
-          try {
-            const data = JSON.parse(line)
-            if (data.response) yield data.response
-          } catch {
-            // Skip invalid JSON lines
-          }
-        }
-      }
-
-      return
-    }
-
-    const baseUrl =
-      normalized.preset === 'custom-local'
-        ? normalizeOpenAICompatibleBaseUrl(normalized.baseUrl || '')
-        : (resolveProviderBaseUrl('lmstudio', normalized.baseUrl) || 'http://localhost:1234').replace(/\/+$/, '')
-
-    if (!baseUrl) {
-      throw new Error('Local OpenAI-compatible base URL is required')
-    }
-
-    const apiUrl =
-      normalized.preset === 'custom-local' ? `${baseUrl}/chat/completions` : `${baseUrl}/v1/chat/completions`
-
-    const headers: Record<string, string> = { 'Content-Type': 'application/json' }
-    if (normalized.apiKey) {
-      headers.Authorization = `Bearer ${normalized.apiKey}`
-    }
-
-    const response = await fetch(apiUrl, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({
-        model: normalized.model || 'local-model',
-        temperature: normalized.temperature ?? 0.7,
-        max_tokens: normalized.maxTokens || 2000,
-        stream: true,
-        messages: [
-          { role: 'system', content: this.createSystemPrompt(systemPrompt) },
-          { role: 'user', content: prompt },
-        ],
-      }),
-    })
-
-    if (!response.ok) {
-      throw new Error(`Local OpenAI-compatible API error: ${response.statusText}`)
-    }
-
-    const reader = response.body?.getReader()
-    if (!reader) throw new Error('No response body')
-
-    const decoder = new TextDecoder()
-    let buffer = ''
-
-    while (true) {
-      const { done, value } = await reader.read()
-      if (done) break
-
-      buffer += decoder.decode(value, { stream: true })
-      const lines = buffer.split('\n')
-      buffer = lines.pop() || ''
-
-      for (const line of lines) {
-        if (!line.startsWith('data: ')) continue
-        const dataStr = line.slice(6)
-        if (dataStr === '[DONE]') continue
-        try {
-          const data = JSON.parse(dataStr)
-          const chunk = data.choices?.[0]?.delta?.content
-          if (chunk) yield chunk
-        } catch {
-          // Skip malformed SSE chunks
-        }
-      }
-    }
-  }
-
-  async testConnection(): Promise<boolean> {
-    try {
-      const config = this.getConfig()
-      const normalized = migrateLegacyLLMConfig(config)
-
-      if (this.isOllama(config)) {
-        const baseUrl = resolveProviderBaseUrl('ollama', normalized.baseUrl) || 'http://localhost:11434'
-        const response = await fetch(`${baseUrl}/api/tags`)
-        return response.ok
-      }
-
-      const baseUrl =
-        normalized.preset === 'custom-local'
-          ? normalizeOpenAICompatibleBaseUrl(normalized.baseUrl || '')
-          : (resolveProviderBaseUrl('lmstudio', normalized.baseUrl) || 'http://localhost:1234').replace(/\/+$/, '')
-
-      if (!baseUrl) return false
-
-      const apiUrl =
-        normalized.preset === 'custom-local' ? `${baseUrl}/chat/completions` : `${baseUrl}/v1/chat/completions`
-
-      const headers: Record<string, string> = { 'Content-Type': 'application/json' }
-      if (normalized.apiKey) {
-        headers.Authorization = `Bearer ${normalized.apiKey}`
-      }
-
-      const response = await fetch(apiUrl, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify({
-          model: normalized.model || 'local-model',
-          temperature: 0,
-          max_tokens: 1,
-          messages: [{ role: 'user', content: 'ping' }],
-        }),
-      })
       return response.ok
     } catch {
       return false

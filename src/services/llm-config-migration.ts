@@ -70,7 +70,7 @@ export function migrateLegacyLLMConfig(
       return {
         protocol: 'local',
         preset: 'ollama',
-        localMode: 'ollama',
+        localMode: 'openai-compatible',
         ...commonFields,
       }
     case 'lmstudio':

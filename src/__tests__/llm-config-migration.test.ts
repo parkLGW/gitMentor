@@ -32,6 +32,19 @@ runTest('migrates lmstudio legacy provider to local openai-compatible mode', () 
   assert.equal(migrated.localMode, 'openai-compatible')
 })
 
+runTest('migrates ollama legacy provider to the openai-compatible endpoint mode', () => {
+  const migrated = migrateLegacyLLMConfig({
+    provider: 'ollama',
+    apiKey: '',
+    model: 'qwen3',
+    baseUrl: 'http://localhost:11434',
+  })
+
+  assert.equal(migrated.protocol, 'local')
+  assert.equal(migrated.preset, 'ollama')
+  assert.equal(migrated.localMode, 'openai-compatible')
+})
+
 runTest('passes through already normalized config unchanged', () => {
   const migrated = migrateLegacyLLMConfig({
     protocol: 'openai',

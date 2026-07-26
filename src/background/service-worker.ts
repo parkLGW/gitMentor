@@ -3,7 +3,7 @@ declare const chrome: any
 import type { AnalysisEvidence, ConfidenceLevel, DeepFileAnalysisResult, LearningMission } from '@/types/learning'
 import type { SourceMapOutput } from '@/prompts/types'
 import { createLearningMission } from '@/services/learning-mission'
-import { normalizeOpenAICompatibleBaseUrl, resolveProviderBaseUrl } from '@/services/llm-provider-config'
+import { getPresetSettings, normalizeOpenAICompatibleBaseUrl, resolveProviderBaseUrl } from '@/services/llm-provider-config'
 import { fetchRetrievedGithubFiles, flattenTreeFilePaths, isInspectableRepoPath, parseRetrievalPlan, rankCandidateFiles } from '@/services/agent-code-context'
 import { answerAgentQuestion, buildFastPathAgentAnswer, buildLocalFallbackAnswer } from '@/services/agent-chat-runtime'
 import { buildAgentRetrievalPlannerPrompt } from '@/services/agent-retrieval-planner-prompt'
@@ -16,7 +16,6 @@ import { getDefaultBranch, getFullDirectoryTree, getRawFileContent, getRecursive
 import { migrateLegacyLLMConfig } from '@/services/llm-config-migration'
 import {
   readClaudeMessageStream,
-  readOllamaJsonStream,
   readOpenAICompatibleStream,
 } from '@/services/llm-stream'
 import { parseLooseJson } from '@/services/llm-json'
@@ -33,7 +32,6 @@ import {
   AGENT_SUMMARY_TIMEOUT_MS,
 } from '@/services/agent-timeouts'
 import { parseLooseAgentJson, unwrapNestedAgentJson } from '@/services/agent-response-parser'
-import { buildOllamaChatBody } from '@/services/llm-request'
 import type {
   AgentMessage,
   AgentChatRequestPayload,
@@ -943,9 +941,8 @@ function resolveStreamMode(config: StoredLLMConfig): StreamMode {
   }
 
   if (normalized.protocol === 'local') {
-    return normalized.localMode === 'ollama' || normalized.preset === 'ollama'
-      ? 'ollama'
-      : 'openai-compatible'
+    // Local runtimes (Ollama, LM Studio) are used via their OpenAI-compatible endpoints
+    return 'openai-compatible'
   }
 
   return null
@@ -957,9 +954,6 @@ function parseLLMResponseText(config: StoredLLMConfig, data: any): string {
   if (normalized.protocol === 'claude') {
     return data.content?.[0]?.text || ''
   }
-  if (normalized.protocol === 'local' && (normalized.localMode === 'ollama' || normalized.preset === 'ollama')) {
-    return data.message?.content || data.response || ''
-  }
   return data.choices?.[0]?.message?.content || ''
 }
 
@@ -969,10 +963,7 @@ async function readStreamingLLMResponse(
 ): Promise<string> {
   const streamMode = resolveStreamMode(config)
   const contentType = response.headers.get('content-type')?.toLowerCase() || ''
-  const expectsStream =
-    streamMode === 'ollama'
-      ? !contentType.includes('application/json')
-      : contentType.includes('text/event-stream')
+  const expectsStream = contentType.includes('text/event-stream')
 
   if (!expectsStream) {
     const data = await response.json()
@@ -981,9 +972,6 @@ async function readStreamingLLMResponse(
 
   if (streamMode === 'claude') {
     return await readClaudeMessageStream(response)
-  }
-  if (streamMode === 'ollama') {
-    return await readOllamaJsonStream(response)
   }
   return await readOpenAICompatibleStream(response)
 }
@@ -1015,7 +1003,7 @@ async function callLLM(
             'Authorization': `Bearer ${normalized.apiKey}`,
           }
           body = {
-            model: normalized.model || 'gpt-4o-mini',
+            model: normalized.model || getPresetSettings(normalized.preset).defaultModel,
             messages: [{ role: 'user', content: prompt }],
             temperature: 0.3,
             max_tokens: requestedMaxTokens ?? normalized.maxTokens ?? 420,
@@ -1032,7 +1020,7 @@ async function callLLM(
             headers.Authorization = `Bearer ${normalized.apiKey}`
           }
           body = {
-            model: normalized.model || 'gpt-4o-mini',
+            model: normalized.model || getPresetSettings(normalized.preset).defaultModel,
             messages: [{ role: 'user', content: prompt }],
             temperature: 0.3,
             max_tokens: requestedMaxTokens ?? normalized.maxTokens ?? 420,
@@ -1046,7 +1034,7 @@ async function callLLM(
             'Authorization': `Bearer ${normalized.apiKey}`,
           }
           body = {
-            model: normalized.model || 'deepseek-chat',
+            model: normalized.model || getPresetSettings(normalized.preset).defaultModel,
             messages: [{ role: 'user', content: prompt }],
             temperature: 0.3,
             max_tokens: requestedMaxTokens ?? normalized.maxTokens ?? 420,
@@ -1059,7 +1047,7 @@ async function callLLM(
             'Authorization': `Bearer ${normalized.apiKey}`,
           }
           body = {
-            model: normalized.model || 'Qwen/Qwen2.5-72B-Instruct',
+            model: normalized.model || getPresetSettings(normalized.preset).defaultModel,
             messages: [{ role: 'user', content: prompt }],
             temperature: 0.3,
             max_tokens: requestedMaxTokens ?? normalized.maxTokens ?? 420,
@@ -1072,7 +1060,7 @@ async function callLLM(
             'Authorization': `Bearer ${normalized.apiKey}`,
           }
           body = {
-            model: normalized.model || 'glm-4',
+            model: normalized.model || getPresetSettings(normalized.preset).defaultModel,
             messages: [{ role: 'user', content: prompt }],
             temperature: 0.3,
             max_tokens: requestedMaxTokens ?? normalized.maxTokens ?? 420,
@@ -1101,34 +1089,22 @@ async function callLLM(
         headers['x-api-key'] = normalized.apiKey
       }
       body = {
-        model: normalized.model || 'claude-3-haiku-20240307',
+        model: normalized.model || getPresetSettings(normalized.preset).defaultModel,
         max_tokens: requestedMaxTokens ?? normalized.maxTokens ?? 700,
         messages: [{ role: 'user', content: prompt }],
       }
       break
     }
     case 'local': {
-      const isOllama = normalized.localMode === 'ollama' || normalized.preset === 'ollama'
-
-      if (isOllama) {
-        apiUrl = `${resolveProviderBaseUrl('ollama', normalized.baseUrl) || 'http://localhost:11434'}/api/chat`
-        headers = {
-          'Content-Type': 'application/json',
-        }
-        body = buildOllamaChatBody({
-          model: normalized.model || 'llama2',
-          prompt,
-          maxTokens: requestedMaxTokens ?? normalized.maxTokens ?? 420,
-        })
-        break
-      }
-
+      // Ollama and LM Studio both expose OpenAI-compatible endpoints
       if (normalized.preset === 'custom-local') {
         const baseUrl = normalizeOpenAICompatibleBaseUrl(normalized.baseUrl || '')
         if (!baseUrl) {
           throw new Error('Local OpenAI-compatible base URL is required')
         }
         apiUrl = `${baseUrl}/chat/completions`
+      } else if (normalized.preset === 'ollama') {
+        apiUrl = `${resolveProviderBaseUrl('ollama', normalized.baseUrl) || 'http://localhost:11434'}/v1/chat/completions`
       } else {
         apiUrl = `${resolveProviderBaseUrl('lmstudio', normalized.baseUrl) || 'http://localhost:1234'}/v1/chat/completions`
       }
@@ -1140,7 +1116,7 @@ async function callLLM(
         headers.Authorization = `Bearer ${normalized.apiKey}`
       }
       body = {
-        model: normalized.model || 'local-model',
+        model: normalized.model || getPresetSettings(normalized.preset).defaultModel,
         messages: [{ role: 'user', content: prompt }],
         temperature: 0.3,
         max_tokens: requestedMaxTokens ?? normalized.maxTokens ?? 420,

@@ -52,7 +52,7 @@ runTest('exposes preset defaults and API key metadata for settings rendering', (
   const [lmStudio] = getPresetOptions('local').filter((entry) => entry.value === 'lmstudio')
 
   assert.ok(customOpenAI)
-  assert.equal(customOpenAI.defaultModel, 'gpt-4o-mini')
+  assert.equal(customOpenAI.defaultModel, 'gpt-5-mini')
   assert.equal(customOpenAI.defaultBaseUrl, '')
   assert.equal(customOpenAI.apiKeyMode, 'optional')
   assert.equal(customOpenAI.docsUrl, undefined)
@@ -78,11 +78,11 @@ runTest('keeps legacy provider settings for existing callers', () => {
   const claude = getProviderSettings('claude')
 
   assert.equal(custom.value, 'custom')
-  assert.equal(custom.defaultModel, 'gpt-4o-mini')
+  assert.equal(custom.defaultModel, 'gpt-5-mini')
   assert.equal(custom.apiKeyMode, 'optional')
   assert.equal(custom.supportsBaseUrl, true)
 
   assert.equal(claude.value, 'claude')
-  assert.equal(claude.defaultModel, 'claude-3-sonnet-20240229')
+  assert.equal(claude.defaultModel, 'claude-opus-4-8')
   assert.equal(claude.docsUrl, 'https://console.anthropic.com')
 })

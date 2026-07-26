@@ -2,7 +2,7 @@
 
 import { LLMConfig, LLMPresetType, LLMProtocolType, LLMProvider, LLMProviderType } from '@/types/llm'
 import { migrateLegacyLLMConfig } from '@/services/llm-config-migration'
-import { ClaudeCompatibleProvider, LocalProvider, OpenAICompatibleProvider } from './llm-base'
+import { ClaudeCompatibleProvider, OpenAICompatibleProvider } from './llm-base'
 import { eventBus, EVENTS } from '@/utils/eventBus'
 import { STORAGE_KEYS } from '@/constants/storage'
 
@@ -28,7 +28,9 @@ export class LLMManager {
   private initializeProviders(): void {
     this.providers.set('openai', new OpenAICompatibleProvider())
     this.providers.set('claude', new ClaudeCompatibleProvider())
-    this.providers.set('local', new LocalProvider())
+    // Local runtimes speak the OpenAI wire protocol; 'local' stays a UI
+    // category but shares the OpenAI-compatible implementation
+    this.providers.set('local', new OpenAICompatibleProvider())
   }
 
   private loadSavedConfig(): void {
@@ -56,11 +58,10 @@ export class LLMManager {
   private createProtocolProvider(protocol: LLMProtocolType): LLMProvider {
     switch (protocol) {
       case 'openai':
+      case 'local':
         return new OpenAICompatibleProvider()
       case 'claude':
         return new ClaudeCompatibleProvider()
-      case 'local':
-        return new LocalProvider()
       default:
         throw new Error(`Unknown protocol: ${protocol}`)
     }

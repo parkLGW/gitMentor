@@ -87,23 +87,3 @@ export async function readClaudeMessageStream(response: Response): Promise<strin
   return content;
 }
 
-export async function readOllamaJsonStream(response: Response): Promise<string> {
-  let content = "";
-
-  await readStreamChunks(response, (line) => {
-    const payload = line.trim();
-    if (!payload) return;
-
-    try {
-      const data = JSON.parse(payload);
-      const chunk = data.message?.content ?? data.response;
-      if (typeof chunk === "string") {
-        content += chunk;
-      }
-    } catch {
-      // Ignore malformed json lines.
-    }
-  });
-
-  return content;
-}

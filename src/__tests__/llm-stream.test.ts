@@ -4,7 +4,6 @@ import test from "node:test";
 import {
   readClaudeMessageStream,
   readOpenAICompatibleStream,
-  readOllamaJsonStream,
 } from "../services/llm-stream.js";
 
 function createStreamResponse(chunks: string[]): Response {
@@ -47,15 +46,4 @@ test("readClaudeMessageStream collects text_delta events and ignores others", as
   const result = await readClaudeMessageStream(response);
 
   assert.equal(result, "你好");
-});
-
-test("readOllamaJsonStream concatenates streamed json lines", async () => {
-  const response = createStreamResponse([
-    '{"message":{"content":"foo"}}\n',
-    '{"message":{"content":"bar"}}\n',
-  ]);
-
-  const result = await readOllamaJsonStream(response);
-
-  assert.equal(result, "foobar");
 });
