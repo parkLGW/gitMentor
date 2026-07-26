@@ -131,10 +131,10 @@ test("shortenFilePathsForDisplay still compacts when there is no collision", () 
 test("getDisplayEvidence drops duplicate rows the model repeats", () => {
   const message = createAssistantMessage({
     evidence: [
-      { filePath: "packages/cli/README.md", reason: "明确说明认证不需要" },
-      { filePath: "packages/cli/README.md", reason: "明确说明认证不需要" },
-      { filePath: "src/auth.ts", reason: "no login path" },
-      { filePath: "src/other.ts", reason: "related_file" },
+      { filePath: "packages/cli/README.md", reason: "明确说明认证不需要", snippet: "No auth required" },
+      { filePath: "packages/cli/README.md", reason: "明确说明认证不需要", snippet: "No auth required" },
+      { filePath: "src/auth.ts", reason: "no login path", snippet: "export function auth()" },
+      { filePath: "src/other.ts", reason: "related_file", snippet: "" },
     ],
   });
 
