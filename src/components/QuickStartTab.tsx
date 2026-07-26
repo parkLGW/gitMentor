@@ -1,5 +1,5 @@
 // Quick Start Tab - AI 生成的快速入门指南
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { LoadingSpinner } from "./LoadingSpinner";
 import { collectQuickContext } from "@/services/context-collector";
 import { getRepoInfo } from "@/services/github";
@@ -20,18 +20,30 @@ function CodeBlock({
   isZh = false,
 }: {
   code: string;
-  language?: string;
   isZh?: boolean;
 }) {
-  const [copied, setCopied] = useState(false);
+  const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
+  const resetTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (resetTimerRef.current) clearTimeout(resetTimerRef.current);
+    };
+  }, []);
+
+  const flashCopyState = (state: "copied" | "failed") => {
+    setCopyState(state);
+    if (resetTimerRef.current) clearTimeout(resetTimerRef.current);
+    resetTimerRef.current = setTimeout(() => setCopyState("idle"), 2000);
+  };
 
   const handleCopy = async () => {
     try {
       await navigator.clipboard.writeText(code);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
+      flashCopyState("copied");
     } catch (err) {
       console.error("Copy failed:", err);
+      flashCopyState("failed");
     }
   };
 
@@ -45,7 +57,7 @@ function CodeBlock({
         className="absolute top-2 right-2 px-2 py-1 text-xs bg-gray-700 hover:bg-gray-600 text-gray-300 rounded opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-1"
         title={isZh ? "复制代码" : "Copy code"}
       >
-        {copied ? (
+        {copyState === "copied" ? (
           <>
             <svg
               className="w-3 h-3"
@@ -62,6 +74,8 @@ function CodeBlock({
             </svg>
             {isZh ? "已复制" : "Copied"}
           </>
+        ) : copyState === "failed" ? (
+          <span className="text-red-300">{isZh ? "复制失败" : "Copy failed"}</span>
         ) : (
           <>
             <svg
@@ -95,7 +109,9 @@ function QuickStartTab({ repo, language }: QuickStartTabProps) {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [isConfigured, setIsConfigured] = useState(false);
+  const [isConfigured, setIsConfigured] = useState(() => llmManager.isConfigured());
+  // Guards against a slow AI request resolving after the repo/language changed
+  const requestIdRef = useRef(0);
 
   const isZh = language === "zh";
 
@@ -122,6 +138,8 @@ function QuickStartTab({ repo, language }: QuickStartTabProps) {
   }, []);
 
   const loadData = async (clearCache = false) => {
+    const requestId = ++requestIdRef.current;
+    const isStale = () => requestId !== requestIdRef.current;
     const cacheKey = getCacheKey(repo.owner, repo.name, language);
 
     // 检查缓存
@@ -154,6 +172,7 @@ function QuickStartTab({ repo, language }: QuickStartTabProps) {
         collectQuickContext(repo.owner, repo.name),
         getRepoInfo(repo.owner, repo.name),
       ]);
+      if (isStale()) return false;
 
       const projectInfo = `Repository: ${repo.owner}/${repo.name}
 Stars: ${repoInfo.stars || "N/A"}
@@ -169,6 +188,7 @@ Description: ${repoInfo.description || "N/A"}`;
           : undefined,
         language,
       );
+      if (isStale()) return false;
 
       setGuide(result);
       setError(null);
@@ -182,6 +202,7 @@ Description: ${repoInfo.description || "N/A"}`;
 
       return true;
     } catch (err) {
+      if (isStale()) return false;
       console.error("[QuickStartTab] AI analysis error:", err);
       setError(err instanceof Error ? err.message : "AI analysis failed");
       return false;
@@ -189,12 +210,20 @@ Description: ${repoInfo.description || "N/A"}`;
   };
 
   useEffect(() => {
-    if (isConfigured) {
-      setLoading(true);
-      loadData().finally(() => setLoading(false));
-    } else {
+    if (!isConfigured) {
       setLoading(false);
+      return;
     }
+    let active = true;
+    setLoading(true);
+    loadData().finally(() => {
+      if (active) setLoading(false);
+    });
+    return () => {
+      active = false;
+      // Invalidate any in-flight request so its late result is discarded
+      requestIdRef.current++;
+    };
   }, [repo.owner, repo.name, isConfigured, language]);
 
   const handleRefresh = async () => {
@@ -365,11 +394,7 @@ Description: ${repoInfo.description || "N/A"}`;
             <h4 className="text-sm font-medium text-gray-700">
               {guide.firstExample.title}
             </h4>
-            <CodeBlock
-              code={guide.firstExample.code}
-              language="javascript"
-              isZh={isZh}
-            />
+            <CodeBlock code={guide.firstExample.code} isZh={isZh} />
             <p className="text-xs text-gray-600 pt-1">
               {guide.firstExample.explanation}
             </p>

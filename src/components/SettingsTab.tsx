@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { llmManager } from '@/services/llm'
 import { LLMConfig, LLMPresetType, LLMProtocolType } from '@/types/llm'
 import { migrateLegacyLLMConfig } from '@/services/llm-config-migration'
@@ -48,9 +48,32 @@ function SettingsTab({ language }: SettingsTabProps) {
   const [githubToken, setGithubToken] = useState('')
   const [testing, setTesting] = useState(false)
   const [testResult, setTestResult] = useState<boolean | null>(null)
-  const [saved, setSaved] = useState(false)
+  const [saving, setSaving] = useState(false)
+  const [clearing, setClearing] = useState(false)
+  const [clearConfirming, setClearConfirming] = useState(false)
+  const [notice, setNotice] = useState<{ kind: 'success' | 'error'; text: string } | null>(null)
   const [usageStats, setUsageStats] = useState<UsageStats | null>(null)
   const [savedConfig, setSavedConfig] = useState<LLMConfig | null>(null)
+  const noticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const clearConfirmTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  useEffect(() => {
+    return () => {
+      if (noticeTimerRef.current) clearTimeout(noticeTimerRef.current)
+      if (clearConfirmTimerRef.current) clearTimeout(clearConfirmTimerRef.current)
+    }
+  }, [])
+
+  const showNotice = (kind: 'success' | 'error', text: string) => {
+    if (noticeTimerRef.current) {
+      clearTimeout(noticeTimerRef.current)
+      noticeTimerRef.current = null
+    }
+    setNotice({ kind, text })
+    if (kind === 'success') {
+      noticeTimerRef.current = setTimeout(() => setNotice(null), 3000)
+    }
+  }
 
   const labels = {
     zh: {
@@ -65,6 +88,9 @@ function SettingsTab({ language }: SettingsTabProps) {
       save: '保存配置',
       clear: '清空当前配置',
       testing: '测试中...',
+      saving: '保存中...',
+      clearing: '清空中...',
+      clearConfirmBtn: '再次点击确认清空',
       connected: '✓ 连接成功',
       failed: '✗ 连接失败',
       saved: '✓ 已保存',
@@ -75,11 +101,10 @@ function SettingsTab({ language }: SettingsTabProps) {
       customHelp: '自定义模板适用于自建网关、反向代理和聚合服务。保存时会按对应协议自动规范化地址。',
       enterApiKey: '请输入 API 密钥',
       enterBaseUrl: '请输入基础 URL',
-      clearConfirm: '确定要清空当前配置吗？',
       clearSuccess: '当前配置已清空',
       clearFailed: '清空失败',
       saveFailed: '保存失败',
-      saveVerifyFailed: '配置保存验证失败，请重试',
+      saveVerifyFailed: '配置已写入，但校验回读不一致，请重新打开设置页确认',
       getApiKeys: '官方入口',
       noApiKeyNeeded: '当前预设不需要 API 密钥。',
       optionalApiKeyHint: '可留空，适用于不要求鉴权的兼容接口。',
@@ -105,6 +130,9 @@ function SettingsTab({ language }: SettingsTabProps) {
       save: 'Save Configuration',
       clear: 'Clear Current Configuration',
       testing: 'Testing...',
+      saving: 'Saving...',
+      clearing: 'Clearing...',
+      clearConfirmBtn: 'Click again to confirm',
       connected: '✓ Connected',
       failed: '✗ Failed',
       saved: '✓ Saved',
@@ -115,11 +143,10 @@ function SettingsTab({ language }: SettingsTabProps) {
       customHelp: 'Custom presets are for self-hosted gateways, reverse proxies, and aggregator APIs. The base URL is normalized according to the selected protocol when you save.',
       enterApiKey: 'Please enter an API key',
       enterBaseUrl: 'Please enter a base URL',
-      clearConfirm: 'Clear configuration for the current selection?',
       clearSuccess: 'Current configuration cleared',
       clearFailed: 'Clear failed',
       saveFailed: 'Save failed',
-      saveVerifyFailed: 'Config save verification failed, please try again',
+      saveVerifyFailed: 'Config was written but read-back verification failed; reopen Settings to confirm',
       getApiKeys: 'Official Links',
       noApiKeyNeeded: 'This preset does not require an API key.',
       optionalApiKeyHint: 'You can leave this blank for compatible endpoints without auth.',
@@ -216,8 +243,9 @@ function SettingsTab({ language }: SettingsTabProps) {
     }
 
     void loadSelectionConfig()
-    setSaved(false)
+    setNotice(null)
     setTestResult(null)
+    setClearConfirming(false)
 
     return () => {
       cancelled = true
@@ -263,28 +291,35 @@ function SettingsTab({ language }: SettingsTabProps) {
 
   const handleTest = async () => {
     setTesting(true)
+    setTestResult(null)
+    setNotice(null)
+
+    // Form validation errors must not be reported as connection failures
+    let config: LLMConfig
     try {
-      const config = buildConfig()
+      config = buildConfig()
+    } catch (error) {
+      showNotice('error', error instanceof Error ? error.message : String(error))
+      setTesting(false)
+      return
+    }
+
+    try {
       const success = await llmManager.testConfig(config)
       setTestResult(success)
     } catch (error) {
       setTestResult(false)
-      alert(error instanceof Error ? error.message : String(error))
     } finally {
       setTesting(false)
     }
   }
 
   const handleSave = async () => {
+    if (saving) return
+    setSaving(true)
+    setNotice(null)
     try {
       const config = buildConfig()
-      console.log('[SettingsTab] Saving config:', {
-        protocol: selectedProtocol,
-        preset: selectedPreset,
-        model: config.model,
-        hasApiKey: !!config.apiKey,
-        baseUrl: config.baseUrl,
-      })
 
       await llmManager.setCurrentConfig(config)
       await new Promise<void>((resolve) => {
@@ -302,21 +337,37 @@ function SettingsTab({ language }: SettingsTabProps) {
         const normalized = migrateLegacyLLMConfig(activeConfig)
         if (normalized.protocol === selectedProtocol && normalized.preset === selectedPreset) {
           setSavedConfig(activeConfig)
-          setSaved(true)
-          setTimeout(() => setSaved(false), 3000)
+          showNotice('success', t.saved)
           return
         }
       }
 
-      alert(t.saveVerifyFailed)
+      showNotice('error', t.saveVerifyFailed)
     } catch (error) {
       console.error('[SettingsTab] Save failed:', error)
-      alert(`${t.saveFailed}: ${error instanceof Error ? error.message : String(error)}`)
+      showNotice('error', `${t.saveFailed}: ${error instanceof Error ? error.message : String(error)}`)
+    } finally {
+      setSaving(false)
     }
   }
 
   const handleClear = async () => {
-    if (!confirm(t.clearConfirm)) return
+    if (clearing) return
+
+    // Two-step inline confirmation instead of a blocking native confirm()
+    if (!clearConfirming) {
+      setClearConfirming(true)
+      if (clearConfirmTimerRef.current) clearTimeout(clearConfirmTimerRef.current)
+      clearConfirmTimerRef.current = setTimeout(() => setClearConfirming(false), 4000)
+      return
+    }
+    if (clearConfirmTimerRef.current) {
+      clearTimeout(clearConfirmTimerRef.current)
+      clearConfirmTimerRef.current = null
+    }
+    setClearConfirming(false)
+    setClearing(true)
+    setNotice(null)
 
     try {
       await llmManager.clearConfig({ protocol: selectedProtocol, preset: selectedPreset })
@@ -326,11 +377,12 @@ function SettingsTab({ language }: SettingsTabProps) {
         return normalized.protocol === selectedProtocol && normalized.preset === selectedPreset ? null : current
       })
       applySelectionDefaults(selectedPreset)
-      setSaved(false)
       setTestResult(null)
-      alert(t.clearSuccess)
+      showNotice('success', t.clearSuccess)
     } catch (error) {
-      alert(`${t.clearFailed}: ${error instanceof Error ? error.message : String(error)}`)
+      showNotice('error', `${t.clearFailed}: ${error instanceof Error ? error.message : String(error)}`)
+    } finally {
+      setClearing(false)
     }
   }
 
@@ -362,10 +414,11 @@ function SettingsTab({ language }: SettingsTabProps) {
       </div>
 
       <div style={{ position: 'relative', zIndex: 1000 }}>
-        <label className="text-xs font-semibold text-gray-600 block mb-2">
+        <label htmlFor="settings-protocol" className="text-xs font-semibold text-gray-600 block mb-2">
           {t.connectionType}
         </label>
         <select
+          id="settings-protocol"
           value={selectedProtocol}
           onChange={(e) => handleProtocolChange(e.target.value as LLMProtocolType)}
           className="w-full px-2 py-2 border border-gray-300 rounded text-sm"
@@ -380,10 +433,11 @@ function SettingsTab({ language }: SettingsTabProps) {
       </div>
 
       <div style={{ position: 'relative', zIndex: 999 }}>
-        <label className="text-xs font-semibold text-gray-600 block mb-2">
+        <label htmlFor="settings-preset" className="text-xs font-semibold text-gray-600 block mb-2">
           {t.presetTemplate}
         </label>
         <select
+          id="settings-preset"
           value={selectedPreset}
           onChange={(e) => handlePresetChange(e.target.value as LLMPresetType)}
           className="w-full px-2 py-2 border border-gray-300 rounded text-sm"
@@ -399,10 +453,11 @@ function SettingsTab({ language }: SettingsTabProps) {
 
       {selectedPresetSettings.apiKeyMode !== 'none' ? (
         <div>
-          <label className="text-xs font-semibold text-gray-600 block mb-2">
+          <label htmlFor="settings-api-key" className="text-xs font-semibold text-gray-600 block mb-2">
             {selectedPresetSettings.apiKeyMode === 'optional' ? t.apiKeyOptional : t.apiKey}
           </label>
           <input
+            id="settings-api-key"
             type="password"
             value={apiKey}
             onChange={(e) => setApiKey(e.target.value)}
@@ -424,10 +479,11 @@ function SettingsTab({ language }: SettingsTabProps) {
       )}
 
       <div>
-        <label className="text-xs font-semibold text-gray-600 block mb-2">
+        <label htmlFor="settings-model" className="text-xs font-semibold text-gray-600 block mb-2">
           {t.model}
         </label>
         <input
+          id="settings-model"
           type="text"
           value={model}
           onChange={(e) => setModel(e.target.value)}
@@ -438,10 +494,11 @@ function SettingsTab({ language }: SettingsTabProps) {
 
       {selectedPresetSettings.supportsBaseUrl && (
         <div>
-          <label className="text-xs font-semibold text-gray-600 block mb-2">
+          <label htmlFor="settings-base-url" className="text-xs font-semibold text-gray-600 block mb-2">
             {t.baseUrl}
           </label>
           <input
+            id="settings-base-url"
             type="text"
             value={baseUrl}
             onChange={(e) => setBaseUrl(e.target.value)}
@@ -455,10 +512,11 @@ function SettingsTab({ language }: SettingsTabProps) {
       )}
 
       <div>
-        <label className="text-xs font-semibold text-gray-600 block mb-2">
+        <label htmlFor="settings-github-token" className="text-xs font-semibold text-gray-600 block mb-2">
           {t.githubToken}
         </label>
         <input
+          id="settings-github-token"
           type="password"
           value={githubToken}
           onChange={(e) => setGithubToken(e.target.value)}
@@ -487,22 +545,30 @@ function SettingsTab({ language }: SettingsTabProps) {
 
         <button
           onClick={handleSave}
-          className="w-full py-2 px-3 bg-green-500 hover:bg-green-600 text-white rounded text-sm font-medium transition"
+          disabled={saving}
+          className="w-full py-2 px-3 bg-green-500 hover:bg-green-600 disabled:bg-gray-400 text-white rounded text-sm font-medium transition"
         >
-          {t.save}
+          {saving ? t.saving : t.save}
         </button>
 
         <button
           onClick={handleClear}
-          className="w-full py-2 px-3 bg-gray-400 hover:bg-gray-500 text-white rounded text-sm font-medium transition"
+          disabled={clearing}
+          className={`w-full py-2 px-3 disabled:bg-gray-300 text-white rounded text-sm font-medium transition ${
+            clearConfirming ? 'bg-red-500 hover:bg-red-600' : 'bg-gray-400 hover:bg-gray-500'
+          }`}
         >
-          {t.clear}
+          {clearing ? t.clearing : clearConfirming ? t.clearConfirmBtn : t.clear}
         </button>
       </div>
 
-      {saved && (
-        <div className="p-2 rounded text-sm bg-green-100 text-green-900 text-center">
-          {t.saved}
+      {notice && (
+        <div
+          className={`p-2 rounded text-sm text-center ${
+            notice.kind === 'success' ? 'bg-green-100 text-green-900' : 'bg-red-100 text-red-900'
+          }`}
+        >
+          {notice.text}
         </div>
       )}
 

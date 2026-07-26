@@ -1261,9 +1261,26 @@ export async function runSecurityAudit(
   });
 
   let scannedFiles = 0;
-  for (const filePath of targetFiles) {
+  // Files are analyzed in order, but contents are prefetched a few files
+  // ahead so the scan is not bottlenecked by sequential network round-trips
+  const FETCH_AHEAD = 4;
+  const pendingContent = new Map<number, Promise<string | null>>();
+  const queueContentFetch = (index: number) => {
+    if (index >= targetFiles.length || pendingContent.has(index)) return;
+    pendingContent.set(
+      index,
+      getFileContent(repo.owner, repo.name, targetFiles[index], 480).catch(
+        () => null,
+      ),
+    );
+  };
+
+  for (let i = 0; i < targetFiles.length; i++) {
     if (findings.length >= merged.maxFindings) break;
-    const content = await getFileContent(repo.owner, repo.name, filePath, 480);
+    for (let j = i; j < i + FETCH_AHEAD; j++) queueContentFetch(j);
+    const filePath = targetFiles[i];
+    const content = await pendingContent.get(i)!;
+    pendingContent.delete(i);
     if (!content) continue;
 
     const approxKB = Math.ceil(content.length / 1024);

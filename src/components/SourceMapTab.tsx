@@ -502,6 +502,10 @@ function SourceMapTab({ repo, language, defaultBranch = 'main' }: SourceMapTabPr
     window.open(buildGithubBlobUrl(repo, path, defaultBranch), '_blank')
   }, [defaultBranch, repo])
 
+  const handleDiagramError = useCallback((err: string) => {
+    console.warn('[SourceMapTab] Mermaid error:', err)
+  }, [])
+
   const displayLearningPath = useMemo(() => {
     if (!sourceMap) return []
     const normalizeFile = (path: string) => String(path || '').replace(/\\/g, '/').trim()
@@ -676,9 +680,10 @@ function SourceMapTab({ repo, language, defaultBranch = 'main' }: SourceMapTabPr
           <div className="space-y-4">
             {sourceMap.mermaidDiagram ? (
               <div className="bg-white border border-gray-200 rounded p-4 overflow-x-auto">
-                <MermaidDiagram 
-                  chart={sourceMap.mermaidDiagram} 
-                  onError={(err) => console.warn('[SourceMapTab] Mermaid error:', err)}
+                <MermaidDiagram
+                  chart={sourceMap.mermaidDiagram}
+                  language={language}
+                  onError={handleDiagramError}
                 />
               </div>
             ) : (

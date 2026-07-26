@@ -6,7 +6,41 @@ import mermaid from 'mermaid'
 interface MermaidDiagramProps {
   chart: string
   className?: string
+  language?: 'zh' | 'en'
   onError?: (error: string) => void
+}
+
+const diagramLabels = {
+  zh: {
+    windowTitle: '架构图 - GitMentor',
+    title: '架构图',
+    zoomIn: '放大',
+    zoomOut: '缩小',
+    resetZoom: '重置缩放',
+    close: '关闭',
+    closeEsc: '关闭 (ESC)',
+    openInNewWindow: '在新窗口打开',
+    fullscreen: '全屏查看',
+    rendering: '渲染图表中...',
+    renderFailed: '图表渲染失败',
+    viewSource: '查看原始图表代码',
+    empty: '暂无架构图',
+  },
+  en: {
+    windowTitle: 'Architecture Diagram - GitMentor',
+    title: 'Architecture Diagram',
+    zoomIn: 'Zoom in',
+    zoomOut: 'Zoom out',
+    resetZoom: 'Reset zoom',
+    close: 'Close',
+    closeEsc: 'Close (ESC)',
+    openInNewWindow: 'Open in new window',
+    fullscreen: 'Fullscreen',
+    rendering: 'Rendering diagram...',
+    renderFailed: 'Diagram rendering failed',
+    viewSource: 'View diagram source',
+    empty: 'No architecture diagram',
+  },
 }
 
 // SVG 缓存，避免重复渲染
@@ -55,7 +89,8 @@ function getCacheKey(chart: string): string {
   return `mermaid_${hash}`
 }
 
-export function MermaidDiagram({ chart, className = '', onError }: MermaidDiagramProps) {
+export function MermaidDiagram({ chart, className = '', language = 'zh', onError }: MermaidDiagramProps) {
+  const t = diagramLabels[language]
   const [svg, setSvg] = useState<string>('')
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
@@ -166,7 +201,7 @@ export function MermaidDiagram({ chart, className = '', onError }: MermaidDiagra
         <html>
         <head>
           <meta charset="UTF-8">
-          <title>架构图 - GitMentor</title>
+          <title>${t.windowTitle}</title>
           <style>
             * { margin: 0; padding: 0; box-sizing: border-box; }
             html, body {
@@ -253,23 +288,23 @@ export function MermaidDiagram({ chart, className = '', onError }: MermaidDiagra
         <body>
           <div class="main-container">
             <div class="header">
-              <span class="title">架构图</span>
+              <span class="title">${t.title}</span>
               <div class="controls">
-                <button class="btn" id="zoomOutBtn" title="缩小">
+                <button class="btn" id="zoomOutBtn" title="${t.zoomOut}">
                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <path d="M20 12H4" stroke-linecap="round" stroke-linejoin="round"/>
                   </svg>
                 </button>
                 <span class="zoom-level" id="zoomLevel">100%</span>
-                <button class="btn" id="zoomInBtn" title="放大">
+                <button class="btn" id="zoomInBtn" title="${t.zoomIn}">
                   <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <path d="M12 4v16m8-8H4" stroke-linecap="round" stroke-linejoin="round"/>
                   </svg>
                 </button>
-                <button class="btn" id="resetZoomBtn" title="重置缩放" style="font-size: 12px; color: #666; padding: 6px 10px;">
+                <button class="btn" id="resetZoomBtn" title="${t.resetZoom}" style="font-size: 12px; color: #666; padding: 6px 10px;">
                   1:1
                 </button>
-                <button class="btn" id="closeBtn" title="关闭 (ESC)" style="margin-left: 8px;">
+                <button class="btn" id="closeBtn" title="${t.closeEsc}" style="margin-left: 8px;">
                   <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <path d="M6 18L18 6M6 6l12 12" stroke-linecap="round" stroke-linejoin="round"/>
                   </svg>
@@ -297,7 +332,7 @@ export function MermaidDiagram({ chart, className = '', onError }: MermaidDiagra
         initZoomFunctionality(newWindow)
       }
     }
-  }, [svg])
+  }, [svg, t])
   
   // 初始化缩放功能的辅助函数
   function initZoomFunctionality(win: Window) {
@@ -370,7 +405,8 @@ export function MermaidDiagram({ chart, className = '', onError }: MermaidDiagra
         <!DOCTYPE html>
         <html>
         <head>
-          <title>架构图 - GitMentor</title>
+          <meta charset="UTF-8">
+          <title>${t.windowTitle}</title>
           <style>
             * { margin: 0; padding: 0; box-sizing: border-box; }
             body {
@@ -429,23 +465,23 @@ export function MermaidDiagram({ chart, className = '', onError }: MermaidDiagra
         </head>
         <body>
           <div class="header">
-            <span class="title">架构图</span>
+            <span class="title">${t.title}</span>
             <div class="controls">
-              <button class="btn" onclick="zoomOut()" title="缩小">
+              <button class="btn" onclick="zoomOut()" title="${t.zoomOut}">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                   <path d="M20 12H4" stroke-linecap="round" stroke-linejoin="round"/>
                 </svg>
               </button>
               <span class="zoom-level" id="zoomLevel">100%</span>
-              <button class="btn" onclick="zoomIn()" title="放大">
+              <button class="btn" onclick="zoomIn()" title="${t.zoomIn}">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                   <path d="M12 4v16m8-8H4" stroke-linecap="round" stroke-linejoin="round"/>
                 </svg>
               </button>
-              <button class="btn" onclick="resetZoom()" title="重置缩放" style="font-size: 12px; color: #666; padding: 6px 10px;">
+              <button class="btn" onclick="resetZoom()" title="${t.resetZoom}" style="font-size: 12px; color: #666; padding: 6px 10px;">
                 1:1
               </button>
-              <button class="btn" onclick="window.close()" title="关闭" style="margin-left: 8px;">
+              <button class="btn" onclick="window.close()" title="${t.close}" style="margin-left: 8px;">
                 <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                   <path d="M6 18L18 6M6 6l12 12" stroke-linecap="round" stroke-linejoin="round"/>
                 </svg>
@@ -496,14 +532,14 @@ export function MermaidDiagram({ chart, className = '', onError }: MermaidDiagra
       `)
       newWindow.document.close()
     }
-  }, [svg])
+  }, [svg, t])
 
   if (loading) {
     return (
       <div className={`flex items-center justify-center p-8 ${className}`}>
         <div className="flex flex-col items-center gap-2">
           <div className="w-6 h-6 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin" />
-          <span className="text-sm text-gray-500">渲染图表中...</span>
+          <span className="text-sm text-gray-500">{t.rendering}</span>
         </div>
       </div>
     )
@@ -515,10 +551,10 @@ export function MermaidDiagram({ chart, className = '', onError }: MermaidDiagra
         <div className="flex items-start gap-2">
           <span className="text-red-500">!</span>
           <div>
-            <p className="text-sm font-medium text-red-800">图表渲染失败</p>
+            <p className="text-sm font-medium text-red-800">{t.renderFailed}</p>
             <p className="text-xs text-red-600 mt-1">{error}</p>
             <details className="mt-2">
-              <summary className="text-xs text-red-500 cursor-pointer">查看原始图表代码</summary>
+              <summary className="text-xs text-red-500 cursor-pointer">{t.viewSource}</summary>
               <pre className="mt-2 p-2 bg-red-100 rounded text-xs overflow-x-auto">
                 {chart}
               </pre>
@@ -532,7 +568,7 @@ export function MermaidDiagram({ chart, className = '', onError }: MermaidDiagra
   if (!svg) {
     return (
       <div className={`p-4 bg-gray-50 border border-gray-200 rounded-lg text-center ${className}`}>
-        <span className="text-sm text-gray-500">暂无架构图</span>
+        <span className="text-sm text-gray-500">{t.empty}</span>
       </div>
     )
   }
@@ -566,7 +602,7 @@ export function MermaidDiagram({ chart, className = '', onError }: MermaidDiagra
           onClick={zoomOut}
           disabled={scale <= 0.5}
           className="p-1.5 text-gray-600 hover:bg-gray-200 rounded disabled:opacity-30 disabled:cursor-not-allowed"
-          title="缩小"
+          title={t.zoomOut}
         >
           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20 12H4" />
@@ -577,7 +613,7 @@ export function MermaidDiagram({ chart, className = '', onError }: MermaidDiagra
           onClick={zoomIn}
           disabled={scale >= 3}
           className="p-1.5 text-gray-600 hover:bg-gray-200 rounded disabled:opacity-30 disabled:cursor-not-allowed"
-          title="放大"
+          title={t.zoomIn}
         >
           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
@@ -586,7 +622,7 @@ export function MermaidDiagram({ chart, className = '', onError }: MermaidDiagra
         <button
           onClick={resetZoom}
           className="p-1.5 text-gray-600 hover:bg-gray-200 rounded text-xs ml-1"
-          title="重置缩放"
+          title={t.resetZoom}
         >
           1:1
         </button>
@@ -595,7 +631,7 @@ export function MermaidDiagram({ chart, className = '', onError }: MermaidDiagra
         <button
           onClick={openInNewWindow}
           className="p-1.5 text-gray-600 hover:bg-gray-200 rounded"
-          title="在新窗口打开"
+          title={t.openInNewWindow}
         >
           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
@@ -604,7 +640,7 @@ export function MermaidDiagram({ chart, className = '', onError }: MermaidDiagra
         <button
           onClick={toggleFullscreen}
           className="p-1.5 text-gray-600 hover:bg-gray-200 rounded"
-          title="全屏查看"
+          title={t.fullscreen}
         >
           <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 5l-5-5m5 5v-4m0 4h-4" />
