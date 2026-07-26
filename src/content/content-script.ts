@@ -1066,6 +1066,16 @@ function renderDeepAnalysis(
   input.placeholder = currentLanguage === 'zh' ? '关于此文件提问...' : 'Ask about this file...'
   input.style.cssText = themedStyle(
     'flex:1;padding:8px 12px;border:1px solid #e1e4e8;border-radius:6px;font-size:12px;outline:none;background:#fff;color:#24292e;')
+  // Inline styles cannot express :focus, so emulate the focus ring by hand
+  input.addEventListener('focus', () => {
+    const accent = isGithubDarkMode() ? '#79c0ff' : '#0969da'
+    input.style.borderColor = accent
+    input.style.boxShadow = `0 0 0 1px ${accent}`
+  })
+  input.addEventListener('blur', () => {
+    input.style.borderColor = isGithubDarkMode() ? '#30363d' : '#e1e4e8'
+    input.style.boxShadow = 'none'
+  })
   const askBtn = document.createElement('button')
   askBtn.id = 'gitmentor-ask-btn'
   askBtn.textContent = currentLanguage === 'zh' ? '提问' : 'Ask'

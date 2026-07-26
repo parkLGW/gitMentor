@@ -517,7 +517,7 @@ function SecurityAuditTab({ repo, language, defaultBranch = "main" }: SecurityAu
                     useAdvancedMode: e.target.value === "advanced",
                   }))
                 }
-                className="border border-gray-300 rounded px-1 py-0.5"
+                className="border border-gray-300 rounded px-2 py-1 outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
               >
                 <option value="standard">{t.standard}</option>
                 <option value="advanced">{t.advanced}</option>
@@ -534,7 +534,7 @@ function SecurityAuditTab({ repo, language, defaultBranch = "main" }: SecurityAu
                     policyProfile: e.target.value as PolicyProfile,
                   }))
                 }
-                className="border border-gray-300 rounded px-1 py-0.5"
+                className="border border-gray-300 rounded px-2 py-1 outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
               >
                 <option value="strict">{t.strict}</option>
                 <option value="balanced">{t.balanced}</option>
@@ -555,7 +555,7 @@ function SecurityAuditTab({ repo, language, defaultBranch = "main" }: SecurityAu
                     maxFindings: Number(e.target.value || 180),
                   }))
                 }
-                className="w-20 border border-gray-300 rounded px-1 py-0.5"
+                className="w-20 border border-gray-300 rounded px-2 py-1 outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
               />
             </label>
 
@@ -572,7 +572,7 @@ function SecurityAuditTab({ repo, language, defaultBranch = "main" }: SecurityAu
                     riskScoreThreshold: Number(e.target.value || 70),
                   }))
                 }
-                className="w-20 border border-gray-300 rounded px-1 py-0.5"
+                className="w-20 border border-gray-300 rounded px-2 py-1 outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
               />
             </label>
           </div>
@@ -593,6 +593,7 @@ function SecurityAuditTab({ repo, language, defaultBranch = "main" }: SecurityAu
               >
                 <input
                   type="checkbox"
+                  className="accent-blue-600"
                   checked={Boolean((options as any)[key])}
                   onChange={(e) =>
                     setOptions((prev: any) => ({
@@ -620,7 +621,7 @@ function SecurityAuditTab({ repo, language, defaultBranch = "main" }: SecurityAu
                 }))
               }
               placeholder="optional-baseline-id"
-              className="w-full border border-gray-300 rounded px-2 py-1 text-xs"
+              className="w-full border border-gray-300 rounded px-2 py-1.5 text-xs outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
             />
           </div>
 
@@ -628,6 +629,7 @@ function SecurityAuditTab({ repo, language, defaultBranch = "main" }: SecurityAu
             <label className="text-xs flex items-center gap-2">
               <input
                 type="checkbox"
+                className="accent-blue-600"
                 checked={options.remember}
                 onChange={(e) =>
                   setOptions((prev) => ({

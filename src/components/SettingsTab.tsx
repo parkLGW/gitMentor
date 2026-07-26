@@ -18,6 +18,12 @@ interface SettingsTabProps {
   language: 'zh' | 'en'
 }
 
+const inputClass =
+  'w-full px-2.5 py-2 border border-gray-300 rounded text-sm outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500'
+const labelClass = 'text-xs font-semibold text-gray-600 block mb-1.5'
+const sectionClass = 'border border-gray-200 rounded-lg p-4 space-y-3'
+const sectionTitleClass = 'text-sm font-semibold text-gray-900'
+
 function resolveBaseUrlForPreset(preset: LLMPresetType, baseUrl: string): string {
   const trimmed = baseUrl.trim()
   if (!trimmed) return ''
@@ -95,10 +101,8 @@ function SettingsTab({ language }: SettingsTabProps) {
       connected: '✓ 连接成功',
       failed: '✗ 连接失败',
       saved: '✓ 已保存',
+      aiSection: 'AI 服务',
       info: '先选择协议类型，再选择模板预设。支持官方接口、自建兼容网关和本地模型服务，配置只保存在浏览器本地。',
-      selectionDetails: '当前选择',
-      selectedProtocol: '连接类型',
-      selectedPreset: '模板预设',
       customHelp: '自定义模板适用于自建网关、反向代理和聚合服务。保存时会按对应协议自动规范化地址。',
       enterApiKey: '请输入 API 密钥',
       enterBaseUrl: '请输入基础 URL',
@@ -137,10 +141,8 @@ function SettingsTab({ language }: SettingsTabProps) {
       connected: '✓ Connected',
       failed: '✗ Failed',
       saved: '✓ Saved',
+      aiSection: 'AI Service',
       info: 'Choose a protocol first, then a preset template. Supports official APIs, self-hosted compatible gateways, and local model services. Configuration stays in browser local storage only.',
-      selectionDetails: 'Current Selection',
-      selectedProtocol: 'Connection Type',
-      selectedPreset: 'Preset Template',
       customHelp: 'Custom presets are for self-hosted gateways, reverse proxies, and aggregator APIs. The base URL is normalized according to the selected protocol when you save.',
       enterApiKey: 'Please enter an API key',
       enterBaseUrl: 'Please enter a base URL',
@@ -165,7 +167,6 @@ function SettingsTab({ language }: SettingsTabProps) {
 
   const t = labels[language]
   const presetOptions = useMemo(() => getPresetOptions(selectedProtocol), [selectedProtocol])
-  const selectedProtocolOption = protocolOptions.find((option) => option.value === selectedProtocol) || protocolOptions[0]
   const selectedPresetSettings = getPresetSettings(selectedPreset)
 
   const applySelectionDefaults = (preset: LLMPresetType, config?: Partial<LLMConfig> | null) => {
@@ -389,127 +390,154 @@ function SettingsTab({ language }: SettingsTabProps) {
 
   return (
     <div className="space-y-4 p-4">
-      <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
-        <p className="text-xs text-blue-900">{t.info}</p>
-      </div>
-
-      <div className="bg-gray-50 border border-gray-200 rounded-lg p-3">
-        <p className="text-xs font-semibold text-gray-600 mb-1">{t.selectionDetails}</p>
-        <p className="text-sm font-semibold text-gray-900">
-          {selectedPresetSettings.label[language]}
-        </p>
-        <p className="text-xs text-gray-600 mt-1">
-          {selectedPresetSettings.description[language]}
-        </p>
-        <div className="mt-2 space-y-1 text-xs text-gray-500">
-          <p>{t.selectedProtocol}: {selectedProtocolOption.label[language]}</p>
-          <p>{t.selectedPreset}: {selectedPresetSettings.label[language]}</p>
+      {/* AI service */}
+      <section className={sectionClass}>
+        <div>
+          <h3 className={sectionTitleClass}>{t.aiSection}</h3>
+          <p className="text-xs text-gray-500 mt-1">{t.info}</p>
         </div>
-        {(selectedPreset === 'custom-openai' || selectedPreset === 'custom-claude' || selectedPreset === 'custom-local') && (
-          <p className="text-xs text-blue-700 mt-2">{t.customHelp}</p>
+
+        <div>
+          <label htmlFor="settings-protocol" className={labelClass}>
+            {t.connectionType}
+          </label>
+          <select
+            id="settings-protocol"
+            value={selectedProtocol}
+            onChange={(e) => handleProtocolChange(e.target.value as LLMProtocolType)}
+            className={inputClass}
+          >
+            {protocolOptions.map((opt) => (
+              <option key={opt.value} value={opt.value}>
+                {opt.label[language]}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div>
+          <label htmlFor="settings-preset" className={labelClass}>
+            {t.presetTemplate}
+          </label>
+          <select
+            id="settings-preset"
+            value={selectedPreset}
+            onChange={(e) => handlePresetChange(e.target.value as LLMPresetType)}
+            className={inputClass}
+          >
+            {presetOptions.map((opt) => (
+              <option key={opt.value} value={opt.value}>
+                {opt.label[language]} {opt.cost ? `(${opt.cost})` : ''}
+              </option>
+            ))}
+          </select>
+          <p className="text-xs text-gray-500 mt-1">
+            {selectedPresetSettings.description[language]}
+          </p>
+          {(selectedPreset === 'custom-openai' || selectedPreset === 'custom-claude' || selectedPreset === 'custom-local') && (
+            <p className="text-xs text-blue-700 mt-1">{t.customHelp}</p>
+          )}
+        </div>
+
+        {selectedPresetSettings.apiKeyMode !== 'none' ? (
+          <div>
+            <label htmlFor="settings-api-key" className={labelClass}>
+              {selectedPresetSettings.apiKeyMode === 'optional' ? t.apiKeyOptional : t.apiKey}
+            </label>
+            <input
+              id="settings-api-key"
+              type="password"
+              value={apiKey}
+              onChange={(e) => setApiKey(e.target.value)}
+              placeholder={
+                selectedPresetSettings.apiKeyMode === 'optional'
+                  ? t.optionalApiKeyHint
+                  : `${selectedPresetSettings.label[language]} ${t.apiKey}`
+              }
+              className={inputClass}
+            />
+            <p className="text-xs text-gray-500 mt-1">
+              {selectedPresetSettings.apiKeyMode === 'optional' ? t.optionalApiKeyHint : t.localStorageHint}
+            </p>
+          </div>
+        ) : (
+          <div className="bg-gray-50 border border-gray-200 rounded p-3 text-xs text-gray-600">
+            {t.noApiKeyNeeded}
+          </div>
         )}
-      </div>
 
-      <div style={{ position: 'relative', zIndex: 1000 }}>
-        <label htmlFor="settings-protocol" className="text-xs font-semibold text-gray-600 block mb-2">
-          {t.connectionType}
-        </label>
-        <select
-          id="settings-protocol"
-          value={selectedProtocol}
-          onChange={(e) => handleProtocolChange(e.target.value as LLMProtocolType)}
-          className="w-full px-2 py-2 border border-gray-300 rounded text-sm"
-          style={{ position: 'relative', zIndex: 1001 }}
-        >
-          {protocolOptions.map((opt) => (
-            <option key={opt.value} value={opt.value}>
-              {opt.label[language]}
-            </option>
-          ))}
-        </select>
-      </div>
-
-      <div style={{ position: 'relative', zIndex: 999 }}>
-        <label htmlFor="settings-preset" className="text-xs font-semibold text-gray-600 block mb-2">
-          {t.presetTemplate}
-        </label>
-        <select
-          id="settings-preset"
-          value={selectedPreset}
-          onChange={(e) => handlePresetChange(e.target.value as LLMPresetType)}
-          className="w-full px-2 py-2 border border-gray-300 rounded text-sm"
-          style={{ position: 'relative', zIndex: 1000 }}
-        >
-          {presetOptions.map((opt) => (
-            <option key={opt.value} value={opt.value}>
-              {opt.label[language]} {opt.cost ? `(${opt.cost})` : ''}
-            </option>
-          ))}
-        </select>
-      </div>
-
-      {selectedPresetSettings.apiKeyMode !== 'none' ? (
         <div>
-          <label htmlFor="settings-api-key" className="text-xs font-semibold text-gray-600 block mb-2">
-            {selectedPresetSettings.apiKeyMode === 'optional' ? t.apiKeyOptional : t.apiKey}
+          <label htmlFor="settings-model" className={labelClass}>
+            {t.model}
           </label>
           <input
-            id="settings-api-key"
-            type="password"
-            value={apiKey}
-            onChange={(e) => setApiKey(e.target.value)}
-            placeholder={
-              selectedPresetSettings.apiKeyMode === 'optional'
-                ? t.optionalApiKeyHint
-                : `${selectedPresetSettings.label[language]} ${t.apiKey}`
-            }
-            className="w-full px-2 py-2 border border-gray-300 rounded text-sm"
-          />
-          <p className="text-xs text-gray-500 mt-1">
-            {selectedPresetSettings.apiKeyMode === 'optional' ? t.optionalApiKeyHint : t.localStorageHint}
-          </p>
-        </div>
-      ) : (
-        <div className="bg-gray-50 border border-gray-200 rounded p-3 text-xs text-gray-600">
-          {t.noApiKeyNeeded}
-        </div>
-      )}
-
-      <div>
-        <label htmlFor="settings-model" className="text-xs font-semibold text-gray-600 block mb-2">
-          {t.model}
-        </label>
-        <input
-          id="settings-model"
-          type="text"
-          value={model}
-          onChange={(e) => setModel(e.target.value)}
-          placeholder={selectedPresetSettings.modelPlaceholder || selectedPresetSettings.defaultModel}
-          className="w-full px-2 py-2 border border-gray-300 rounded text-sm"
-        />
-      </div>
-
-      {selectedPresetSettings.supportsBaseUrl && (
-        <div>
-          <label htmlFor="settings-base-url" className="text-xs font-semibold text-gray-600 block mb-2">
-            {t.baseUrl}
-          </label>
-          <input
-            id="settings-base-url"
+            id="settings-model"
             type="text"
-            value={baseUrl}
-            onChange={(e) => setBaseUrl(e.target.value)}
-            placeholder={selectedPresetSettings.baseUrlPlaceholder || selectedPresetSettings.defaultBaseUrl}
-            className="w-full px-2 py-2 border border-gray-300 rounded text-sm"
+            value={model}
+            onChange={(e) => setModel(e.target.value)}
+            placeholder={selectedPresetSettings.modelPlaceholder || selectedPresetSettings.defaultModel}
+            className={inputClass}
           />
-          <p className="text-xs text-gray-500 mt-1">
-            {selectedPresetSettings.baseUrlHint?.[language] || t.baseUrlAutoHint}
-          </p>
         </div>
-      )}
 
-      <div>
-        <label htmlFor="settings-github-token" className="text-xs font-semibold text-gray-600 block mb-2">
+        {selectedPresetSettings.supportsBaseUrl && (
+          <div>
+            <label htmlFor="settings-base-url" className={labelClass}>
+              {t.baseUrl}
+            </label>
+            <input
+              id="settings-base-url"
+              type="text"
+              value={baseUrl}
+              onChange={(e) => setBaseUrl(e.target.value)}
+              placeholder={selectedPresetSettings.baseUrlPlaceholder || selectedPresetSettings.defaultBaseUrl}
+              className={inputClass}
+            />
+            <p className="text-xs text-gray-500 mt-1">
+              {selectedPresetSettings.baseUrlHint?.[language] || t.baseUrlAutoHint}
+            </p>
+          </div>
+        )}
+
+        {testResult !== null && (
+          <div className={`p-2 rounded text-sm ${testResult ? 'bg-green-100 text-green-900' : 'bg-red-100 text-red-900'}`}>
+            {testResult ? t.connected : t.failed}
+          </div>
+        )}
+
+        {notice && (
+          <div
+            className={`p-2 rounded text-sm text-center ${
+              notice.kind === 'success' ? 'bg-green-100 text-green-900' : 'bg-red-100 text-red-900'
+            }`}
+          >
+            {notice.text}
+          </div>
+        )}
+
+        <div className="flex gap-2 pt-1">
+          <Button className="flex-1" onClick={handleSave} disabled={saving}>
+            {saving ? t.saving : t.save}
+          </Button>
+          <Button variant="secondary" onClick={handleTest} disabled={testing}>
+            {testing ? t.testing : t.testConnection}
+          </Button>
+        </div>
+        <div className="flex justify-end">
+          <Button
+            size="sm"
+            variant={clearConfirming ? 'danger' : 'secondary'}
+            onClick={handleClear}
+            disabled={clearing}
+          >
+            {clearing ? t.clearing : clearConfirming ? t.clearConfirmBtn : t.clear}
+          </Button>
+        </div>
+      </section>
+
+      {/* GitHub token */}
+      <section className={sectionClass}>
+        <label htmlFor="settings-github-token" className={sectionTitleClass + ' block'}>
           {t.githubToken}
         </label>
         <input
@@ -518,90 +546,57 @@ function SettingsTab({ language }: SettingsTabProps) {
           value={githubToken}
           onChange={(e) => setGithubToken(e.target.value)}
           placeholder="ghp_xxx"
-          className="w-full px-2 py-2 border border-gray-300 rounded text-sm"
+          className={inputClass}
         />
-        <p className="text-xs text-gray-500 mt-1">
+        <p className="text-xs text-gray-500">
           {t.githubTokenHint} {t.githubTokenTip}
         </p>
-      </div>
+      </section>
 
-      {testResult !== null && (
-        <div className={`p-2 rounded text-sm ${testResult ? 'bg-green-100 text-green-900' : 'bg-red-100 text-red-900'}`}>
-          {testResult ? t.connected : t.failed}
-        </div>
-      )}
-
-      <div className="space-y-2">
-        <Button fullWidth onClick={handleSave} disabled={saving}>
-          {saving ? t.saving : t.save}
-        </Button>
-
-        <Button fullWidth variant="secondary" onClick={handleTest} disabled={testing}>
-          {testing ? t.testing : t.testConnection}
-        </Button>
-
-        <Button
-          fullWidth
-          variant={clearConfirming ? 'danger' : 'secondary'}
-          onClick={handleClear}
-          disabled={clearing}
-        >
-          {clearing ? t.clearing : clearConfirming ? t.clearConfirmBtn : t.clear}
-        </Button>
-      </div>
-
-      {notice && (
-        <div
-          className={`p-2 rounded text-sm text-center ${
-            notice.kind === 'success' ? 'bg-green-100 text-green-900' : 'bg-red-100 text-red-900'
-          }`}
-        >
-          {notice.text}
-        </div>
-      )}
-
-      {usageStats && usageStats.totalCalls > 0 && (
-        <div className="bg-yellow-50 border border-yellow-200 rounded p-3">
-          <p className="font-semibold text-sm text-yellow-800 mb-2">{t.usageTitle}</p>
-          <div className="grid grid-cols-2 gap-2 text-xs">
-            <div className="bg-white rounded p-2">
-              <div className="text-gray-500">{t.apiCalls}</div>
-              <div className="text-lg font-bold text-gray-800">{usageStats.totalCalls}</div>
+      {/* Usage & links */}
+      <section className={sectionClass}>
+        {usageStats && usageStats.totalCalls > 0 && (
+          <div className="space-y-2">
+            <h3 className={sectionTitleClass}>{t.usageTitle}</h3>
+            <div className="grid grid-cols-3 gap-2 text-center">
+              <div className="bg-gray-50 rounded p-2">
+                <div className="text-[11px] text-gray-500">{t.apiCalls}</div>
+                <div className="text-sm font-bold text-gray-900">{usageStats.totalCalls}</div>
+              </div>
+              <div className="bg-gray-50 rounded p-2">
+                <div className="text-[11px] text-gray-500">{t.totalTokens}</div>
+                <div className="text-sm font-bold text-gray-900">{usageStats.totalTokens.toLocaleString()}</div>
+              </div>
+              <div className="bg-gray-50 rounded p-2">
+                <div className="text-[11px] text-gray-500">{t.estimatedCost}</div>
+                <div className="text-sm font-bold text-gray-900">${usageStats.estimatedCost.toFixed(4)}</div>
+              </div>
             </div>
-            <div className="bg-white rounded p-2">
-              <div className="text-gray-500">{t.totalTokens}</div>
-              <div className="text-lg font-bold text-gray-800">{usageStats.totalTokens.toLocaleString()}</div>
-            </div>
-            <div className="bg-white rounded p-2 col-span-2">
-              <div className="text-gray-500">{t.estimatedCost}</div>
-              <div className="text-lg font-bold text-green-600">${usageStats.estimatedCost.toFixed(4)}</div>
-            </div>
+            <p className="text-xs text-gray-400">{t.cacheHint}</p>
           </div>
-          <div className="mt-2 text-xs text-yellow-700">{t.cacheHint}</div>
-        </div>
-      )}
+        )}
 
-      <div className="bg-gray-50 border border-gray-200 rounded p-3 text-xs text-gray-600">
-        <p className="font-semibold mb-2">{t.getApiKeys}</p>
-        <ul className="space-y-1">
-          {allPresetOptions
-            .filter((opt) => opt.docsUrl)
-            .map((opt) => (
-              <li key={opt.value}>
-                • {opt.label[language]}:{' '}
-                <a
-                  href={opt.docsUrl}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="text-blue-600 hover:underline"
-                >
-                  {opt.docsUrl?.replace(/^https?:\/\//, '')}
-                </a>
-              </li>
-            ))}
-          <li>• {selectedPresetSettings.label[language]}: {selectedPresetSettings.apiKeyMode === 'optional' ? t.customHelp : t.localStorageHint}</li>
-        </ul>
-      </div>
+        <div className="space-y-2">
+          <h3 className={sectionTitleClass}>{t.getApiKeys}</h3>
+          <ul className="space-y-1 text-xs text-gray-600">
+            {allPresetOptions
+              .filter((opt) => opt.docsUrl)
+              .map((opt) => (
+                <li key={opt.value}>
+                  {opt.label[language]}:{' '}
+                  <a
+                    href={opt.docsUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="text-blue-600 hover:underline"
+                  >
+                    {opt.docsUrl?.replace(/^https?:\/\//, '')}
+                  </a>
+                </li>
+              ))}
+          </ul>
+        </div>
+      </section>
     </div>
   )
 }
