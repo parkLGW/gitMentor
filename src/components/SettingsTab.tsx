@@ -6,6 +6,7 @@ import { migrateLegacyLLMConfig } from '@/services/llm-config-migration'
 import { normalizeClaudeCompatibleBaseUrl } from '@/services/claude-compatible-utils'
 import { STORAGE_KEYS } from '@/constants/storage'
 import { usageTracker, UsageStats } from '@/services/usage-tracker'
+import { fetchAvailableModels } from '@/services/llm-models'
 import {
   getDefaultPresetForProtocol,
   getPresetOptions,
@@ -56,6 +57,8 @@ function SettingsTab({ language }: SettingsTabProps) {
   const [testing, setTesting] = useState(false)
   const [testResult, setTestResult] = useState<boolean | null>(null)
   const [saving, setSaving] = useState(false)
+  const [availableModels, setAvailableModels] = useState<string[]>([])
+  const [modelsLoading, setModelsLoading] = useState(false)
   const [clearing, setClearing] = useState(false)
   const [clearConfirming, setClearConfirming] = useState(false)
   const [notice, setNotice] = useState<{ kind: 'success' | 'error'; text: string } | null>(null)
@@ -95,6 +98,10 @@ function SettingsTab({ language }: SettingsTabProps) {
       save: '保存配置',
       clear: '清空当前配置',
       testing: '测试中...',
+      fetchModels: '获取模型列表',
+      fetchingModels: '获取中...',
+      fetchModelsFailed: '获取模型列表失败',
+      noModelsFound: '接口未返回可用模型',
       saving: '保存中...',
       clearing: '清空中...',
       clearConfirmBtn: '再次点击确认清空',
@@ -135,6 +142,10 @@ function SettingsTab({ language }: SettingsTabProps) {
       save: 'Save Configuration',
       clear: 'Clear Current Configuration',
       testing: 'Testing...',
+      fetchModels: 'Fetch models',
+      fetchingModels: 'Fetching...',
+      fetchModelsFailed: 'Failed to fetch models',
+      noModelsFound: 'The API returned no models',
       saving: 'Saving...',
       clearing: 'Clearing...',
       clearConfirmBtn: 'Click again to confirm',
@@ -248,6 +259,7 @@ function SettingsTab({ language }: SettingsTabProps) {
     setNotice(null)
     setTestResult(null)
     setClearConfirming(false)
+    setAvailableModels([])
 
     return () => {
       cancelled = true
@@ -313,6 +325,24 @@ function SettingsTab({ language }: SettingsTabProps) {
       setTestResult(false)
     } finally {
       setTesting(false)
+    }
+  }
+
+  const handleFetchModels = async () => {
+    if (modelsLoading) return
+    setModelsLoading(true)
+    setNotice(null)
+    try {
+      const config = buildConfig()
+      const models = await fetchAvailableModels(config)
+      setAvailableModels(models)
+      if (models.length === 0) {
+        showNotice('error', t.noModelsFound)
+      }
+    } catch (error) {
+      showNotice('error', `${t.fetchModelsFailed}: ${error instanceof Error ? error.message : String(error)}`)
+    } finally {
+      setModelsLoading(false)
     }
   }
 
@@ -427,7 +457,7 @@ function SettingsTab({ language }: SettingsTabProps) {
           >
             {presetOptions.map((opt) => (
               <option key={opt.value} value={opt.value}>
-                {opt.label[language]} {opt.cost ? `(${opt.cost})` : ''}
+                {opt.label[language]}
               </option>
             ))}
           </select>
@@ -470,14 +500,38 @@ function SettingsTab({ language }: SettingsTabProps) {
           <label htmlFor="settings-model" className={labelClass}>
             {t.model}
           </label>
-          <input
-            id="settings-model"
-            type="text"
-            value={model}
-            onChange={(e) => setModel(e.target.value)}
-            placeholder={selectedPresetSettings.modelPlaceholder || selectedPresetSettings.defaultModel}
-            className={inputClass}
-          />
+          <div className="flex gap-2">
+            <input
+              id="settings-model"
+              type="text"
+              list="settings-model-options"
+              value={model}
+              onChange={(e) => setModel(e.target.value)}
+              placeholder={selectedPresetSettings.modelPlaceholder || selectedPresetSettings.defaultModel}
+              className={inputClass}
+            />
+            <Button
+              size="sm"
+              variant="secondary"
+              className="whitespace-nowrap"
+              onClick={handleFetchModels}
+              disabled={modelsLoading}
+            >
+              {modelsLoading ? t.fetchingModels : t.fetchModels}
+            </Button>
+          </div>
+          <datalist id="settings-model-options">
+            {availableModels.map((m) => (
+              <option key={m} value={m} />
+            ))}
+          </datalist>
+          {availableModels.length > 0 && (
+            <p className="text-xs text-gray-500 mt-1">
+              {language === 'zh'
+                ? `已获取 ${availableModels.length} 个模型，可在输入框中选择`
+                : `${availableModels.length} models loaded — pick one in the field`}
+            </p>
+          )}
         </div>
 
         {selectedPresetSettings.supportsBaseUrl && (

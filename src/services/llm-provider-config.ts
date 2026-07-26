@@ -20,7 +20,6 @@ export interface ProviderSettings {
     en: string
   }
   modelPlaceholder?: string
-  cost?: string
   apiKeyMode: ApiKeyMode
   supportsBaseUrl: boolean
   docsUrl?: string
@@ -60,7 +59,6 @@ export interface PresetOption {
     en: string
   }
   modelPlaceholder?: string
-  cost?: string
   supportsBaseUrl: boolean
 }
 
@@ -105,7 +103,6 @@ const PRESET_SETTINGS: Record<LLMPresetType, PresetSettings> = {
     defaultModel: 'claude-opus-4-8',
     defaultBaseUrl: '',
     modelPlaceholder: 'claude-opus-4-8',
-    cost: '¥¥',
     apiKeyMode: 'required',
     supportsBaseUrl: false,
     docsUrl: 'https://console.anthropic.com',
@@ -129,7 +126,6 @@ const PRESET_SETTINGS: Record<LLMPresetType, PresetSettings> = {
       en: 'Use the Claude-compatible messages endpoint base URL.',
     },
     modelPlaceholder: 'claude-opus-4-8',
-    cost: 'Flexible',
     apiKeyMode: 'optional',
     supportsBaseUrl: true,
   },
@@ -144,7 +140,6 @@ const PRESET_SETTINGS: Record<LLMPresetType, PresetSettings> = {
     defaultModel: 'gpt-5-mini',
     defaultBaseUrl: '',
     modelPlaceholder: 'gpt-5-mini',
-    cost: '¥¥',
     apiKeyMode: 'required',
     supportsBaseUrl: false,
     docsUrl: 'https://platform.openai.com',
@@ -160,7 +155,6 @@ const PRESET_SETTINGS: Record<LLMPresetType, PresetSettings> = {
     defaultModel: 'deepseek-chat',
     defaultBaseUrl: '',
     modelPlaceholder: 'deepseek-chat',
-    cost: '¥',
     apiKeyMode: 'required',
     supportsBaseUrl: false,
     docsUrl: 'https://platform.deepseek.com',
@@ -176,7 +170,6 @@ const PRESET_SETTINGS: Record<LLMPresetType, PresetSettings> = {
     defaultModel: 'Qwen/Qwen3-32B',
     defaultBaseUrl: '',
     modelPlaceholder: 'Qwen/Qwen3-32B',
-    cost: '$',
     apiKeyMode: 'required',
     supportsBaseUrl: false,
     docsUrl: 'https://cloud.siliconflow.cn',
@@ -192,7 +185,6 @@ const PRESET_SETTINGS: Record<LLMPresetType, PresetSettings> = {
     defaultModel: 'glm-4.6',
     defaultBaseUrl: '',
     modelPlaceholder: 'glm-4.6',
-    cost: '¥',
     apiKeyMode: 'required',
     supportsBaseUrl: false,
     docsUrl: 'https://open.bigmodel.cn',
@@ -216,7 +208,6 @@ const PRESET_SETTINGS: Record<LLMPresetType, PresetSettings> = {
       en: 'Use the OpenAI-compatible base URL. /v1 is appended automatically when missing.',
     },
     modelPlaceholder: 'gpt-5-mini',
-    cost: 'Flexible',
     apiKeyMode: 'optional',
     supportsBaseUrl: true,
   },
@@ -236,7 +227,6 @@ const PRESET_SETTINGS: Record<LLMPresetType, PresetSettings> = {
       en: 'Defaults to the local Ollama service.',
     },
     modelPlaceholder: 'qwen3',
-    cost: 'Local',
     apiKeyMode: 'none',
     localMode: 'openai-compatible',
     supportsBaseUrl: true,
@@ -257,7 +247,6 @@ const PRESET_SETTINGS: Record<LLMPresetType, PresetSettings> = {
       en: 'Defaults to the local LM Studio service.',
     },
     modelPlaceholder: 'local-model',
-    cost: 'Local',
     apiKeyMode: 'none',
     localMode: 'openai-compatible',
     supportsBaseUrl: true,
@@ -278,7 +267,6 @@ const PRESET_SETTINGS: Record<LLMPresetType, PresetSettings> = {
       en: 'Use your local inference service URL.',
     },
     modelPlaceholder: 'local-model',
-    cost: 'Local',
     apiKeyMode: 'none',
     localMode: 'openai-compatible',
     supportsBaseUrl: true,
@@ -344,7 +332,6 @@ function toProviderSettings(type: LLMProviderType): ProviderSettings {
     baseUrlPlaceholder: preset.baseUrlPlaceholder,
     baseUrlHint: preset.baseUrlHint ? cloneLocalizedText(preset.baseUrlHint) : undefined,
     modelPlaceholder: preset.modelPlaceholder,
-    cost: preset.cost,
     apiKeyMode: preset.apiKeyMode,
     supportsBaseUrl: preset.supportsBaseUrl,
     docsUrl: preset.docsUrl,
