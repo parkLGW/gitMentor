@@ -110,6 +110,54 @@ function parseFileUrl(): FileInfo | null {
   return { owner, repo, branch, path }
 }
 
+function getDismissedFileSidebarKey(fileInfo: FileInfo): string {
+  return `gitmentor:dismissed-file-sidebar:${fileInfo.owner}/${fileInfo.repo}/${fileInfo.branch}/${fileInfo.path}`
+}
+
+function removeFileSidebarUi() {
+  document.getElementById('gitmentor-file-sidebar')?.remove()
+  document.getElementById('gitmentor-file-sidebar-collapsed')?.remove()
+  currentFilePath = null
+}
+
+function showFileSidebarCollapsedHandle(fileInfo: FileInfo, dismissedFileSidebarKey: string) {
+  const existing = document.getElementById('gitmentor-file-sidebar-collapsed') as HTMLElement | null
+  if (existing?.dataset.dismissedKey === dismissedFileSidebarKey) return
+  existing?.remove()
+
+  const handle = document.createElement('button')
+  handle.id = 'gitmentor-file-sidebar-collapsed'
+  handle.dataset.dismissedKey = dismissedFileSidebarKey
+  handle.type = 'button'
+  handle.textContent = 'GitMentor'
+  handle.title = currentLanguage === 'zh' ? '重新打开文件理解侧栏' : 'Reopen file insight sidebar'
+  handle.style.cssText = `
+    position: fixed;
+    right: 0;
+    top: 96px;
+    z-index: 5000;
+    writing-mode: vertical-rl;
+    padding: 10px 6px;
+    background: #24292e;
+    color: white;
+    border: 1px solid rgba(27, 31, 35, 0.15);
+    border-right: none;
+    border-radius: 8px 0 0 8px;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    box-shadow: -2px 0 8px rgba(0, 0, 0, 0.16);
+  `
+  handle.addEventListener('click', () => {
+    sessionStorage.removeItem(dismissedFileSidebarKey)
+    handle.remove()
+    currentFilePath = null
+    void injectFileSidebar()
+  })
+  document.body.appendChild(handle)
+  currentFilePath = fileInfo.path
+}
+
 function isCodeFile(filePath: string): boolean {
   // List of code file extensions
   const codeExtensions = [
@@ -165,26 +213,24 @@ async function injectFileSidebar() {
   
   const fileInfo = parseFileUrl()
   if (!fileInfo) {
-    // Not on a file page, remove sidebar if exists
-    const existingSidebar = document.getElementById('gitmentor-file-sidebar')
-    if (existingSidebar) {
-      existingSidebar.remove()
-      currentFilePath = null
-    }
+    removeFileSidebarUi()
     return
   }
   
   // Check if this is a code file
   if (!isCodeFile(fileInfo.path)) {
     console.log('[GitMentor] Not a code file, skipping sidebar injection:', fileInfo.path)
-    // Remove existing sidebar if switching to non-code file
-    const existingSidebar = document.getElementById('gitmentor-file-sidebar')
-    if (existingSidebar) {
-      existingSidebar.remove()
-      currentFilePath = null
-    }
+    removeFileSidebarUi()
     return
   }
+
+  const dismissedFileSidebarKey = getDismissedFileSidebarKey(fileInfo)
+  if (sessionStorage.getItem(dismissedFileSidebarKey) === '1') {
+    document.getElementById('gitmentor-file-sidebar')?.remove()
+    showFileSidebarCollapsedHandle(fileInfo, dismissedFileSidebarKey)
+    return
+  }
+  document.getElementById('gitmentor-file-sidebar-collapsed')?.remove()
   
   console.log('[GitMentor] Detected code file:', fileInfo.path)
   
@@ -264,7 +310,9 @@ async function injectFileSidebar() {
   // Close button
   const closeBtn = header.querySelector('#gitmentor-sidebar-close')
   closeBtn?.addEventListener('click', () => {
+    sessionStorage.setItem(dismissedFileSidebarKey, '1')
     sidebar.remove()
+    showFileSidebarCollapsedHandle(fileInfo, dismissedFileSidebarKey)
   })
 
   fetchAndAnalyzeFile(fileInfo, content)
@@ -1039,26 +1087,42 @@ async function performDeepAnalysis(contentDiv: HTMLElement, fileData: any) {
   })
 }
 
+async function fetchGithubFileContent(fileInfo: FileInfo): Promise<string> {
+  if (!isExtensionContextValid()) {
+    throw new Error('Extension context unavailable')
+  }
+
+  return await new Promise((resolve, reject) => {
+    chrome.runtime.sendMessage({
+      action: 'fetchGithubFileContent',
+      owner: fileInfo.owner,
+      repo: fileInfo.repo,
+      branch: fileInfo.branch,
+      path: fileInfo.path,
+    }, (response: any) => {
+      const runtimeError = chrome.runtime.lastError
+      if (runtimeError) {
+        reject(new Error(runtimeError.message))
+        return
+      }
+      if (response?.error) {
+        reject(new Error(response.error))
+        return
+      }
+      if (typeof response?.content !== 'string') {
+        reject(new Error('Failed to fetch file content'))
+        return
+      }
+      resolve(response.content)
+    })
+  })
+}
+
 async function fetchAndAnalyzeFile(fileInfo: FileInfo, contentDiv: HTMLElement) {
   try {
     // Load current language
     currentLanguage = await getLanguage()
-    
-    // Fetch file content from GitHub API
-    const response = await fetch(
-      `https://api.github.com/repos/${fileInfo.owner}/${fileInfo.repo}/contents/${fileInfo.path}?ref=${fileInfo.branch}`,
-      {
-        headers: {
-          'Accept': 'application/vnd.github.v3.raw',
-        },
-      }
-    )
-    
-    if (!response.ok) {
-      throw new Error(`GitHub API error: ${response.status}`)
-    }
-    
-    const fileContent = await response.text()
+    const fileContent = await fetchGithubFileContent(fileInfo)
     
     // Limit file size for API
     const maxSize = 20000 // 20KB limit

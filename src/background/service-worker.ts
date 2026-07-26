@@ -1407,6 +1407,28 @@ chrome.runtime.onMessage.addListener((message: any, _sender: any, sendResponse: 
     }
     return true
   }
+
+  if (message.action === 'fetchGithubFileContent') {
+    ;(async () => {
+      try {
+        const owner = String(message.owner || '')
+        const repo = String(message.repo || '')
+        const branch = String(message.branch || 'main')
+        const path = String(message.path || '')
+        const content = await getRawFileContent(owner, repo, branch, path)
+        if (content === null) {
+          sendResponse({ error: 'File content unavailable' })
+          return
+        }
+        sendResponse({ content })
+      } catch (error) {
+        sendResponse({
+          error: error instanceof Error ? error.message : 'Failed to fetch file content',
+        })
+      }
+    })()
+    return true
+  }
   
   if (message.action === 'analyzeFileDeep') {
     // Deep analysis with LLM

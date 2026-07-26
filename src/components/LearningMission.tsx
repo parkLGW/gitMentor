@@ -90,14 +90,25 @@ export function LearningMission({
         {mission.steps.map((step) => {
           const done = Boolean(progress[step.id]);
           const expanded = expandedStep === step.id;
+          const toggleExpanded = () => setExpandedStep(expanded ? null : step.id);
           return (
             <div key={step.id} className="border border-gray-200 rounded">
-              <button
-                onClick={() => setExpandedStep(expanded ? null : step.id)}
+              <div
+                role="button"
+                tabIndex={0}
+                aria-expanded={expanded}
+                onClick={toggleExpanded}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    toggleExpanded();
+                  }
+                }}
                 className="w-full p-3 text-left hover:bg-gray-50 transition"
               >
                 <div className="flex items-center gap-3">
                   <button
+                    type="button"
                     onClick={(e) => {
                       e.stopPropagation();
                       saveProgress({ ...progress, [step.id]: !done });
@@ -116,7 +127,7 @@ export function LearningMission({
                   </div>
                   <div className="text-xs text-gray-500">{step.estimatedMinutes}m</div>
                 </div>
-              </button>
+              </div>
 
               {expanded && (
                 <div className="px-3 pb-3 space-y-2 border-t border-gray-100">

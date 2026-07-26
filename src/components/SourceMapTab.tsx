@@ -20,6 +20,7 @@ import { createLearningMission, normalizeConceptCard } from '@/services/learning
 import { AnalysisEvidence, ConfidenceLevel, LearningMission as LearningMissionType } from '@/types/learning'
 import { StorageKeys } from '@/constants/storage'
 import { setJsonCacheWithEviction } from '@/utils/local-cache'
+import { buildGithubBlobUrl } from '@/services/github-url'
 
 interface SourceMapTabProps {
   repo: { owner: string; name: string }
@@ -497,6 +498,10 @@ function SourceMapTab({ repo, language, defaultBranch = 'main' }: SourceMapTabPr
     return isZh ? `来源：AI 部分输出${score}` : `Source: AI partial${score}`
   }, [isZh, sourceMap])
 
+  const openGithubFile = useCallback((path: string) => {
+    window.open(buildGithubBlobUrl(repo, path, defaultBranch), '_blank')
+  }, [defaultBranch, repo])
+
   const displayLearningPath = useMemo(() => {
     if (!sourceMap) return []
     const normalizeFile = (path: string) => String(path || '').replace(/\\/g, '/').trim()
@@ -716,9 +721,7 @@ function SourceMapTab({ repo, language, defaultBranch = 'main' }: SourceMapTabPr
           <ModuleList 
             modules={sourceMap.coreModules} 
             language={language}
-            onFileClick={(path) => {
-              window.open(`https://github.com/${repo.owner}/${repo.name}/blob/${defaultBranch}/${path}`, '_blank')
-            }}
+            onFileClick={openGithubFile}
           />
         )}
 
@@ -727,9 +730,7 @@ function SourceMapTab({ repo, language, defaultBranch = 'main' }: SourceMapTabPr
           <LearningPath
             phases={displayLearningPath}
             language={language}
-            onFileClick={(path) => {
-              window.open(`https://github.com/${repo.owner}/${repo.name}/blob/${defaultBranch}/${path}`, '_blank')
-            }}
+            onFileClick={openGithubFile}
           />
         )}
 
@@ -739,9 +740,7 @@ function SourceMapTab({ repo, language, defaultBranch = 'main' }: SourceMapTabPr
             mission={mission}
             language={language}
             repoKey={repoKey}
-            onFileClick={(path) => {
-              window.open(`https://github.com/${repo.owner}/${repo.name}/blob/${defaultBranch}/${path}`, '_blank')
-            }}
+            onFileClick={openGithubFile}
           />
         )}
         {activeView === 'mission' && sourceMap && !mission && (
@@ -792,7 +791,7 @@ function SourceMapTab({ repo, language, defaultBranch = 'main' }: SourceMapTabPr
                       {card.whereToFind.map((file, j) => (
                         <button
                           key={j}
-                          onClick={() => window.open(`https://github.com/${repo.owner}/${repo.name}/blob/${defaultBranch}/${file}`, '_blank')}
+                          onClick={() => openGithubFile(file)}
                           className="text-xs px-2 py-0.5 bg-gray-100 text-gray-600 rounded hover:bg-gray-200 transition"
                         >
                           {file}

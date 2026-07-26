@@ -7,10 +7,12 @@ import {
   SecuritySeverity,
 } from "@/types/security";
 import { STORAGE_KEYS, STORAGE_PREFIXES, StorageKeys } from "@/constants/storage";
+import { buildGithubBlobUrl } from "@/services/github-url";
 
 interface SecurityAuditTabProps {
   repo: { owner: string; name: string };
   language: "zh" | "en";
+  defaultBranch?: string;
 }
 
 type PolicyProfile = "strict" | "balanced" | "permissive";
@@ -172,19 +174,20 @@ function FindingCard({
   finding,
   repo,
   language,
+  defaultBranch = "main",
 }: {
   finding: SecurityFinding;
   repo: { owner: string; name: string };
   language: "zh" | "en";
+  defaultBranch?: string;
 }) {
   const t = labels[language];
   const location = finding.evidence[0]?.location;
 
   const githubUrl = useMemo(() => {
     if (!location?.filePath) return null;
-    const line = location.lineStart ? `#L${location.lineStart}` : "";
-    return `https://github.com/${repo.owner}/${repo.name}/blob/main/${location.filePath}${line}`;
-  }, [location, repo.owner, repo.name]);
+    return buildGithubBlobUrl(repo, location.filePath, defaultBranch, location.lineStart);
+  }, [defaultBranch, location, repo]);
 
   return (
     <div className="border border-gray-200 rounded-lg p-3 space-y-2">
@@ -297,7 +300,7 @@ const defaultAdvancedOptions: AdvancedOptions = {
   remember: true,
 };
 
-function SecurityAuditTab({ repo, language }: SecurityAuditTabProps) {
+function SecurityAuditTab({ repo, language, defaultBranch = "main" }: SecurityAuditTabProps) {
   const [report, setReport] = useState<SecurityAuditReport | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -723,6 +726,7 @@ function SecurityAuditTab({ repo, language }: SecurityAuditTabProps) {
                   finding={finding}
                   repo={repo}
                   language={language}
+                  defaultBranch={defaultBranch}
                 />
               ))}
             </div>

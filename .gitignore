@@ -16,3 +16,10 @@ out/
 .tmp-tests/
 .tmp-tests-fallback/
 .tmp-plan-tests/
+.tmp-agent-*/
+.tmp-github-rate-tests/
+/*.png
+/*.zip
+TWITTER_PROMO.md
+XIAOHONGSHU_PROMO.md
+pnpm-lock.yaml
