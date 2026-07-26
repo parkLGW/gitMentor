@@ -59,6 +59,7 @@ function SettingsTab({ language }: SettingsTabProps) {
   const [saving, setSaving] = useState(false)
   const [availableModels, setAvailableModels] = useState<string[]>([])
   const [modelsLoading, setModelsLoading] = useState(false)
+  const [useCustomModel, setUseCustomModel] = useState(false)
   const [clearing, setClearing] = useState(false)
   const [clearConfirming, setClearConfirming] = useState(false)
   const [notice, setNotice] = useState<{ kind: 'success' | 'error'; text: string } | null>(null)
@@ -102,6 +103,7 @@ function SettingsTab({ language }: SettingsTabProps) {
       fetchingModels: '获取中...',
       fetchModelsFailed: '获取模型列表失败',
       noModelsFound: '接口未返回可用模型',
+      customModelOption: '手动输入模型名…',
       saving: '保存中...',
       clearing: '清空中...',
       clearConfirmBtn: '再次点击确认清空',
@@ -146,6 +148,7 @@ function SettingsTab({ language }: SettingsTabProps) {
       fetchingModels: 'Fetching...',
       fetchModelsFailed: 'Failed to fetch models',
       noModelsFound: 'The API returned no models',
+      customModelOption: 'Enter model name manually…',
       saving: 'Saving...',
       clearing: 'Clearing...',
       clearConfirmBtn: 'Click again to confirm',
@@ -260,6 +263,7 @@ function SettingsTab({ language }: SettingsTabProps) {
     setTestResult(null)
     setClearConfirming(false)
     setAvailableModels([])
+    setUseCustomModel(false)
 
     return () => {
       cancelled = true
@@ -338,6 +342,12 @@ function SettingsTab({ language }: SettingsTabProps) {
       setAvailableModels(models)
       if (models.length === 0) {
         showNotice('error', t.noModelsFound)
+        return
+      }
+      setUseCustomModel(false)
+      // Snap the field to a model that actually exists on this provider
+      if (!model || !models.includes(model)) {
+        setModel(models[0])
       }
     } catch (error) {
       showNotice('error', `${t.fetchModelsFailed}: ${error instanceof Error ? error.message : String(error)}`)
@@ -501,15 +511,39 @@ function SettingsTab({ language }: SettingsTabProps) {
             {t.model}
           </label>
           <div className="flex gap-2">
-            <input
-              id="settings-model"
-              type="text"
-              list="settings-model-options"
-              value={model}
-              onChange={(e) => setModel(e.target.value)}
-              placeholder={selectedPresetSettings.modelPlaceholder || selectedPresetSettings.defaultModel}
-              className={inputClass}
-            />
+            {availableModels.length > 0 && !useCustomModel ? (
+              <select
+                id="settings-model"
+                value={model}
+                onChange={(e) => {
+                  if (e.target.value === '__custom__') {
+                    setUseCustomModel(true)
+                    return
+                  }
+                  setModel(e.target.value)
+                }}
+                className={inputClass}
+              >
+                {model && !availableModels.includes(model) && (
+                  <option value={model}>{model}</option>
+                )}
+                {availableModels.map((m) => (
+                  <option key={m} value={m}>
+                    {m}
+                  </option>
+                ))}
+                <option value="__custom__">{t.customModelOption}</option>
+              </select>
+            ) : (
+              <input
+                id="settings-model"
+                type="text"
+                value={model}
+                onChange={(e) => setModel(e.target.value)}
+                placeholder={selectedPresetSettings.modelPlaceholder || selectedPresetSettings.defaultModel}
+                className={inputClass}
+              />
+            )}
             <Button
               size="sm"
               variant="secondary"
@@ -520,16 +554,11 @@ function SettingsTab({ language }: SettingsTabProps) {
               {modelsLoading ? t.fetchingModels : t.fetchModels}
             </Button>
           </div>
-          <datalist id="settings-model-options">
-            {availableModels.map((m) => (
-              <option key={m} value={m} />
-            ))}
-          </datalist>
           {availableModels.length > 0 && (
             <p className="text-xs text-gray-500 mt-1">
               {language === 'zh'
-                ? `已获取 ${availableModels.length} 个模型，可在输入框中选择`
-                : `${availableModels.length} models loaded — pick one in the field`}
+                ? `已获取 ${availableModels.length} 个模型`
+                : `${availableModels.length} models loaded`}
             </p>
           )}
         </div>
