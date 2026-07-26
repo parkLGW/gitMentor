@@ -122,6 +122,7 @@ function themedStyle(style: string): string {
     .replace(/#374151/gi, '#c9d1d9')
     .replace(/#334155/gi, '#c9d1d9')
     .replace(/#4b5563/gi, '#8b949e')
+    .replace(/#ccc\b/gi, '#57606a')
 }
 
 function getText(key: UITranslationKey) {
@@ -1244,7 +1245,7 @@ function injectWidget() {
     background: white;
     padding: 0;
     overflow: hidden;
-    box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
     transition: all 0.3s ease;
     display: flex;
     align-items: center;
@@ -1266,12 +1267,12 @@ function injectWidget() {
 
   button.onmouseover = () => {
     button.style.transform = 'scale(1.1)'
-    button.style.boxShadow = '0 6px 16px rgba(102, 126, 234, 0.6)'
+    button.style.boxShadow = '0 6px 16px rgba(0, 0, 0, 0.35)'
   }
 
   button.onmouseout = () => {
     button.style.transform = 'scale(1)'
-    button.style.boxShadow = '0 4px 12px rgba(102, 126, 234, 0.4)'
+    button.style.boxShadow = '0 4px 12px rgba(0, 0, 0, 0.25)'
   }
 
   button.onclick = (e) => {
@@ -1340,7 +1341,7 @@ function showReloadPrompt() {
 
   const prompt = document.createElement('div')
   prompt.id = 'gitmentor-reload-prompt'
-  prompt.style.cssText = `
+  prompt.style.cssText = themedStyle(`
     position: fixed;
     bottom: 100px;
     right: 20px;
@@ -1353,22 +1354,22 @@ function showReloadPrompt() {
     box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
     max-width: 300px;
-  `
-  prompt.innerHTML = `
+  `)
+  prompt.innerHTML = themedStyle(`
     <div style="margin-bottom: 12px; font-weight: 600;">Extension Updated</div>
     <div style="margin-bottom: 12px; color: #ccc; font-size: 12px;">
       GitMentor was updated or reloaded. Please refresh this page to continue.
     </div>
     <div style="display: flex; gap: 8px;">
       <button id="gitmentor-reload-btn" style="
-        background: #24292e;
-        color: white;
-        border: 1px solid rgba(27, 31, 35, 0.15);
+        background: white;
+        color: #24292e;
+        border: none;
         padding: 8px 16px;
         border-radius: 6px;
         cursor: pointer;
         font-size: 12px;
-        font-weight: 500;
+        font-weight: 600;
       ">Refresh Page</button>
       <button id="gitmentor-dismiss-btn" style="
         background: transparent;
@@ -1380,7 +1381,7 @@ function showReloadPrompt() {
         font-size: 12px;
       ">Dismiss</button>
     </div>
-  `
+  `)
 
   document.body.appendChild(prompt)
 
@@ -1427,12 +1428,14 @@ function openPanel(owner: string, repo: string, initialTab?: 'settings') {
     // Create floating panel
     const panel = document.createElement('div')
     panel.id = 'gitmentor-panel'
-    panel.style.cssText = `
+    panel.style.cssText = themedStyle(`
       position: fixed;
       right: 20px;
       top: 20px;
       width: 500px;
       height: 700px;
+      max-width: calc(100vw - 40px);
+      max-height: calc(100vh - 40px);
       z-index: 9999;
       background: white;
       border-radius: 12px;
@@ -1441,11 +1444,11 @@ function openPanel(owner: string, repo: string, initialTab?: 'settings') {
       flex-direction: column;
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
       overflow: hidden;
-    `
-    
+    `)
+
     // Header
     const header = document.createElement('div')
-    header.style.cssText = `
+    header.style.cssText = themedStyle(`
       padding: 16px;
       border-bottom: 1px solid #e1e4e8;
       display: flex;
@@ -1454,10 +1457,10 @@ function openPanel(owner: string, repo: string, initialTab?: 'settings') {
       background: #f6f8fa;
       cursor: move;
       flex-shrink: 0;
-    `
-    header.innerHTML = `
+    `)
+    header.innerHTML = themedStyle(`
       <div style="display: flex; align-items: center; gap: 8px;">
-        <span style="font-size: 20px;">📚</span>
+        <img src="${chrome.runtime.getURL('gitmentor.png')}" alt="" style="width: 24px; height: 24px; border-radius: 6px;">
         <div>
           <span style="font-weight: 600; font-size: 14px; color: #24292e;">GitMentor</span>
           <div style="font-size: 11px; color: #666; margin-top: 2px;">${owner}/${repo}</div>
@@ -1473,7 +1476,7 @@ function openPanel(owner: string, repo: string, initialTab?: 'settings') {
         width: 24px;
         height: 24px;
       ">×</button>
-    `
+    `)
     
     // Iframe
     const iframe = document.createElement('iframe')
@@ -1516,8 +1519,6 @@ function openPanel(owner: string, repo: string, initialTab?: 'settings') {
     
     // Draggable
     makeDraggablePanel(header, panel)
-    
-    showNotification(`✓ GitMentor opened for ${owner}/${repo}`)
   } catch (error) {
     console.error('[GitMentor] Error creating panel:', error)
     showNotification(`Error: ${error instanceof Error ? error.message : 'Unknown error'}`)
