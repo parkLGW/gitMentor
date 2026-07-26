@@ -51,7 +51,7 @@ export function LearningPath({ phases, language, onFileClick }: LearningPathProp
                   </div>
                   <div className="text-right text-xs text-gray-500">
                     <div>{phase.files.length} {isZh ? '文件' : 'files'}</div>
-                    <div>{phase.estimatedMinutes}min</div>
+                    <div>{phase.estimatedMinutes}{language === 'zh' ? ' 分钟' : ' min'}</div>
                   </div>
                   <span className="text-gray-400 text-xs">{isExpanded ? '-' : '+'}</span>
                 </div>

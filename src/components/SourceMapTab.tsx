@@ -42,6 +42,34 @@ interface ConceptAnswerState {
 
 const CONCEPT_REQUEST_TIMEOUT_MS = 60000
 
+const ARCHITECTURE_TYPE_LABELS: Record<string, { zh: string; en: string }> = {
+  mvc: { zh: 'MVC 架构', en: 'MVC' },
+  'component-based': { zh: '组件化架构', en: 'Component-based' },
+  layered: { zh: '分层架构', en: 'Layered' },
+  microservices: { zh: '微服务架构', en: 'Microservices' },
+  'plugin-based': { zh: '插件化架构', en: 'Plugin-based' },
+  'event-driven': { zh: '事件驱动架构', en: 'Event-driven' },
+  monolithic: { zh: '单体架构', en: 'Monolithic' },
+  other: { zh: '其他架构', en: 'Other' },
+}
+
+function architectureTypeLabel(type: string, isZh: boolean): string {
+  const entry = ARCHITECTURE_TYPE_LABELS[type]
+  return entry ? (isZh ? entry.zh : entry.en) : type
+}
+
+function conceptImportanceLabel(importance: string, isZh: boolean): string {
+  if (!isZh) return importance
+  const labels: Record<string, string> = { essential: '核心', important: '重要', helpful: '辅助' }
+  return labels[importance] || importance
+}
+
+function confidenceLabel(confidence: string, isZh: boolean): string {
+  if (!isZh) return confidence
+  const labels: Record<string, string> = { high: '高', medium: '中', low: '低' }
+  return labels[confidence] || confidence
+}
+
 function SourceMapTab({ repo, language, defaultBranch = 'main' }: SourceMapTabProps) {
   const [activeView, setActiveView] = useState<ViewMode>('diagram')
   const [sourceMap, setSourceMap] = useState<SourceMapOutput | null>(null)
@@ -60,6 +88,12 @@ function SourceMapTab({ repo, language, defaultBranch = 'main' }: SourceMapTabPr
   // 用于防止竞态条件的 ref
   const abortControllerRef = useRef<AbortController | null>(null)
   const requestIdRef = useRef<number>(0)
+  const sourceMapRef = useRef<SourceMapOutput | null>(null)
+  const llmReadyRef = useRef(llmReady)
+
+  useEffect(() => {
+    sourceMapRef.current = sourceMap
+  }, [sourceMap])
 
   const sendRuntimeMessage = useCallback(<T,>(
     message: Record<string, unknown>,
@@ -220,6 +254,7 @@ function SourceMapTab({ repo, language, defaultBranch = 'main' }: SourceMapTabPr
           setSourceMap(cachedMap)
           setLoading(false)
           void collectDeepContext(repo.owner, repo.name).then((context) => {
+            if (currentRequestId !== requestIdRef.current) return
             setReadmeSummary(context.readmeSummary || context.readme.slice(0, 1200))
           }).catch(() => undefined)
           // Skip auto refinement on cache hit; manual refresh re-runs AI
@@ -234,7 +269,7 @@ function SourceMapTab({ repo, language, defaultBranch = 'main' }: SourceMapTabPr
         setSourceMap(fallback)
         setLoading(false)
 
-        if (llmReady) {
+        if (llmReadyRef.current) {
           void runAnalysis(signal, currentRequestId, fallback, context)
         }
       } catch (err) {
@@ -246,7 +281,9 @@ function SourceMapTab({ repo, language, defaultBranch = 'main' }: SourceMapTabPr
     }
 
     void loadData()
-  }, [repo.owner, repo.name, language, llmReady, cacheKey])
+    // llmReady is read via ref: it becoming ready must not reset the whole
+    // page to loading (handled by the background-refine effect below)
+  }, [repo.owner, repo.name, language, cacheKey])
 
   // Regenerate with cancellation support
   const handleRegenerate = useCallback(async () => {
@@ -296,9 +333,9 @@ function SourceMapTab({ repo, language, defaultBranch = 'main' }: SourceMapTabPr
       }
       
       setSourceMap(fallback)
-      
+
       // 如果 LLM 已配置，尝试 AI 分析
-      if (llmManager.isConfigured()) {
+      if (llmReadyRef.current) {
         await runAnalysis(signal, currentRequestId, fallback, context)
       } else {
         console.log('[SourceMapTab] LLM not configured, using fallback only')
@@ -315,6 +352,16 @@ function SourceMapTab({ repo, language, defaultBranch = 'main' }: SourceMapTabPr
       setAnalyzing(false)
     }
   }, [repo.owner, repo.name, language, cacheKey, runAnalysis])
+
+  // When the LLM becomes ready after the page already shows a fallback map,
+  // refine in the background (analyzing state) instead of a full-page reload
+  useEffect(() => {
+    const wasReady = llmReadyRef.current
+    llmReadyRef.current = llmReady
+    if (!wasReady && llmReady && sourceMapRef.current && sourceMapRef.current.quality !== 'complete') {
+      void handleRegenerate()
+    }
+  }, [llmReady, handleRegenerate])
 
   useEffect(() => {
     let cancelled = false
@@ -358,9 +405,11 @@ function SourceMapTab({ repo, language, defaultBranch = 'main' }: SourceMapTabPr
     }
   }, [language, readmeSummary, repo, repoKey, sendRuntimeMessage, sourceMap])
 
+  // Only reset answered questions when the repo or language changes; a
+  // background AI refinement updating the map must not wipe user answers
   useEffect(() => {
     setConceptAnswers({})
-  }, [language, sourceMap?.architectureSummary])
+  }, [language, repoKey])
 
   const handleConceptQuickAsk = useCallback(async (conceptTerm: string, question: string) => {
     if (conceptAnswers[conceptTerm]?.status === 'loading') {
@@ -378,6 +427,14 @@ function SourceMapTab({ repo, language, defaultBranch = 'main' }: SourceMapTabPr
     }))
 
     try {
+      const conceptCard = sourceMap?.keyConcepts?.find((item) => item.term === conceptTerm)
+      const conceptFiles = Array.from(
+        new Set([
+          ...(conceptCard?.relatedFiles || []),
+          ...((conceptCard as { whereToFind?: string[] } | undefined)?.whereToFind || []),
+        ]),
+      ).slice(0, 6)
+
       const response = await sendRuntimeMessage<{
         data?: { answer: string; confidence: ConfidenceLevel; evidence: AnalysisEvidence[] }
         error?: string
@@ -387,6 +444,9 @@ function SourceMapTab({ repo, language, defaultBranch = 'main' }: SourceMapTabPr
         concept: conceptTerm,
         question,
         language,
+        conceptDefinition: conceptCard?.definition || '',
+        relatedFiles: conceptFiles,
+        architectureSummary: sourceMap?.architectureSummary || '',
       }, CONCEPT_REQUEST_TIMEOUT_MS)
 
       if (response?.error) {
@@ -564,7 +624,7 @@ function SourceMapTab({ repo, language, defaultBranch = 'main' }: SourceMapTabPr
         <div className="flex items-center gap-2">
           {sourceMap?.architectureType && (
             <span className="text-xs text-gray-500">
-              {sourceMap.architectureType}
+              {architectureTypeLabel(sourceMap.architectureType, isZh)}
             </span>
           )}
         </div>
@@ -736,7 +796,7 @@ function SourceMapTab({ repo, language, defaultBranch = 'main' }: SourceMapTabPr
                           ? 'bg-yellow-100 text-yellow-600'
                           : 'bg-gray-100 text-gray-500'
                     }`}>
-                      {card.importance}
+                      {conceptImportanceLabel(card.importance, isZh)}
                     </span>
                   </div>
 
@@ -823,7 +883,7 @@ function SourceMapTab({ repo, language, defaultBranch = 'main' }: SourceMapTabPr
                     <div className="bg-gray-50 border border-gray-200 rounded p-2 space-y-1">
                       <p className="text-xs text-gray-700 whitespace-pre-line">{answerState.answer}</p>
                       <p className="text-[11px] text-gray-500">
-                        {isZh ? '置信度' : 'Confidence'}: {answerState.confidence || 'low'}
+                        {isZh ? '置信度' : 'Confidence'}: {confidenceLabel(answerState.confidence || 'low', isZh)}
                       </p>
                       {answerState.evidence && answerState.evidence.length > 0 && (
                         <ul className="space-y-1">

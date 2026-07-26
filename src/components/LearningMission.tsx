@@ -30,9 +30,11 @@ export function LearningMission({
       if (raw) {
         const parsed = JSON.parse(raw) as {
           progress?: MissionProgressMap;
-          missionGeneratedAt?: number;
         };
-        if (parsed.missionGeneratedAt === mission.generatedAt && parsed.progress) {
+        // Progress is keyed per step id and per repo; keep it when the mission
+        // is regenerated (e.g. after background AI refinement) so checked
+        // steps don't reset
+        if (parsed.progress) {
           setProgress(parsed.progress);
           return;
         }
@@ -41,7 +43,7 @@ export function LearningMission({
     } catch {
       setProgress({});
     }
-  }, [mission.generatedAt, storageKey]);
+  }, [storageKey]);
 
   const saveProgress = (next: MissionProgressMap) => {
     setProgress(next);
@@ -125,7 +127,10 @@ export function LearningMission({
                     <p className="text-sm font-medium text-gray-900">{step.title}</p>
                     <p className="text-xs text-gray-600 mt-0.5">{step.objective}</p>
                   </div>
-                  <div className="text-xs text-gray-500">{step.estimatedMinutes}m</div>
+                  <div className="text-xs text-gray-500">
+                    {step.estimatedMinutes}
+                    {isZh ? ' 分钟' : ' min'}
+                  </div>
                 </div>
               </div>
 

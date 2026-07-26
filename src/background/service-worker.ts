@@ -1503,19 +1503,50 @@ Please provide a clear, concise answer. If the question cannot be answered from 
 
         const concept = String(message.concept || '')
         const question = String(message.question || '')
-        const prompt = `You are helping a beginner understand one concept in a GitHub project.
+        const conceptDefinition = String(message.conceptDefinition || '')
+        const architectureSummary = String(message.architectureSummary || '')
+        const relatedFiles = (Array.isArray(message.relatedFiles) ? message.relatedFiles : [])
+          .filter((file: unknown): file is string => typeof file === 'string' && !!file)
+          .slice(0, 6)
+        const repoName = message.repo?.owner && message.repo?.name
+          ? `${message.repo.owner}/${message.repo.name}`
+          : ''
 
-Concept: ${concept}
-Question: ${question}
+        const prompt = lang === 'zh'
+          ? `你在帮助一位新手理解 GitHub 项目 ${repoName || '（未知）'} 中的一个概念。
 
-Return only JSON:
+项目架构概述：${architectureSummary || '（未提供）'}
+概念：${concept}
+概念定义：${conceptDefinition || '（未提供）'}
+相关文件：${relatedFiles.join(', ') || '（未提供）'}
+问题：${question}
+
+只输出 JSON，answer 用中文、2-4 句话、结合本项目具体说明：
 {
-  "answer": "short practical answer for beginner in 2-4 sentences",
+  "answer": "...",
   "confidence": "low|medium|high",
   "evidence": [
-    {"filePath": "path/to/file", "lineStart": 10, "snippet": "short snippet", "reason": "why this supports the answer"}
+    {"filePath": "只能引用上面列出的相关文件", "snippet": "", "reason": "该文件与答案的关系"}
   ]
-}`
+}
+如果不确定某个文件与答案相关，返回空的 evidence 数组，不要编造文件路径。`
+          : `You are helping a beginner understand one concept in the GitHub project ${repoName || '(unknown)'}.
+
+Architecture summary: ${architectureSummary || '(not provided)'}
+Concept: ${concept}
+Concept definition: ${conceptDefinition || '(not provided)'}
+Related files: ${relatedFiles.join(', ') || '(not provided)'}
+Question: ${question}
+
+Return only JSON; the answer must be 2-4 practical sentences grounded in this project:
+{
+  "answer": "...",
+  "confidence": "low|medium|high",
+  "evidence": [
+    {"filePath": "cite only the related files listed above", "snippet": "", "reason": "why this file supports the answer"}
+  ]
+}
+If you are not sure a file is relevant, return an empty evidence array instead of inventing paths.`
         const response = await callLLM(config, prompt, { timeoutMs: CONCEPT_LLM_TIMEOUT_MS })
         const parsed = safeParseJSON(response)
         const fallbackAnswer = lang === 'zh'

@@ -259,7 +259,7 @@ ${isZh ? "请输出 JSON 格式的源码地图：" : "Please output a source cod
 {
   "architectureType": "mvc | component-based | layered | microservices | plugin-based | event-driven | monolithic | other",
   "architectureSummary": "${isZh ? "一句话描述项目架构特点" : "One sentence describing the project architecture"}",
-  "mermaidDiagram": "flowchart TB\\n  subgraph ${isZh ? "核心层" : "Core"}\\n    A[${isZh ? "入口" : "Entry"}] --> B[${isZh ? "核心模块" : "Core Module"}]\\n  end\\n  ...",
+  "mermaidDiagram": "flowchart TB\\n  subgraph Core[\\"${isZh ? "核心层" : "Core"}\\"]\\n    A[${isZh ? "入口" : "Entry"}] --> B[${isZh ? "核心模块" : "Core Module"}]\\n  end\\n  ...",
   "coreModules": [
     {
       "name": "${isZh ? "模块名称" : "Module name"}",
@@ -292,7 +292,10 @@ ${isZh ? "请输出 JSON 格式的源码地图：" : "Please output a source cod
     {
       "term": "${isZh ? "概念名称" : "Concept name"}",
       "definition": "${isZh ? "概念解释" : "Concept definition"}",
+      "beginnerExplanation": "${isZh ? "面向新手的大白话解释，结合本项目的具体场景" : "Plain-language explanation for beginners, grounded in this project"}",
+      "whyItMatters": "${isZh ? "为什么理解这个概念对读懂本项目很重要" : "Why understanding this concept matters for reading this project"}",
       "relatedFiles": ["path/to/file.ts"],
+      "whereToFind": ["path/to/file.ts"],
       "importance": "essential | important | helpful"
     }
   ]
@@ -304,7 +307,7 @@ ${isZh ? "要求" : "Requirements"}:
 2. ${isZh ? "模块划分必须基于实际目录结构，不要编造不存在的目录" : "Module division must be based on actual directory structure, do not fabricate non-existent directories"}
 3. ${isZh ? "学习路径应该从入口文件开始，由浅入深，每个阶段 3-5 个文件" : "Learning path should start from entry file, from shallow to deep, 3-5 files per phase"}
 4. ${isZh ? "时间估算基于文件数量和复杂度：简单文件 5-10 分钟，复杂文件 15-30 分钟" : "Time estimation based on file count and complexity: simple files 5-10 min, complex files 15-30 min"}
-5. ${isZh ? "关键概念应该包含项目特有的术语和设计模式" : "Key concepts should include project-specific terminology and design patterns"}
+5. ${isZh ? "关键概念应该包含项目特有的术语和设计模式；beginnerExplanation 用大白话结合本项目写，whyItMatters 说明它对读懂本项目的价值，不要写通用套话" : "Key concepts should include project-specific terminology and design patterns; write beginnerExplanation in plain language grounded in this project and whyItMatters about its value for reading this codebase — no generic filler"}
 6. ${isZh ? "importance 评级：high=核心功能，medium=重要辅助，low=工具/配置" : "Importance rating: high=core functionality, medium=important support, low=tools/config"}
 7. ${isZh ? "输出语言必须是中文" : "Output language must be English"}
 8. ${isZh ? "只输出 JSON，不要有其他内容" : "Output only JSON, no other content"}
@@ -708,9 +711,11 @@ export function mergeSourceMapWithFallback(
     ),
   ).slice(0, 5);
 
+  // Later entries win in the Map, so list fallback first: AI-generated phase
+  // titles/goals must not be overwritten by the generic template
   const mergedLearningPath = Array.from(
     new Map(
-      [...aiMap.learningPath, ...fallbackMap.learningPath].map((item) => [
+      [...fallbackMap.learningPath, ...aiMap.learningPath].map((item) => [
         String(item.phase),
         item,
       ]),
