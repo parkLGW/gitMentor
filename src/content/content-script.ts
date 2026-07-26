@@ -45,6 +45,7 @@ const uiTranslations = {
     deepAnalysisInProgress: '正在进行 AI 深度分析...',
     mayTakeMoment: '这可能需要一点时间',
     deepAnalysisFailed: '深度分析失败',
+    requestFailed: '请求失败，请刷新页面后重试',
     thinking: '思考中...',
     loc: '有效行',
     lines: '行数',
@@ -68,6 +69,7 @@ const uiTranslations = {
     deepAnalysisInProgress: 'Performing deep analysis with AI...',
     mayTakeMoment: 'This may take a moment',
     deepAnalysisFailed: 'Deep analysis failed',
+    requestFailed: 'Request failed. Please refresh the page and try again.',
     thinking: 'Thinking...',
     loc: 'LOC',
     lines: 'Lines',
@@ -207,22 +209,39 @@ function isCodeFile(filePath: string): boolean {
   return true
 }
 
+let fileSidebarInjectionInFlight = false
+
 async function injectFileSidebar() {
-  // Load current language
-  currentLanguage = await getLanguage()
-  
   const fileInfo = parseFileUrl()
   if (!fileInfo) {
     removeFileSidebarUi()
     return
   }
-  
+
   // Check if this is a code file
   if (!isCodeFile(fileInfo.path)) {
     console.log('[GitMentor] Not a code file, skipping sidebar injection:', fileInfo.path)
     removeFileSidebarUi()
     return
   }
+
+  // The duplicate-sidebar check below only works after the async language load,
+  // so concurrent calls must be blocked before any await
+  if (fileSidebarInjectionInFlight) {
+    scheduleInjection(120)
+    return
+  }
+  fileSidebarInjectionInFlight = true
+  try {
+    await injectFileSidebarForFile(fileInfo)
+  } finally {
+    fileSidebarInjectionInFlight = false
+  }
+}
+
+async function injectFileSidebarForFile(fileInfo: FileInfo) {
+  // Load current language
+  currentLanguage = await getLanguage()
 
   const dismissedFileSidebarKey = getDismissedFileSidebarKey(fileInfo)
   if (sessionStorage.getItem(dismissedFileSidebarKey) === '1') {
@@ -676,15 +695,24 @@ function renderQuestionAnswer(
       question,
     },
     (qaResult: any) => {
+      const runtimeError = chrome.runtime.lastError
+      if (runtimeError) {
+        renderInsightError(target, runtimeError.message || getText('requestFailed'))
+        return
+      }
       if (qaResult?.error) {
         renderInsightError(target, qaResult.error)
+        return
+      }
+      if (typeof qaResult?.answer !== 'string' || !qaResult.answer.trim()) {
+        renderInsightError(target, getText('requestFailed'))
         return
       }
 
       const answer = document.createElement('div')
       answer.style.cssText =
         'padding:10px;background:#f6f8fa;border:1px solid #d8dee4;border-radius:8px;font-size:12px;line-height:1.6;color:#24292f;white-space:pre-wrap;word-break:break-word;'
-      answer.textContent = String(qaResult?.answer || '')
+      answer.textContent = qaResult.answer
       target.replaceChildren(answer)
     },
   )
@@ -1010,37 +1038,7 @@ function renderDeepAnalysis(
   const handleAsk = () => {
     const question = input.value.trim()
     if (!question) return
-    qaResponse.replaceChildren(
-      createText(
-        getText('thinking'),
-        'padding:8px;background:#f0f2f5;border-radius:4px;font-size:12px;color:#666;margin:0;',
-      ),
-    )
-
-    chrome.runtime.sendMessage(
-      {
-        action: 'askQuestion',
-        fileName: fileData.fileName,
-        fileContent: fileData.fileContent,
-        question,
-      },
-      (qaResult: any) => {
-        const errorEl = document.createElement('div')
-        if (qaResult?.error) {
-          errorEl.style.cssText =
-            'color:#d73a49;padding:8px;background:#ffeef0;border-radius:4px;font-size:12px;'
-          errorEl.textContent = qaResult.error
-          qaResponse.replaceChildren(errorEl)
-          return
-        }
-
-        const answer = document.createElement('div')
-        answer.style.cssText =
-          'padding:12px;background:#f6f8fa;border-radius:6px;font-size:12px;line-height:1.6;color:#24292e;white-space:pre-wrap;word-break:break-word;'
-        answer.textContent = String(qaResult?.answer || '')
-        qaResponse.replaceChildren(answer)
-      },
-    )
+    renderQuestionAnswer(qaResponse, fileData, question)
   }
 
   askBtn.addEventListener('click', handleAsk)
@@ -1079,11 +1077,19 @@ async function performDeepAnalysis(contentDiv: HTMLElement, fileData: any) {
     fileContent: fileData.fileContent,
     language: currentLanguage,
   }, (response: any) => {
-    if (response?.error && !response?.data) {
-      contentDiv.innerHTML = `<div style="color: #d73a49; padding: 12px; background: #ffeef0; border-radius: 4px; font-size: 12px;">${getText('deepAnalysisFailed')}: ${response.error}</div>`
-    } else if (response?.data) {
-      renderDeepAnalysis(contentDiv, response.data as DeepFileAnalysisResult, fileData)
+    const runtimeError = chrome.runtime.lastError
+    if (runtimeError) {
+      renderInsightError(contentDiv, `${getText('deepAnalysisFailed')}: ${runtimeError.message || getText('requestFailed')}`)
+      return
     }
+    if (response?.data) {
+      renderDeepAnalysis(contentDiv, response.data as DeepFileAnalysisResult, fileData)
+      return
+    }
+    renderInsightError(
+      contentDiv,
+      `${getText('deepAnalysisFailed')}: ${response?.error || getText('requestFailed')}`,
+    )
   })
 }
 
@@ -1619,18 +1625,6 @@ window.addEventListener('popstate', () => {
   scheduleInjection(80)
 })
 
-// Listen for pushState/replaceState calls (GitHub navigation)
-const originalPushState = history.pushState
-const originalReplaceState = history.replaceState
-
-history.pushState = function(...args) {
-  originalPushState.apply(this, args)
-  console.log('[GitMentor] pushState detected')
-  scheduleInjection(80)
-}
-
-history.replaceState = function(...args) {
-  originalReplaceState.apply(this, args)
-  console.log('[GitMentor] replaceState detected')
-  scheduleInjection(80)
-}
+// Note: GitHub's pushState/replaceState calls happen in the page's main world and
+// cannot be observed from this isolated world; SPA navigation is covered by the
+// MutationObserver above.

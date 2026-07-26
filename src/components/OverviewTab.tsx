@@ -2,7 +2,8 @@ import { useState, useEffect } from 'react'
 import { getRepoInfo, getReadme } from '@/services/github'
 import { analyzeReadme } from '@/services/analysis'
 import { AIAnalysisService, ProjectAnalysis } from '@/services/ai-analysis'
-import { useLLM } from '@/hooks/useLLM'
+import { llmManager } from '@/services/llm'
+import { eventBus, EVENTS } from '@/utils/eventBus'
 import { LoadingSpinner } from './LoadingSpinner'
 import { StorageKeys } from '@/constants/storage'
 import { setJsonCacheWithEviction } from '@/utils/local-cache'
@@ -20,15 +21,46 @@ function OverviewTab({ repo, language }: OverviewTabProps) {
   const [aiLoading, setAiLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [aiError, setAiError] = useState<string | null>(null)
-  const { isConfigured } = useLLM()
+  const [llmReady, setLlmReady] = useState(false)
 
   useEffect(() => {
+    const checkLLM = () => setLlmReady(llmManager.isConfigured())
+    checkLLM()
+    const unsubscribe = eventBus.on(EVENTS.LLM_CONFIG_CHANGED, checkLLM)
+    const unsubscribeClear = eventBus.on(EVENTS.LLM_CONFIG_CLEARED, () => setLlmReady(false))
+    return () => {
+      unsubscribe()
+      unsubscribeClear()
+    }
+  }, [])
+
+  useEffect(() => {
+    let cancelled = false
+
+    // AI runs after the base view is shown, never blocking the main loading state
+    const runAiAnalysis = async (projectInfo: string, readme: string, cacheKey: string) => {
+      setAiLoading(true)
+      setAiError(null)
+      try {
+        const analysis = await AIAnalysisService.analyzeProject(projectInfo, readme, language)
+        if (cancelled) return
+        setAiAnalysis(analysis)
+        setJsonCacheWithEviction(cacheKey, analysis)
+      } catch (aiErr) {
+        console.warn('[GitMentor] AI analysis failed, using basic analysis:', aiErr)
+        if (!cancelled) setAiError(aiErr instanceof Error ? aiErr.message : 'AI analysis failed')
+      } finally {
+        if (!cancelled) setAiLoading(false)
+      }
+    }
+
     const loadData = async () => {
       try {
         // Fetch repo info
         const info = await getRepoInfo(repo.owner, repo.name)
+        if (cancelled) return
         setRepoInfo(info)
-        
+
         // Try to load AI analysis from cache first (7 days expiration)
         const cacheKey = StorageKeys.overviewAnalysis(repo)
         const cached = localStorage.getItem(cacheKey)
@@ -38,63 +70,45 @@ function OverviewTab({ repo, language }: OverviewTabProps) {
             const isExpired = Date.now() - timestamp > 7 * 24 * 60 * 60 * 1000 // 7 days
             if (!isExpired && data) {
               setAiAnalysis(data)
-              setLoading(false)
-              console.log('[OverviewTab] Loaded from cache')
               return // Use cached AI analysis
-            } else {
-              console.log('[OverviewTab] Cache expired, will refresh')
-              localStorage.removeItem(cacheKey)
             }
+            localStorage.removeItem(cacheKey)
           } catch (e) {
             console.warn('Failed to parse cached analysis')
             localStorage.removeItem(cacheKey)
           }
         }
-        
+
         // Fetch README
         let readme = ''
         try {
           readme = await getReadme(repo.owner, repo.name)
-          const analysis = analyzeReadme(readme)
-          setOverview(analysis)
+          if (cancelled) return
+          setOverview(analyzeReadme(readme))
         } catch (readmeErr) {
           console.warn('Failed to fetch README, using basic info only', readmeErr)
         }
-        
+
         // Auto-trigger AI analysis if provider is configured
-        if (isConfigured()) {
-          try {
-            console.log('[GitMentor] Auto-running AI analysis...')
-            setAiLoading(true)
-            const projectInfo = `${info.name} (${info.language})`
-            const analysis = await AIAnalysisService.analyzeProject(
-              projectInfo,
-              readme,
-              language
-            )
-            setAiAnalysis(analysis)
-            
-            // Cache the result with timestamp
-            setJsonCacheWithEviction(cacheKey, analysis)
-          } catch (aiErr) {
-            console.warn('[GitMentor] AI analysis failed, using basic analysis:', aiErr)
-            setAiError(aiErr instanceof Error ? aiErr.message : 'AI analysis failed')
-          } finally {
-            setAiLoading(false)
-          }
+        if (llmReady) {
+          void runAiAnalysis(`${info.name} (${info.language})`, readme, cacheKey)
         }
       } catch (err) {
         console.error('Failed to load overview data:', err)
-        setError(err instanceof Error ? err.message : 'Failed to load data')
+        if (!cancelled) setError(err instanceof Error ? err.message : 'Failed to load data')
       } finally {
-        setLoading(false)
+        if (!cancelled) setLoading(false)
       }
     }
     loadData()
-  }, [repo, language, isConfigured])
+
+    return () => {
+      cancelled = true
+    }
+  }, [repo, language, llmReady])
 
   const handleAIAnalysis = async () => {
-    if (!isConfigured()) {
+    if (!llmReady) {
       setAiError(language === 'zh' ? '请先在设置中配置AI提供商' : 'Please configure AI provider in Settings')
       return
     }
@@ -168,7 +182,7 @@ function OverviewTab({ repo, language }: OverviewTabProps) {
               <p className="text-xs font-semibold text-gray-900">
                 {language === 'zh' ? 'AI 项目分析' : 'AI Analysis'}
               </p>
-              {!isConfigured() && (
+              {!llmReady && (
                 <p className="text-xs text-gray-600 mt-1">
                   {language === 'zh' ? '设置中配置 AI 提供商' : 'Configure AI provider in Settings'}
                 </p>
@@ -176,7 +190,7 @@ function OverviewTab({ repo, language }: OverviewTabProps) {
             </div>
             <button
               onClick={handleAIAnalysis}
-              disabled={aiLoading || !isConfigured()}
+              disabled={aiLoading || !llmReady}
               className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-400 text-white rounded text-xs font-medium transition flex items-center gap-1 whitespace-nowrap"
             >
               {aiLoading ? (

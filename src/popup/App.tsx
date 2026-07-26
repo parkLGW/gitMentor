@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import TabNav from "@/components/TabNav";
 import OverviewTab from "@/components/OverviewTab";
 import QuickStartTab from "@/components/QuickStartTab";
@@ -8,6 +8,7 @@ import SettingsTab from "@/components/SettingsTab";
 import SecurityAuditTab from "@/components/SecurityAuditTab";
 import { useRepo } from "@/hooks/useRepo";
 import { useLanguage } from "@/hooks/useLanguage";
+import { getDefaultBranch } from "@/services/github";
 
 type TabType =
   | "overview"
@@ -33,6 +34,20 @@ function App() {
   const [activeTab, setActiveTab] = useState<TabType>(getInitialTab);
   const { repo, loading, error } = useRepo();
   const { language, setLanguage } = useLanguage();
+  const [defaultBranch, setDefaultBranch] = useState("main");
+
+  useEffect(() => {
+    if (!repo) return;
+    let cancelled = false;
+    getDefaultBranch(repo.owner, repo.name)
+      .then((branch) => {
+        if (!cancelled && branch) setDefaultBranch(branch);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [repo]);
 
   if (loading) {
     return (
@@ -107,7 +122,7 @@ function App() {
       <div className="max-h-[600px] overflow-y-auto">
         {activeTab === "settings" && <SettingsTab language={language} />}
         {activeTab === "security" && (
-          <SecurityAuditTab repo={repo} language={language} />
+          <SecurityAuditTab repo={repo} language={language} defaultBranch={defaultBranch} />
         )}
         {activeTab !== "settings" && activeTab !== "security" && (
           <div className="px-4 py-4">
@@ -118,7 +133,7 @@ function App() {
               <QuickStartTab repo={repo} language={language} />
             )}
             {activeTab === "sourcemap" && (
-              <SourceMapTab repo={repo} language={language} />
+              <SourceMapTab repo={repo} language={language} defaultBranch={defaultBranch} />
             )}
             {activeTab === "agent" && (
               <AgentTab repo={repo} language={language} />
