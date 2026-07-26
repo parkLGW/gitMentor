@@ -80,6 +80,33 @@ export function setLocalCacheWithEviction(
   return false;
 }
 
+export function getJsonCache<T>(
+  key: string,
+  maxAgeMs: number,
+  validate?: (data: unknown) => boolean,
+): T | null {
+  const raw = localStorage.getItem(key);
+  if (!raw) return null;
+  try {
+    const { data, timestamp } = JSON.parse(raw) as {
+      data?: unknown;
+      timestamp?: number;
+    };
+    if (typeof timestamp !== "number" || Date.now() - timestamp > maxAgeMs) {
+      localStorage.removeItem(key);
+      return null;
+    }
+    if (data == null || (validate && !validate(data))) {
+      localStorage.removeItem(key);
+      return null;
+    }
+    return data as T;
+  } catch {
+    localStorage.removeItem(key);
+    return null;
+  }
+}
+
 export function setJsonCacheWithEviction<T>(key: string, data: T): boolean {
   return setLocalCacheWithEviction(
     key,

@@ -8,6 +8,7 @@ import {
 } from "@/types/security";
 import { STORAGE_KEYS, STORAGE_PREFIXES, StorageKeys } from "@/constants/storage";
 import { buildGithubBlobUrl } from "@/services/github-url";
+import { getJsonCache } from "@/utils/local-cache";
 
 interface SecurityAuditTabProps {
   repo: { owner: string; name: string };
@@ -302,6 +303,11 @@ const defaultAdvancedOptions: AdvancedOptions = {
 
 function SecurityAuditTab({ repo, language, defaultBranch = "main" }: SecurityAuditTabProps) {
   const [report, setReport] = useState<SecurityAuditReport | null>(null);
+  const [visibleFindings, setVisibleFindings] = useState(50);
+
+  useEffect(() => {
+    setVisibleFindings(50);
+  }, [report]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -438,18 +444,15 @@ function SecurityAuditTab({ repo, language, defaultBranch = "main" }: SecurityAu
 
     try {
       if (!force) {
-        const cached = localStorage.getItem(cacheKey);
-        if (cached) {
-          const parsed = JSON.parse(cached) as {
-            data: SecurityAuditReport;
-            timestamp: number;
-          };
-          const valid = Date.now() - parsed.timestamp < CACHE_TTL_MS;
-          if (valid && parsed.data?.summary) {
-            setReport(parsed.data);
-            setLoading(false);
-            return;
-          }
+        const cachedReport = getJsonCache<SecurityAuditReport>(
+          cacheKey,
+          CACHE_TTL_MS,
+          (data) => Boolean((data as SecurityAuditReport)?.summary),
+        );
+        if (cachedReport) {
+          setReport(cachedReport);
+          setLoading(false);
+          return;
         }
       }
 
@@ -720,7 +723,7 @@ function SecurityAuditTab({ repo, language, defaultBranch = "main" }: SecurityAu
             </div>
           ) : (
             <div className="space-y-2">
-              {report.findings.map((finding) => (
+              {report.findings.slice(0, visibleFindings).map((finding) => (
                 <FindingCard
                   key={finding.id}
                   finding={finding}
@@ -729,6 +732,16 @@ function SecurityAuditTab({ repo, language, defaultBranch = "main" }: SecurityAu
                   defaultBranch={defaultBranch}
                 />
               ))}
+              {report.findings.length > visibleFindings && (
+                <button
+                  onClick={() => setVisibleFindings((count) => count + 50)}
+                  className="w-full py-2 text-xs text-gray-600 border border-gray-200 rounded hover:bg-gray-50 transition"
+                >
+                  {language === "zh"
+                    ? `显示更多（剩余 ${report.findings.length - visibleFindings} 条）`
+                    : `Show more (${report.findings.length - visibleFindings} remaining)`}
+                </button>
+              )}
             </div>
           )}
 

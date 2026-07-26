@@ -2,11 +2,10 @@ import { useState, useEffect } from 'react'
 import { getRepoInfo, getReadme } from '@/services/github'
 import { analyzeReadme } from '@/services/analysis'
 import { AIAnalysisService, ProjectAnalysis } from '@/services/ai-analysis'
-import { llmManager } from '@/services/llm'
-import { eventBus, EVENTS } from '@/utils/eventBus'
+import { useLLMReady } from '@/hooks/useLLMReady'
 import { LoadingSpinner } from './LoadingSpinner'
 import { StorageKeys } from '@/constants/storage'
-import { setJsonCacheWithEviction } from '@/utils/local-cache'
+import { getJsonCache, setJsonCacheWithEviction } from '@/utils/local-cache'
 
 interface OverviewTabProps {
   repo: { owner: string; name: string }
@@ -21,18 +20,7 @@ function OverviewTab({ repo, language }: OverviewTabProps) {
   const [aiLoading, setAiLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [aiError, setAiError] = useState<string | null>(null)
-  const [llmReady, setLlmReady] = useState(false)
-
-  useEffect(() => {
-    const checkLLM = () => setLlmReady(llmManager.isConfigured())
-    checkLLM()
-    const unsubscribe = eventBus.on(EVENTS.LLM_CONFIG_CHANGED, checkLLM)
-    const unsubscribeClear = eventBus.on(EVENTS.LLM_CONFIG_CLEARED, () => setLlmReady(false))
-    return () => {
-      unsubscribe()
-      unsubscribeClear()
-    }
-  }, [])
+  const llmReady = useLLMReady()
 
   useEffect(() => {
     let cancelled = false
@@ -63,20 +51,10 @@ function OverviewTab({ repo, language }: OverviewTabProps) {
 
         // Try to load AI analysis from cache first (7 days expiration)
         const cacheKey = StorageKeys.overviewAnalysis(repo)
-        const cached = localStorage.getItem(cacheKey)
-        if (cached) {
-          try {
-            const { data, timestamp } = JSON.parse(cached)
-            const isExpired = Date.now() - timestamp > 7 * 24 * 60 * 60 * 1000 // 7 days
-            if (!isExpired && data) {
-              setAiAnalysis(data)
-              return // Use cached AI analysis
-            }
-            localStorage.removeItem(cacheKey)
-          } catch (e) {
-            console.warn('Failed to parse cached analysis')
-            localStorage.removeItem(cacheKey)
-          }
+        const cachedAnalysis = getJsonCache<ProjectAnalysis>(cacheKey, 7 * 24 * 60 * 60 * 1000)
+        if (cachedAnalysis) {
+          setAiAnalysis(cachedAnalysis)
+          return // Use cached AI analysis
         }
 
         // Fetch README

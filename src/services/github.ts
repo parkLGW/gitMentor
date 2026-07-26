@@ -911,15 +911,26 @@ export function formatSimpleDirectoryTree(nodes: TreeNode[]): string {
 // Get file content
 // ============================================
 
+function truncateFileLines(content: string, maxLines: number): string {
+  const lines = content.split('\n')
+  if (lines.length <= maxLines) return content
+  const truncated = lines.slice(0, maxLines).join('\n')
+  return `${truncated}\n\n// ... (${lines.length - maxLines} more lines)`
+}
+
 export async function getFileContent(
   owner: string,
   repo: string,
   path: string,
   maxLines: number = 100
 ): Promise<string | null> {
-  const cacheKey = getCacheKey(owner, repo, `file_${path}_${maxLines}`)
+  // Cache the full file once; per-caller maxLines truncation happens on read,
+  // so different maxLines values share a single download and cache entry
+  const cacheKey = getCacheKey(owner, repo, `file_${path}`)
   const cached = getFromCache<string>(cacheKey)
-  if (cached) return cached
+  if (cached !== null && cached !== undefined) {
+    return truncateFileLines(cached, maxLines)
+  }
 
   try {
     const response = await fetchGithubWithRetry(
@@ -937,16 +948,8 @@ export async function getFileContent(
     }
 
     const content = await response.text()
-
-    // Limit lines
-    const lines = content.split('\n')
-    const truncated = lines.slice(0, maxLines).join('\n')
-    const result = lines.length > maxLines
-      ? `${truncated}\n\n// ... (${lines.length - maxLines} more lines)`
-      : truncated
-
-    setCache(cacheKey, result)
-    return result
+    setCache(cacheKey, content)
+    return truncateFileLines(content, maxLines)
   } catch (error) {
     console.debug(`Failed to fetch file ${path}:`, error)
     return null

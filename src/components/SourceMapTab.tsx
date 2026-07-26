@@ -15,11 +15,11 @@ import {
   SOURCE_MAP_SCHEMA_VERSION,
 } from '@/prompts'
 import { llmManager } from '@/services/llm'
-import { eventBus, EVENTS } from '@/utils/eventBus'
 import { createLearningMission, normalizeConceptCard } from '@/services/learning-mission'
 import { AnalysisEvidence, ConfidenceLevel, LearningMission as LearningMissionType } from '@/types/learning'
 import { StorageKeys } from '@/constants/storage'
-import { setJsonCacheWithEviction } from '@/utils/local-cache'
+import { getJsonCache, setJsonCacheWithEviction } from '@/utils/local-cache'
+import { useLLMReady } from '@/hooks/useLLMReady'
 import { buildGithubBlobUrl } from '@/services/github-url'
 
 interface SourceMapTabProps {
@@ -50,7 +50,7 @@ function SourceMapTab({ repo, language, defaultBranch = 'main' }: SourceMapTabPr
   const [loading, setLoading] = useState(true)
   const [analyzing, setAnalyzing] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [llmReady, setLlmReady] = useState(false)
+  const llmReady = useLLMReady()
 
   const isZh = language === 'zh'
   const repoKey = `${repo.owner}/${repo.name}`
@@ -87,28 +87,6 @@ function SourceMapTab({ repo, language, defaultBranch = 'main' }: SourceMapTabPr
         resolve(response)
       })
     })
-  }, [])
-
-  // Wait for LLM config - 使用事件驱动而非轮询
-  useEffect(() => {
-    const checkLLM = () => {
-      const ready = llmManager.isConfigured()
-      setLlmReady(ready)
-    }
-
-    // Initial check
-    checkLLM()
-
-    // Subscribe to config change events
-    const unsubscribe = eventBus.on(EVENTS.LLM_CONFIG_CHANGED, checkLLM)
-    const unsubscribeClear = eventBus.on(EVENTS.LLM_CONFIG_CLEARED, () => {
-      setLlmReady(false)
-    })
-
-    return () => {
-      unsubscribe()
-      unsubscribeClear()
-    }
   }, [])
 
   // Cancel any ongoing requests when repo changes
@@ -224,39 +202,27 @@ function SourceMapTab({ repo, language, defaultBranch = 'main' }: SourceMapTabPr
       setError(null)
 
       try {
-        const cached = localStorage.getItem(cacheKey)
-        if (cached) {
-          try {
-            const { data, timestamp } = JSON.parse(cached) as { data?: SourceMapOutput; timestamp?: number }
-            const isExpired = !timestamp || (Date.now() - timestamp > 7 * 24 * 60 * 60 * 1000)
-            const schemaValid = data?.schemaVersion === SOURCE_MAP_SCHEMA_VERSION
-            const cacheUsable =
-              !isExpired &&
-              schemaValid &&
-              data?.quality === 'complete' &&
-              !!data?.architectureType
-
-            if (cacheUsable && data) {
-              if (currentRequestId !== requestIdRef.current) return
-              setSourceMap(data)
-              setLoading(false)
-              console.log('[SourceMapTab] Loaded cache', {
-                quality: data.quality,
-                score: data.completenessScore,
-              })
-              void collectDeepContext(repo.owner, repo.name).then((context) => {
-                setReadmeSummary(context.readmeSummary || context.readme.slice(0, 1200))
-              }).catch(() => undefined)
-              console.log('[SourceMapTab] Skip auto refinement when cache hit; use manual refresh to re-run AI')
-              return
-            }
-
-            console.log('[SourceMapTab] Cache invalid/expired/schema mismatch, removing')
-            localStorage.removeItem(cacheKey)
-          } catch {
-            console.warn('[SourceMapTab] Invalid cache format')
-            localStorage.removeItem(cacheKey)
-          }
+        const cachedMap = getJsonCache<SourceMapOutput>(
+          cacheKey,
+          7 * 24 * 60 * 60 * 1000,
+          (data) => {
+            const map = data as SourceMapOutput
+            return (
+              map?.schemaVersion === SOURCE_MAP_SCHEMA_VERSION &&
+              map?.quality === 'complete' &&
+              !!map?.architectureType
+            )
+          },
+        )
+        if (cachedMap) {
+          if (currentRequestId !== requestIdRef.current) return
+          setSourceMap(cachedMap)
+          setLoading(false)
+          void collectDeepContext(repo.owner, repo.name).then((context) => {
+            setReadmeSummary(context.readmeSummary || context.readme.slice(0, 1200))
+          }).catch(() => undefined)
+          // Skip auto refinement on cache hit; manual refresh re-runs AI
+          return
         }
 
         const context = await collectDeepContext(repo.owner, repo.name)

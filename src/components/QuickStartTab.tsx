@@ -5,9 +5,9 @@ import { collectQuickContext } from "@/services/context-collector";
 import { getRepoInfo } from "@/services/github";
 import { AIAnalysisService, QuickStartGuide } from "@/services/ai-analysis";
 import { llmManager } from "@/services/llm";
-import { eventBus, EVENTS } from "@/utils/eventBus";
+import { useLLMReady } from "@/hooks/useLLMReady";
 import { StorageKeys } from "@/constants/storage";
-import { setJsonCacheWithEviction } from "@/utils/local-cache";
+import { getJsonCache, setJsonCacheWithEviction } from "@/utils/local-cache";
 
 interface QuickStartTabProps {
   repo: { owner: string; name: string };
@@ -109,54 +109,24 @@ function QuickStartTab({ repo, language }: QuickStartTabProps) {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [isConfigured, setIsConfigured] = useState(() => llmManager.isConfigured());
+  const isConfigured = useLLMReady();
   // Guards against a slow AI request resolving after the repo/language changed
   const requestIdRef = useRef(0);
 
   const isZh = language === "zh";
-
-  // 检查 LLM 配置 - 使用事件驱动而非轮询
-  useEffect(() => {
-    const checkConfig = () => {
-      const configured = llmManager.isConfigured();
-      setIsConfigured(configured);
-    };
-
-    // Initial check
-    checkConfig();
-
-    // Subscribe to config change events
-    const unsubscribe = eventBus.on(EVENTS.LLM_CONFIG_CHANGED, checkConfig);
-    const unsubscribeClear = eventBus.on(EVENTS.LLM_CONFIG_CLEARED, () => {
-      setIsConfigured(false);
-    });
-
-    return () => {
-      unsubscribe();
-      unsubscribeClear();
-    };
-  }, []);
 
   const loadData = async (clearCache = false) => {
     const requestId = ++requestIdRef.current;
     const isStale = () => requestId !== requestIdRef.current;
     const cacheKey = getCacheKey(repo.owner, repo.name, language);
 
-    // 检查缓存
+    // 检查缓存（24小时）
     if (!clearCache) {
-      try {
-        const cached = localStorage.getItem(cacheKey);
-        if (cached) {
-          const { data, timestamp } = JSON.parse(cached);
-          // 24小时缓存
-          if (Date.now() - timestamp < 24 * 60 * 60 * 1000) {
-            setGuide(data);
-            setError(null);
-            return true;
-          }
-        }
-      } catch (e) {
-        console.warn("[QuickStartTab] Cache read error:", e);
+      const cachedGuide = getJsonCache<QuickStartGuide>(cacheKey, 24 * 60 * 60 * 1000);
+      if (cachedGuide) {
+        setGuide(cachedGuide);
+        setError(null);
+        return true;
       }
     }
 
