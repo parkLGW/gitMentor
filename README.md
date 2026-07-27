@@ -246,6 +246,8 @@ Important service areas:
 
 - Use the tab’s refresh button.
 - Cached results are stored per repository and language.
+- Quick Start keeps AI output bounded. If a provider stops at its output limit, GitMentor retries once with a compact guide instead of parsing the incomplete JSON.
+- If the compact retry is also truncated, increase **Maximum Tokens** in Settings or retry with a model that supports longer output.
 
 ### Security audit has false positives
 
@@ -506,6 +508,8 @@ src/
 
 - 使用对应标签页的刷新按钮。
 - 缓存按仓库和语言保存。
+- 快速上手会限制 AI 输出规模。若供应商因输出长度限制提前停止，GitMentor 会使用紧凑格式自动重试一次，不会解析残缺 JSON。
+- 如果紧凑重试仍被截断，请在设置中提高 **最大 Token 数**，或改用支持更长输出的模型。
 
 ### 安全审计出现误报
 

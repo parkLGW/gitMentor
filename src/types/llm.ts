@@ -56,6 +56,7 @@ export interface LLMMessage {
 
 export interface LLMResponse {
   content: string
+  finishReason?: 'stop' | 'length' | 'content_filter' | 'tool_calls' | 'unknown'
   tokensUsed?: {
     prompt: number
     completion: number

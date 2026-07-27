@@ -14,6 +14,36 @@ function resolveModel(normalized: NormalizedLLMConfig): string {
   return normalized.model || getPresetSettings(normalized.preset).defaultModel
 }
 
+function normalizeOpenAIFinishReason(
+  reason: unknown,
+): LLMResponse['finishReason'] {
+  switch (reason) {
+    case 'stop':
+    case 'length':
+    case 'content_filter':
+    case 'tool_calls':
+      return reason
+    default:
+      return 'unknown'
+  }
+}
+
+function normalizeClaudeStopReason(
+  reason: unknown,
+): LLMResponse['finishReason'] {
+  switch (reason) {
+    case 'max_tokens':
+      return 'length'
+    case 'end_turn':
+    case 'stop_sequence':
+      return 'stop'
+    case 'tool_use':
+      return 'tool_calls'
+    default:
+      return 'unknown'
+  }
+}
+
 export abstract class BaseLLMProvider implements LLMProvider {
   abstract name: string
   abstract type: LLMProtocolType
@@ -138,6 +168,7 @@ export class OpenAICompatibleProvider extends BaseLLMProvider {
       const data = await response.json()
       return {
         content: data.choices?.[0]?.message?.content || '',
+        finishReason: normalizeOpenAIFinishReason(data.choices?.[0]?.finish_reason),
         model: data.model || normalized.model,
         tokensUsed: {
           prompt: data.usage?.prompt_tokens || 0,
@@ -310,6 +341,7 @@ export class ClaudeCompatibleProvider extends BaseLLMProvider {
       const data = await response.json()
       return {
         content: data.content?.[0]?.text || '',
+        finishReason: normalizeClaudeStopReason(data.stop_reason),
         model: data.model || normalized.model,
         tokensUsed: {
           prompt: data.usage?.input_tokens || 0,

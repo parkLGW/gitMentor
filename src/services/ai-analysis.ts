@@ -2,6 +2,7 @@
 
 import { llmManager } from './llm'
 import { usageTracker } from './usage-tracker'
+import { parseLooseJson } from './llm-json'
 
 // Helper function to extract JSON from markdown code block
 function extractJSONFromMarkdown(text: string): string | null {
@@ -166,6 +167,57 @@ export interface QuickStartGuide {
   nextSteps: string
 }
 
+function isQuickStartGuide(value: unknown): value is QuickStartGuide {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false
+  const guide = value as Partial<QuickStartGuide>
+  return (
+    Array.isArray(guide.prerequisites) && guide.prerequisites.every((item) => typeof item === 'string') &&
+    Array.isArray(guide.steps) && guide.steps.every((step) =>
+      !!step &&
+      typeof step === 'object' &&
+      typeof step.title === 'string' &&
+      typeof step.description === 'string' &&
+      (step.commands === undefined ||
+        (Array.isArray(step.commands) && step.commands.every((command) => typeof command === 'string')))
+    ) &&
+    !!guide.firstExample &&
+    typeof guide.firstExample === 'object' &&
+    typeof guide.firstExample.title === 'string' &&
+    typeof guide.firstExample.code === 'string' &&
+    typeof guide.firstExample.explanation === 'string' &&
+    Array.isArray(guide.commonMistakes) && guide.commonMistakes.every((mistake) =>
+      !!mistake &&
+      typeof mistake === 'object' &&
+      typeof mistake.issue === 'string' &&
+      typeof mistake.solution === 'string'
+    ) &&
+    typeof guide.nextSteps === 'string'
+  )
+}
+
+function parseQuickStartGuide(text: string): QuickStartGuide {
+  const parsed = parseLooseJson(text)
+  if (!isQuickStartGuide(parsed)) {
+    throw new Error('Failed to parse AI response: Invalid quick start JSON format')
+  }
+  return parsed
+}
+
+function compactQuickStartPrompt(prompt: string, language: 'zh' | 'en'): string {
+  const constraint = language === 'zh'
+    ? `\n\n上一次响应因长度限制被截断。请重新输出更紧凑的完整 JSON：最多 4 个步骤，每个步骤最多 4 条命令，示例代码最多 20 行，常见错误最多 3 条。不要输出解释、Markdown 或额外字段。`
+    : `\n\nThe previous response was truncated by the output limit. Return a more compact, complete JSON object: at most 4 steps, at most 4 commands per step, at most 20 lines of example code, and at most 3 common mistakes. Do not output explanations, Markdown, or extra fields.`
+  return `${prompt}${constraint}`
+}
+
+function quickStartTruncatedError(language: 'zh' | 'en'): Error {
+  return new Error(
+    language === 'zh'
+      ? 'AI 输出因长度限制被截断，紧凑重试后仍未完成。请提高最大输出长度或稍后重试。'
+      : 'AI output was truncated by the length limit and the compact retry was still incomplete. Increase the maximum output length or try again.',
+  )
+}
+
 export interface SourceCodeMap {
   architecture: string
   entryPoint: string
@@ -264,6 +316,7 @@ Create REAL setup steps based on the ACTUAL project:
 - Real configuration THIS project requires
 - Real working example with THIS project's API
 - Real common mistakes people make with THIS project
+- Keep the response compact: at most 4 steps, 4 commands per step, 20 lines of example code, and 3 common mistakes
 
 JSON response:
 {
@@ -272,7 +325,7 @@ JSON response:
     {
       "title": "Step 1: Clone and Install",
       "description": "Real steps for this project",
-      "commands": ["git clone...", "npm install", "...]
+      "commands": ["git clone...", "npm install", "..."]
     }
   ],
   "firstExample": {
@@ -326,6 +379,7 @@ ${packageJson ? `PACKAGE.JSON:\n${packageJson}` : ''}
 }
 
 使用实际的、可执行的代码和命令。
+保持输出紧凑：最多4个步骤，每步最多4条命令，示例代码最多20行，常见错误最多3条。
 `,
 
   sourceMap: (projectInfo: string, fileTree: string, keyFiles?: string) => `
@@ -626,12 +680,21 @@ export class AIAnalysisService {
         ? PROMPTS.quickStartCN(projectInfo, readme, packageJson)
         : PROMPTS.quickStart(projectInfo, readme, packageJson)
 
-    const response = await provider.complete(prompt)
+    let response = await provider.complete(prompt)
     
     // Track usage
-    usageTracker.track('quickStart', prompt, response.content, response.model || 'unknown')
-    
-    return safeParseJSON<QuickStartGuide>(response.content)
+    void usageTracker.track('quickStart', prompt, response.content, response.model || 'unknown')
+
+    if (response.finishReason === 'length') {
+      const retryPrompt = compactQuickStartPrompt(prompt, language)
+      response = await provider.complete(retryPrompt)
+      void usageTracker.track('quickStartCompactRetry', retryPrompt, response.content, response.model || 'unknown')
+      if (response.finishReason === 'length') {
+        throw quickStartTruncatedError(language)
+      }
+    }
+
+    return parseQuickStartGuide(response.content)
   }
 
   /**
