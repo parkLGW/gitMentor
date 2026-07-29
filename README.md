@@ -1,6 +1,6 @@
 # GitMentor
 
-GitMentor is a Chrome extension for learning GitHub repositories faster. It combines repository metadata, README analysis, source-map generation, code-file inspection, conversational Q&A, and local security auditing into one compact workflow.
+GitMentor is a Chrome extension for understanding unfamiliar GitHub repositories without leaving GitHub. Open a repository to get a practical learning path—what the project does, how to run it, what to read first, and how its core modules connect. Open a source file to inspect and ask questions about it in an in-page sidebar.
 
 **English** | [中文](#中文)
 
@@ -15,7 +15,30 @@ GitMentor is built for developers who open an unfamiliar GitHub repository and w
 - What does this specific source file do?
 - Are there obvious security or supply-chain risks?
 
-The extension runs in the browser, stores configuration locally, and talks only to GitHub and the AI provider you configure.
+Rather than starting with an empty chat box, GitMentor organizes repository learning into a guided flow:
+
+```text
+Repository overview → Quick start → Source map → Reading path → File understanding → Follow-up questions
+```
+
+## How It Works on GitHub
+
+GitMentor has two surfaces, both tied to the GitHub page you are currently viewing:
+
+- **Repository popup:** click the extension icon on a repository page to open the overview, quick start, source map, learning path, repository agent, and security audit.
+- **Code file sidebar:** open a supported source file on GitHub and GitMentor injects a sidebar with local structure, symbols, imports, AI analysis, and file-specific questions.
+
+The extension runs in the browser and stores configuration locally. Several views provide deterministic local previews without AI; generated guides, deep analysis, and grounded Q&A require a configured OpenAI-compatible, Claude-compatible, or local model endpoint. Repository content is sent only to GitHub and the AI endpoint selected by the user.
+
+## Why GitMentor
+
+Many AI coding tools focus on writing or changing code. GitMentor is designed for the earlier step: building a reliable mental model of a repository you do not know yet.
+
+- **GitHub-native workflow:** learn while browsing the repository instead of copying its URL or context into another site.
+- **A guided learning path:** move from project purpose and first run to architecture, reading order, and individual files.
+- **Grounded repository questions:** retrieve relevant source on demand and expose analyzed files, evidence, confidence, and fallback states.
+- **Bring your own model:** use common hosted protocols or local inference instead of depending on one AI vendor.
+- **Useful before AI is configured:** deterministic repository and file analysis provides an initial view, while clearly separating it from AI-generated conclusions.
 
 ## Current Features
 
@@ -264,7 +287,7 @@ MIT License.
 
 # GitMentor - GitHub 项目学习助手
 
-GitMentor 是一个帮助开发者更快读懂 GitHub 仓库的 Chrome 扩展。它把仓库信息、README 分析、源码地图、代码文件理解、对话式问答和本地安全审计整合到一个轻量工作流里。
+GitMentor 是一个直接运行在 GitHub 页面上的项目学习 Chrome 扩展。打开陌生仓库后，它会帮助你理解项目做什么、如何运行、应该先读哪些文件，以及核心模块如何协作；进入具体源码文件时，还可以在页面侧边栏中直接理解和追问代码。
 
 ## GitMentor 能做什么
 
@@ -277,7 +300,30 @@ GitMentor 是一个帮助开发者更快读懂 GitHub 仓库的 Chrome 扩展。
 - 当前这个源码文件具体做什么？
 - 仓库里有没有明显的安全或供应链风险？
 
-扩展运行在浏览器中，配置保存在本地，只会与 GitHub 和你配置的 AI 提供商通信。
+GitMentor 不要求用户先面对一个空白聊天框，而是把项目学习组织成一条连续路径：
+
+```text
+项目概览 → 快速运行 → 源码地图 → 阅读顺序 → 文件理解 → 继续追问
+```
+
+## 如何在 GitHub 页面中使用
+
+GitMentor 提供两种与当前 GitHub 页面绑定的使用形态：
+
+- **仓库弹窗：** 在仓库页面点击扩展图标，查看项目概览、快速上手、源码地图、学习路径、仓库问答和安全审计。
+- **代码文件侧边栏：** 在 GitHub 打开受支持的源码文件后，页面会出现 GitMentor 侧边栏，展示本地结构、符号、依赖、AI 深度分析和当前文件问答。
+
+扩展运行在浏览器中，配置保存在本地。部分页面可以在未配置 AI 时提供确定性的本地初步分析；生成式快速指南、深度分析和基于源码的问答需要配置 OpenAI 兼容、Claude 兼容或本地模型端点。仓库内容只会发送给 GitHub 和用户选择的 AI 端点。
+
+## GitMentor 的特点
+
+许多 AI 编程工具主要帮助用户编写或修改代码。GitMentor 更关注之前的一步：帮助开发者为陌生仓库建立可靠的整体认识。
+
+- **GitHub 原位使用：** 浏览仓库时直接学习，不必把仓库 URL 或代码上下文复制到另一个网站。
+- **结构化学习路径：** 从项目用途和首次运行，逐步进入架构、阅读顺序和具体文件。
+- **有源码依据的问答：** 按需检索相关源码，并展示已分析文件、证据、置信度和降级状态。
+- **自选模型：** 支持常见云端兼容协议和本地推理，不绑定单一 AI 厂商。
+- **未配置 AI 也有基础价值：** 使用确定性的仓库和文件分析生成初步结果，并明确区分本地结论与 AI 生成内容。
 
 ## 当前功能
 
