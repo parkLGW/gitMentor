@@ -12,6 +12,7 @@ export class LLMManager {
   private currentProvider: LLMProvider | null = null
   private configKey = STORAGE_KEYS.llmConfig
   private multiConfigKey = STORAGE_KEYS.llmConfigMap
+  private configRevision = 0
 
   private constructor() {
     this.initializeProviders()
@@ -36,6 +37,7 @@ export class LLMManager {
   private loadSavedConfig(): void {
     // Use chrome.storage for persistence across extension reloads
     if (typeof chrome !== 'undefined' && chrome.storage) {
+      const restoreRevision = this.configRevision
       chrome.storage.local.get(this.configKey, (data: any) => {
         try {
           if (data[this.configKey]) {
@@ -46,7 +48,15 @@ export class LLMManager {
               normalized.protocol,
               normalized.preset,
             )
-            void this.applyCurrentConfig(config)
+            void this.applyCurrentConfig(config, restoreRevision)
+              .then((applied) => {
+                if (applied) {
+                  eventBus.emit(EVENTS.LLM_CONFIG_CHANGED, normalized.protocol, normalized)
+                }
+              })
+              .catch((error) => {
+                console.warn('Failed to restore saved LLM config:', error)
+              })
           }
         } catch (error) {
           console.warn('Failed to load saved LLM config from chrome.storage:', error)
@@ -71,20 +81,23 @@ export class LLMManager {
     return `${protocol}:${preset}`
   }
 
-  private async applyCurrentConfig(config: LLMConfig): Promise<void> {
+  private async applyCurrentConfig(config: LLMConfig, revision: number): Promise<boolean> {
     const normalized = migrateLegacyLLMConfig(config)
-    const provider = this.providers.get(normalized.protocol)
-    if (!provider) {
-      throw new Error(`Unknown protocol: ${normalized.protocol}`)
-    }
+    const provider = this.createProtocolProvider(normalized.protocol)
 
     await provider.configure(config)
+    if (revision !== this.configRevision) return false
+
+    this.providers.set(normalized.protocol, provider)
     this.currentProvider = provider
+    return true
   }
 
   async setCurrentConfig(config: LLMConfig): Promise<void> {
     const normalized = migrateLegacyLLMConfig(config)
-    await this.applyCurrentConfig(config)
+    const revision = ++this.configRevision
+    const applied = await this.applyCurrentConfig(config, revision)
+    if (!applied) return
 
     const providerCandidate = (config as { provider?: unknown }).provider
     const configToSave =
@@ -187,6 +200,7 @@ export class LLMManager {
   }
 
   async clearConfig(selection?: LLMProviderType | { protocol: LLMProtocolType; preset: LLMPresetType }): Promise<void> {
+    this.configRevision++
     eventBus.emit(EVENTS.LLM_CONFIG_CLEARED, selection)
 
     if (typeof chrome === 'undefined' || !chrome.storage) {

@@ -23,7 +23,7 @@ The extension runs in the browser, stores configuration locally, and talks only 
 
 - Reads GitHub repository metadata and README content.
 - Shows project value, difficulty, audience, key features, use cases, and project activity.
-- Uses a cached AI analysis when available, with a local README-based fallback when AI is not configured.
+- Uses cached AI analysis when available. While AI is unavailable or still running, it clearly labels a preliminary README/GitHub preview and omits claims that cannot be extracted instead of inventing generic placeholders.
 
 ### Quick Start
 
@@ -285,7 +285,7 @@ GitMentor 是一个帮助开发者更快读懂 GitHub 仓库的 Chrome 扩展。
 
 - 读取 GitHub 仓库元信息和 README。
 - 展示项目价值、学习难度、目标用户、主要功能、应用场景和活跃度。
-- 优先使用缓存的 AI 分析；未配置 AI 时使用 README 本地分析兜底。
+- 优先使用缓存的 AI 分析；AI 尚未完成或不可用时，明确展示基于 README/GitHub 数据的初步概览，无法提取的信息直接省略，不再填充通用模板。
 
 ### 快速上手
 

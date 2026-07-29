@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { getRepoInfo, getReadme } from '@/services/github'
 import { analyzeReadme } from '@/services/analysis'
 import { AIAnalysisService, ProjectAnalysis } from '@/services/ai-analysis'
@@ -22,24 +22,29 @@ function OverviewTab({ repo, language }: OverviewTabProps) {
   const [error, setError] = useState<string | null>(null)
   const [aiError, setAiError] = useState<string | null>(null)
   const llmReady = useLLMReady()
+  const analysisRequestIdRef = useRef(0)
 
   useEffect(() => {
     let cancelled = false
+    if (!llmReady) setAiLoading(false)
 
     // AI runs after the base view is shown, never blocking the main loading state
     const runAiAnalysis = async (projectInfo: string, readme: string, cacheKey: string) => {
+      const requestId = ++analysisRequestIdRef.current
       setAiLoading(true)
       setAiError(null)
       try {
         const analysis = await AIAnalysisService.analyzeProject(projectInfo, readme, language)
-        if (cancelled) return
+        if (cancelled || requestId !== analysisRequestIdRef.current) return
         setAiAnalysis(analysis)
         setJsonCacheWithEviction(cacheKey, analysis)
       } catch (aiErr) {
         console.warn('[GitMentor] AI analysis failed, using basic analysis:', aiErr)
-        if (!cancelled) setAiError(aiErr instanceof Error ? aiErr.message : 'AI analysis failed')
+        if (!cancelled && requestId === analysisRequestIdRef.current) {
+          setAiError(aiErr instanceof Error ? aiErr.message : 'AI analysis failed')
+        }
       } finally {
-        if (!cancelled) setAiLoading(false)
+        if (!cancelled && requestId === analysisRequestIdRef.current) setAiLoading(false)
       }
     }
 
@@ -83,6 +88,7 @@ function OverviewTab({ repo, language }: OverviewTabProps) {
 
     return () => {
       cancelled = true
+      analysisRequestIdRef.current++
     }
   }, [repo, language, llmReady])
 
@@ -92,6 +98,7 @@ function OverviewTab({ repo, language }: OverviewTabProps) {
       return
     }
 
+    const requestId = ++analysisRequestIdRef.current
     setAiLoading(true)
     setAiError(null)
 
@@ -103,15 +110,18 @@ function OverviewTab({ repo, language }: OverviewTabProps) {
         readme || (overview?.coreValue || ''),
         language
       )
+      if (requestId !== analysisRequestIdRef.current) return
       setAiAnalysis(analysis)
 
       // Cache the result with timestamp
       const cacheKey = StorageKeys.overviewAnalysis(repo)
       setJsonCacheWithEviction(cacheKey, analysis)
     } catch (err) {
-      setAiError(err instanceof Error ? err.message : 'Analysis failed')
+      if (requestId === analysisRequestIdRef.current) {
+        setAiError(err instanceof Error ? err.message : 'Analysis failed')
+      }
     } finally {
-      setAiLoading(false)
+      if (requestId === analysisRequestIdRef.current) setAiLoading(false)
     }
   }
 
@@ -294,6 +304,18 @@ function OverviewTab({ repo, language }: OverviewTabProps) {
       {/* Only show fallback content if no AI analysis */}
       {!aiAnalysis && (
         <>
+          <div className="bg-slate-50 border border-slate-200 rounded-lg px-3 py-2">
+            <p className="text-xs text-slate-600 leading-relaxed">
+              {language === 'zh'
+                ? aiLoading
+                  ? '以下为基于 README 和 GitHub 数据的初步概览，AI 分析完成后会自动替换。'
+                  : '以下为基于 README 和 GitHub 数据的初步概览。'
+                : aiLoading
+                  ? 'Preliminary overview based on README and GitHub data. It will be replaced when AI analysis finishes.'
+                  : 'Preliminary overview based on README and GitHub data.'}
+            </p>
+          </div>
+
           {/* Core Value */}
           <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
             <p className="text-xs text-gray-600 font-semibold">

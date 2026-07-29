@@ -117,6 +117,18 @@ Reduce runtime transport implementations to three main protocol handlers:
 - `ClaudeCompatibleProvider`
 - `LocalProvider`
 
+### Startup readiness contract
+
+Saved AI configuration is restored asynchronously from `chrome.storage.local` when the popup starts. Runtime consumers must not treat the initial synchronous `isConfigured()` result as final.
+
+- After a saved configuration has been migrated, configured, and accepted by its protocol provider, `LLMManager` emits `LLM_CONFIG_CHANGED`.
+- Saved-config restoration configures an isolated provider and commits it only if no newer set/clear operation has invalidated that restore.
+- Hooks subscribe to configuration events before reading the current state, so readiness cannot be lost between the initial check and listener registration.
+- Overview, Quick Start, and Source Map may render local or cached content first, then automatically start their AI refinement when readiness changes from false to true.
+- A failed saved-config restore remains not ready and logs the restore failure; consumers must not start AI requests with a partially configured provider.
+
+This event is part of the runtime state contract, not only a settings-form notification.
+
 ### OpenAICompatibleProvider
 
 Handles:

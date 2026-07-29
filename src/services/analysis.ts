@@ -35,22 +35,34 @@ export function detectLanguage(text: string): 'zh' | 'en' {
   return chineseMatches.length > englishMatches.length ? 'zh' : 'en'
 }
 
-// Extract text from first N characters (README usually starts with core info)
-function extractIntro(readme: string, chars: number = 500): string {
-  return readme.slice(0, chars).trim()
+function cleanInlineMarkdown(text: string): string {
+  return text
+    .replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
+    .replace(/<[^>]+>/g, '')
+    .replace(/[`*_~]/g, '')
+    .replace(/^\s*[>\-+]\s*/, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function isImageOnlyMarkdown(text: string): boolean {
+  return text
+    .replace(/\[!\[[^\]]*\]\([^)]*\)\]\([^)]*\)/g, '')
+    .replace(/!\[[^\]]*\]\([^)]*\)/g, '')
+    .trim().length === 0
 }
 
 // Parse README to extract structured information
 export function analyzeReadme(readme: string): OverviewData {
   const language = detectLanguage(readme)
-  const intro = extractIntro(readme)
   
   // Extract core value from the first paragraph or heading
   const lines = readme.split('\n').filter(line => line.trim())
   const coreValue = lines
-    .find(line => !line.startsWith('#') && line.length > 20) || 
-    intro.split('.')[0] ||
-    'A GitHub project'
+    .filter(line => !line.trimStart().startsWith('#') && !isImageOnlyMarkdown(line))
+    .map(cleanInlineMarkdown)
+    .find(line => line.length > 20) || ''
   
   // Extract problems (look for common patterns)
   const problems: string[] = []
@@ -76,15 +88,6 @@ export function analyzeReadme(readme: string): OverviewData {
     })
   }
   
-  // Default problems if extraction failed
-  if (problems.length === 0) {
-    problems.push(
-      language === 'zh' ? '简化开发流程' : 'Simplify development workflow',
-      language === 'zh' ? '提高代码效率' : 'Improve code efficiency',
-      language === 'zh' ? '提供通用解决方案' : 'Provide common solutions'
-    )
-  }
-  
   // Extract use cases
   const useCases: string[] = []
   if (language === 'zh') {
@@ -107,15 +110,6 @@ export function analyzeReadme(readme: string): OverviewData {
       const matches = readme.match(pattern)
       if (matches) useCases.push(...matches.slice(0, 2).map(m => m.replace(pattern, '$2')))
     })
-  }
-  
-  // Default use cases
-  if (useCases.length === 0) {
-    useCases.push(
-      language === 'zh' ? '生产环境' : 'Production environment',
-      language === 'zh' ? '开发测试' : 'Development and testing',
-      language === 'zh' ? '学习研究' : 'Learning and research'
-    )
   }
   
   // Estimate difficulty based on README length and keywords

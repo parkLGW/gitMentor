@@ -1,6 +1,6 @@
 {
   "name": "git-mentor",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "description": "GitHub Project Learning Assistant Browser Extension",
   "type": "module",
   "scripts": {
