@@ -1422,6 +1422,22 @@ function renderFileInsight(
   const insight = buildFileLocalInsight(fileData.fileName, fileData.fileContent, currentLanguage)
   container.replaceChildren()
 
+  // Two sibling views rather than one that overwrites the other, so switching to
+  // the AI analysis keeps the structure — and any answers already asked for
+  const localView = document.createElement('div')
+  const aiView = document.createElement('div')
+  aiView.style.display = 'none'
+  container.append(localView, aiView)
+
+  const showLocal = () => {
+    aiView.style.display = 'none'
+    localView.style.display = ''
+  }
+  const showAi = () => {
+    localView.style.display = 'none'
+    aiView.style.display = ''
+  }
+
   const wrapper = document.createElement('div')
   wrapper.style.cssText = 'display:flex;flex-direction:column;gap:12px;'
 
@@ -1521,8 +1537,16 @@ function renderFileInsight(
 
   if (llmConfigured) {
     const aiButton = createPrimaryButton(getText('aiAnalysis'))
-    aiButton.addEventListener('click', () =>
-      performDeepAnalysis(container, fileInfo, fileData))
+    aiButton.addEventListener('click', () => {
+      // Already analysed this file in this sidebar: just switch back to it
+      // rather than asking the model again
+      if (aiView.childElementCount > 0) {
+        showAi()
+        return
+      }
+      showAi()
+      void performDeepAnalysis(aiView, fileInfo, fileData, { onBack: showLocal })
+    })
     aiCard.appendChild(aiButton)
     aiCard.appendChild(
       createText(
@@ -1576,7 +1600,32 @@ function renderFileInsight(
 
   wrapper.appendChild(aiCard)
 
-  container.appendChild(wrapper)
+  localView.appendChild(wrapper)
+}
+
+// The AI view used to replace the file structure outright, with no way back
+// short of reloading the page — which also threw the analysis away.
+function createBackToStructureButton(onBack: () => void): HTMLButtonElement {
+  const button = document.createElement('button')
+  button.type = 'button'
+  button.textContent = currentLanguage === 'zh' ? '← 返回文件结构' : '← Back to structure'
+  button.style.cssText = themedStyle(
+    'margin-bottom:10px;padding:0;background:none;border:none;color:#0969da;font-family:inherit;font-size:12px;cursor:pointer;text-align:left;')
+  button.addEventListener('click', onBack)
+  return button
+}
+
+function createRefreshAnalysisButton(onRefresh: () => void): HTMLButtonElement {
+  const button = document.createElement('button')
+  button.type = 'button'
+  button.textContent = currentLanguage === 'zh' ? '重新分析' : 'Re-analyze'
+  button.title = currentLanguage === 'zh'
+    ? '忽略缓存，重新调用模型'
+    : 'Ignore the cached result and call the model again'
+  button.style.cssText = themedStyle(
+    'padding:0;background:none;border:none;color:#57606a;font-family:inherit;font-size:11px;cursor:pointer;')
+  button.addEventListener('click', onRefresh)
+  return button
 }
 
 function renderDeepAnalysis(
@@ -1584,8 +1633,18 @@ function renderDeepAnalysis(
   analysis: DeepFileAnalysisResult,
   fileInfo: FileInfo,
   fileData: FileData,
+  onBack: () => void,
+  onRefresh: () => void,
 ) {
   container.replaceChildren()
+
+  const controls = document.createElement('div')
+  controls.style.cssText =
+    'display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:10px;'
+  const back = createBackToStructureButton(onBack)
+  back.style.marginBottom = '0'
+  controls.append(back, createRefreshAnalysisButton(onRefresh))
+  container.appendChild(controls)
 
   const wrapper = document.createElement('div')
   wrapper.style.cssText = 'display:flex;flex-direction:column;gap:12px;'
@@ -1781,12 +1840,13 @@ async function performDeepAnalysis(
   contentDiv: HTMLElement,
   fileInfo: FileInfo,
   fileData: FileData,
+  options: { onBack: () => void; refresh?: boolean },
 ) {
   console.log('[GitMentor] Requesting deep analysis...')
-  
+
   // Load current language
   currentLanguage = await getLanguage()
-  
+
   // Check extension context
   if (!isExtensionContextValid()) {
     renderInsightError(contentDiv, 'Extension context unavailable. Please refresh the page.')
@@ -1794,35 +1854,58 @@ async function performDeepAnalysis(
     return
   }
 
-  // Show loading state
-  contentDiv.innerHTML = themedStyle(`
-    <div style="padding: 12px; background: #f0f2f5; border-radius: 4px; text-align: center; font-size: 12px; color: #666;">
-      ${getText('deepAnalysisInProgress')}
-      <div style="margin-top: 8px; font-size: 11px;">${getText('mayTakeMoment')}</div>
-    </div>
-  `)
-  
-    // Request deep analysis from service worker
-  chrome.runtime.sendMessage({
-    action: 'analyzeFileDeep',
-    fileName: fileData.fileName,
-    fileContent: fileData.promptContent,
-    language: currentLanguage,
-  }, (response: any) => {
-    const runtimeError = chrome.runtime.lastError
-    if (runtimeError) {
-      renderInsightError(contentDiv, `${getText('deepAnalysisFailed')}: ${runtimeError.message || getText('requestFailed')}`)
-      return
-    }
-    if (response?.data) {
-      renderDeepAnalysis(contentDiv, response.data as DeepFileAnalysisResult, fileInfo, fileData)
-      return
-    }
-    renderInsightError(
-      contentDiv,
-      `${getText('deepAnalysisFailed')}: ${response?.error || getText('requestFailed')}`,
-    )
-  })
+  const failed = (message: string) => {
+    contentDiv.replaceChildren()
+    contentDiv.appendChild(createBackToStructureButton(options.onBack))
+    const error = document.createElement('div')
+    contentDiv.appendChild(error)
+    renderInsightError(error, `${getText('deepAnalysisFailed')}: ${message}`)
+  }
+
+  contentDiv.replaceChildren()
+  contentDiv.appendChild(createBackToStructureButton(options.onBack))
+  const loading = document.createElement('div')
+  loading.style.cssText = themedStyle(
+    'padding:12px;background:#f0f2f5;border-radius:4px;text-align:center;font-size:12px;color:#666;')
+  loading.appendChild(createText(getText('deepAnalysisInProgress'), 'margin:0;'))
+  loading.appendChild(createText(getText('mayTakeMoment'), 'margin:8px 0 0 0;font-size:11px;'))
+  contentDiv.appendChild(loading)
+
+  try {
+    chrome.runtime.sendMessage({
+      action: 'analyzeFileDeep',
+      fileName: fileData.fileName,
+      fileContent: fileData.promptContent,
+      owner: fileInfo.owner,
+      repo: fileInfo.repo,
+      branch: fileInfo.branch,
+      language: currentLanguage,
+      refresh: Boolean(options.refresh),
+    }, (response: any) => {
+      const runtimeError = chrome.runtime.lastError
+      if (runtimeError) {
+        failed(runtimeError.message || getText('requestFailed'))
+        return
+      }
+      if (response?.data) {
+        renderDeepAnalysis(
+          contentDiv,
+          response.data as DeepFileAnalysisResult,
+          fileInfo,
+          fileData,
+          options.onBack,
+          () => void performDeepAnalysis(contentDiv, fileInfo, fileData, {
+            onBack: options.onBack,
+            refresh: true,
+          }),
+        )
+        return
+      }
+      failed(response?.error || getText('requestFailed'))
+    })
+  } catch (error) {
+    failed(error instanceof Error ? error.message : getText('requestFailed'))
+  }
 }
 
 async function fetchGithubFileContent(fileInfo: FileInfo): Promise<string> {

@@ -27,6 +27,11 @@ import {
   describeUnparseableResponse,
   looksLikeDeepAnalysis,
 } from '@/services/deep-analysis-response'
+import {
+  buildDeepAnalysisCacheKey,
+  readFreshEntry,
+  selectEvictableKeys,
+} from '@/services/deep-analysis-cache'
 import { normalizeAgentJsonFields } from '@/services/agent-response-parser'
 import {
   AGENT_CODE_FETCH_TIMEOUT_MS,
@@ -1509,6 +1514,37 @@ Important: Return ONLY the JSON object, no markdown code blocks or extra text.`
   })
 }
 
+// Every other analysis in the extension caches its result; this one re-billed a
+// full model call each time the reader came back to the file.
+async function readCachedDeepAnalysis(
+  key: string,
+): Promise<DeepFileAnalysisResult | null> {
+  try {
+    const stored = await chrome.storage.local.get([key])
+    return readFreshEntry<DeepFileAnalysisResult>(stored[key], Date.now())
+  } catch (error) {
+    console.warn('[GitMentor SW] Could not read deep analysis cache:', error)
+    return null
+  }
+}
+
+async function writeCachedDeepAnalysis(
+  key: string,
+  data: DeepFileAnalysisResult,
+): Promise<void> {
+  try {
+    await chrome.storage.local.set({ [key]: { data, timestamp: Date.now() } })
+    // chrome.storage.local does no eviction of its own
+    const all = await chrome.storage.local.get(null)
+    const evictable = selectEvictableKeys(all)
+    if (evictable.length > 0) {
+      await chrome.storage.local.remove(evictable)
+    }
+  } catch (error) {
+    console.warn('[GitMentor SW] Could not cache deep analysis:', error)
+  }
+}
+
 // Handle messages from content script
 chrome.runtime.onMessage.addListener((message: any, _sender: any, sendResponse: (response: any) => void) => {
   console.log('[GitMentor SW] Received message:', message.action)
@@ -1562,12 +1598,33 @@ chrome.runtime.onMessage.addListener((message: any, _sender: any, sendResponse: 
           return
         }
 
+        const cacheKey = buildDeepAnalysisCacheKey(
+          {
+            owner: String(message.owner || ''),
+            repo: String(message.repo || ''),
+            branch: String(message.branch || ''),
+            path: String(message.fileName || ''),
+          },
+          lang,
+          String(message.fileContent || ''),
+        )
+
+        if (!message.refresh) {
+          const cached = await readCachedDeepAnalysis(cacheKey)
+          if (cached) {
+            console.info('[GitMentor SW] Deep analysis served from cache')
+            sendResponse({ data: cached, cached: true })
+            return
+          }
+        }
+
         const data = await deepAnalyzeFile(
           config,
           message.fileName,
           message.fileContent,
           lang,
         )
+        await writeCachedDeepAnalysis(cacheKey, data)
         sendResponse({ data })
       } catch (error) {
         console.error('[GitMentor SW] Deep analysis error:', error)

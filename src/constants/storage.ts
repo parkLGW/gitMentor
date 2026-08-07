@@ -23,6 +23,9 @@ export const STORAGE_PREFIXES = {
   securityAudit: "gitmentor_security_audit_",
   agentSession: "gitmentor_agent_session_v1_",
   agentSummary: "gitmentor_agent_summary_v1_",
+  // Lives in chrome.storage.local, not localStorage: it is written from the
+  // service worker, where localStorage does not exist
+  deepFileAnalysis: "gitmentor_deep_file_analysis_v1_",
 } as const;
 
 export const StorageKeys = {
