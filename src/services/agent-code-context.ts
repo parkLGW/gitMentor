@@ -482,9 +482,18 @@ export function buildRawGithubUrl(
     .map((segment) => encodeURIComponent(segment))
     .join("/");
 
+  // raw.githubusercontent.com resolves a ref containing slashes only when those
+  // slashes stay literal — a percent-encoded %2F is looked up as part of the ref
+  // name and 404s.
+  const encodedBranch = branch
+    .split("/")
+    .filter(Boolean)
+    .map((segment) => encodeURIComponent(segment))
+    .join("/");
+
   return `https://raw.githubusercontent.com/${encodeURIComponent(
     owner
-  )}/${encodeURIComponent(repo)}/${encodeURIComponent(branch)}/${encodedPath}`;
+  )}/${encodeURIComponent(repo)}/${encodedBranch}/${encodedPath}`;
 }
 
 export interface PromptTruncationResult {

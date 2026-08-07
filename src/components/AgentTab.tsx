@@ -40,6 +40,8 @@ import type { SourceMapOutput } from "@/prompts/types";
 interface AgentTabProps {
   repo: { owner: string; name: string };
   language: "zh" | "en";
+  /** Prefilled from the file sidebar's handoff; the reader still presses send. */
+  initialQuestion?: string;
 }
 
 interface AgentSummaryResponse {
@@ -176,13 +178,13 @@ function upsertAssistantMessage(
   };
 }
 
-function AgentTab({ repo, language }: AgentTabProps) {
+function AgentTab({ repo, language, initialQuestion }: AgentTabProps) {
   const repoKey = useMemo(() => getRepoKey(repo), [repo]);
   const isZh = language === "zh";
   const [session, setSession] = useState<AgentSession>(() => createEmptyAgentSession(repoKey));
   const [sourceMapSummary, setSourceMapSummary] = useState("");
   const [readmeSummary, setReadmeSummary] = useState("");
-  const [input, setInput] = useState("");
+  const [input, setInput] = useState(initialQuestion ?? "");
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [editingMessageId, setEditingMessageId] = useState<string | null>(null);

@@ -30,8 +30,17 @@ function getInitialTab(): TabType {
     : "overview";
 }
 
+// The file sidebar hands a question over here when the reader wants a real
+// conversation about it. It is prefilled, not sent.
+function getInitialQuestion(): string {
+  return (
+    new URLSearchParams(window.location.search).get("q")?.slice(0, 500) ?? ""
+  );
+}
+
 function App() {
   const [activeTab, setActiveTab] = useState<TabType>(getInitialTab);
+  const [initialQuestion] = useState<string>(getInitialQuestion);
   const { repo, loading, error } = useRepo();
   const { language, setLanguage } = useLanguage();
   const [defaultBranch, setDefaultBranch] = useState("main");
@@ -136,7 +145,11 @@ function App() {
               <SourceMapTab repo={repo} language={language} defaultBranch={defaultBranch} />
             )}
             {activeTab === "agent" && (
-              <AgentTab repo={repo} language={language} />
+              <AgentTab
+                repo={repo}
+                language={language}
+                initialQuestion={initialQuestion}
+              />
             )}
           </div>
         )}

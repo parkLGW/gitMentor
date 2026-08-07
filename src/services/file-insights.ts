@@ -68,6 +68,14 @@ function languageLabel(filePath: string): string {
   return LANGUAGE_LABELS[ext] || (ext ? ext.toUpperCase() : "File");
 }
 
+// A trailing newline terminates the last line rather than starting a new one.
+// Counting it as a line reported one more than GitHub does for almost every file.
+function splitSourceLines(fileContent: string): string[] {
+  const lines = fileContent.split("\n");
+  if (lines.length > 1 && lines[lines.length - 1] === "") lines.pop();
+  return lines;
+}
+
 function countLoc(lines: string[]): number {
   return lines.filter((line) => {
     const trimmed = line.trim();
@@ -226,7 +234,7 @@ export function buildFileLocalInsight(
   fileContent: string,
   lang: InsightLanguage = "en",
 ): FileLocalInsight {
-  const lines = fileContent.split("\n");
+  const lines = splitSourceLines(fileContent);
   const imports = extractImports(lines);
   return {
     filePath,

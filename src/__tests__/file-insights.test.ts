@@ -41,6 +41,17 @@ test("buildFileLocalInsight extracts Python imports, symbols, metrics, and zh qu
   assert.ok(insight.quickQuestions.some((item) => item.includes("memory")));
 });
 
+test("buildFileLocalInsight counts a trailing newline as a terminator, matching GitHub", () => {
+  const body = ["const a = 1;", "const b = 2;"].join("\n");
+
+  // Almost every file in a repo ends with a newline, so this was a permanent
+  // off-by-one against the line count GitHub shows for the same file
+  assert.strictEqual(buildFileLocalInsight("a.ts", body).totalLines, 2);
+  assert.strictEqual(buildFileLocalInsight("a.ts", `${body}\n`).totalLines, 2);
+  assert.strictEqual(buildFileLocalInsight("a.ts", `${body}\n\n`).totalLines, 3);
+  assert.strictEqual(buildFileLocalInsight("a.ts", "").totalLines, 1);
+});
+
 test("buildFileLocalInsight extracts TSX imports, component, hook, type, and todos", () => {
   const insight = buildFileLocalInsight(
     "src/components/AgentPanel.tsx",

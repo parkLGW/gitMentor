@@ -232,6 +232,13 @@ test("buildRawGithubUrl builds an encoded raw github content url", () => {
   );
 });
 
+test("buildRawGithubUrl keeps slashes in a branch name literal so refs like feature/x resolve", () => {
+  assert.strictEqual(
+    buildRawGithubUrl("acme", "widgets", "feature/auth flow", "src/app.ts"),
+    "https://raw.githubusercontent.com/acme/widgets/feature/auth%20flow/src/app.ts",
+  );
+});
+
 test("truncateFileForPrompt preserves file path and includes head and tail with truncation note", () => {
   const filePath = "src/api/client.ts";
   const lines = Array.from({ length: 60 }, (_, idx) => {

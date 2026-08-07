@@ -7,8 +7,8 @@ const STORAGE_KEYS = {
   llmConfig: 'gitmentor_llm_config',
 } as const
 
-// Track current file path to detect changes
-let currentFilePath: string | null = null
+// Track the current file (owner/repo/branch/path) to detect changes
+let currentFileKey: string | null = null
 let currentLanguage: 'zh' | 'en' = 'en'
 
 // Get current language from storage
@@ -30,51 +30,35 @@ async function getLanguage(): Promise<'zh' | 'en'> {
 const uiTranslations = {
   zh: {
     readingFile: '正在读取当前文件...',
-    fileUnderstanding: '当前文件理解',
-    fileOverview: '文件概览',
-    metrics: '基础信息',
-    keySymbols: '关键函数/类型',
+    keySymbols: '结构',
     dependencies: '依赖',
     noSymbols: '未检测到明显的函数、类或类型定义',
-    noDependencies: '未检测到显式依赖',
-    quickQuestions: '快捷追问',
-    aiAnalysis: 'AI 分析此文件',
+    aiAnalysis: 'AI 深度解读这个文件',
     configureLLM: '配置 LLM 后可生成文件解释',
     openSettings: '打开 GitMentor 设置',
-    analyzingFile: '正在分析文件...',
     deepAnalysisInProgress: '正在进行 AI 深度分析...',
     mayTakeMoment: '这可能需要一点时间',
     deepAnalysisFailed: '深度分析失败',
     requestFailed: '请求失败，请刷新页面后重试',
     thinking: '思考中...',
-    loc: '有效行',
-    lines: '行数',
-    imports: '依赖数',
     todos: '待办',
+    promptTruncated: 'AI 仅读取前 20KB',
   },
   en: {
     readingFile: 'Reading current file...',
-    fileUnderstanding: 'Current File Understanding',
-    fileOverview: 'File Overview',
-    metrics: 'Metrics',
-    keySymbols: 'Key Functions / Types',
+    keySymbols: 'Structure',
     dependencies: 'Dependencies',
     noSymbols: 'No obvious functions, classes, or types detected',
-    noDependencies: 'No explicit dependencies detected',
-    quickQuestions: 'Quick Questions',
-    aiAnalysis: 'Analyze This File',
+    aiAnalysis: 'Explain this file with AI',
     configureLLM: 'Configure an LLM to generate file explanations',
     openSettings: 'Open GitMentor Settings',
-    analyzingFile: 'Analyzing file...',
     deepAnalysisInProgress: 'Performing deep analysis with AI...',
     mayTakeMoment: 'This may take a moment',
     deepAnalysisFailed: 'Deep analysis failed',
     requestFailed: 'Request failed. Please refresh the page and try again.',
     thinking: 'Thinking...',
-    loc: 'LOC',
-    lines: 'Lines',
-    imports: 'Imports',
     todos: 'TODOs',
+    promptTruncated: 'AI reads first 20KB only',
   },
 }
 
@@ -148,33 +132,278 @@ interface FileInfo {
   path: string
 }
 
-function parseFileUrl(): FileInfo | null {
-  // Match: /owner/repo/blob/branch/path/to/file.ext
-  const match = window.location.pathname.match(/^\/([^\/]+)\/([^\/]+)\/blob\/([^\/]+)\/(.+)$/)
-  if (!match) return null
-  
-  const [, owner, repo, branch, path] = match
+function decodePathSegment(segment: string): string {
+  try {
+    return decodeURIComponent(segment)
+  } catch {
+    return segment
+  }
+}
+
+// /owner/repo/blob/<ref>/<path> is ambiguous because <ref> may itself contain
+// slashes, so the page has to tell us where the ref ends. A hint that does not
+// match the URL is simply ignored, which keeps a stale or malformed one harmless.
+function collectBranchHints(): string[] {
+  const hints: string[] = []
+  const push = (value: unknown) => {
+    if (typeof value === 'string' && value.trim()) hints.push(value.trim())
+  }
+
+  try {
+    document
+      .querySelectorAll('script[type="application/json"][data-target="react-app.embeddedData"]')
+      .forEach((node) => {
+        try {
+          const payload = JSON.parse(node.textContent || '{}')?.payload
+          push(payload?.refInfo?.name)
+        } catch {
+          // Embedded payloads are not part of any contract; ignore unparsable ones
+        }
+      })
+  } catch {
+    // querySelectorAll can throw on very old engines only; stay silent
+  }
+
+  document
+    .querySelectorAll('#branch-picker-repos-header-ref-selector, [data-hotkey="w"]')
+    .forEach((node) => push(node.textContent))
+
+  return hints
+}
+
+// Port of parseGithubBlobPath() in src/services/github-url.ts. The content script
+// is bundled without runtime imports (see content-script-runtime.test.ts), so the
+// canonical implementation cannot be reused here — keep the two in sync.
+function parseBlobPathname(pathname: string, branchHints: string[]): FileInfo | null {
+  const parts = pathname.replace(/^\/+/, '').split('/').filter(Boolean)
+  if (parts.length < 5 || parts[2] !== 'blob') {
+    return null
+  }
+
+  const owner = decodePathSegment(parts[0])
+  const repo = decodePathSegment(parts[1])
+  const rest = parts.slice(3)
+  const decodedRest = rest.map(decodePathSegment).join('/')
+
+  const sortedHints = Array.from(
+    new Set(branchHints.map((hint) => hint.trim().replace(/^\/+|\/+$/g, '')).filter(Boolean)),
+  ).sort((a, b) => b.length - a.length)
+
+  for (const branch of sortedHints) {
+    if (decodedRest === branch || decodedRest.startsWith(`${branch}/`)) {
+      const path = decodedRest.slice(branch.length).replace(/^\/+/, '')
+      if (!path) return null
+      return { owner, repo, branch, path }
+    }
+  }
+
+  const branch = decodePathSegment(rest[0])
+  const path = rest.slice(1).map(decodePathSegment).join('/')
+  if (!branch || !path) {
+    return null
+  }
+
   return { owner, repo, branch, path }
 }
 
-function getDismissedFileSidebarKey(fileInfo: FileInfo): string {
-  return `gitmentor:dismissed-file-sidebar:${fileInfo.owner}/${fileInfo.repo}/${fileInfo.branch}/${fileInfo.path}`
+let cachedBlobParse: { pathname: string; fileInfo: FileInfo } | null = null
+
+function parseFileUrl(): FileInfo | null {
+  const pathname = window.location.pathname
+  if (cachedBlobParse?.pathname === pathname) return cachedBlobParse.fileInfo
+
+  // Cheap shape check first — this runs on every debounced mutation, and on a
+  // non-blob page it must not reach the DOM scan below
+  const fallback = parseBlobPathname(pathname, [])
+  if (!fallback) return null
+
+  const hints = collectBranchHints()
+  const fileInfo = hints.length > 0 ? parseBlobPathname(pathname, hints) : fallback
+  // Only memoize a parse the page confirmed. A hintless parse can split a ref
+  // containing slashes in the wrong place, and on SPA navigation the page
+  // publishes its ref slightly after the URL changes — so keep re-reading until
+  // a hint actually matches.
+  if (fileInfo && hints.includes(fileInfo.branch)) {
+    cachedBlobParse = { pathname, fileInfo }
+  }
+  return fileInfo
+}
+
+// Identifies the file across repos and branches: two different repos can serve
+// the same path, and the sidebar must not treat them as the same file.
+function getFileKey(fileInfo: FileInfo): string {
+  return `${fileInfo.owner}/${fileInfo.repo}@${fileInfo.branch}:${fileInfo.path}`
+}
+
+// Dismissal is remembered per tab session rather than per file: closing the
+// sidebar on one file only to have it reappear on the next one made the close
+// button read as broken.
+const DISMISSED_FILE_SIDEBAR_KEY = 'gitmentor:file-sidebar-dismissed'
+
+const SIDEBAR_WIDTH_STORAGE_KEY = 'gitmentor:file-sidebar-width'
+const SIDEBAR_MIN_WIDTH = 280
+const SIDEBAR_MAX_WIDTH = 560
+const SIDEBAR_DEFAULT_WIDTH = 380
+// Under this viewport the sidebar floats above the page instead of reserving
+// space, because shrinking GitHub's own layout any further breaks it
+const SIDEBAR_RESERVE_MIN_VIEWPORT = 1000
+
+let sidebarWidth = SIDEBAR_DEFAULT_WIDTH
+let originalBodyPaddingRight: string | null = null
+let fileSidebarSuppressed = false
+
+function clampSidebarWidth(width: number): number {
+  const viewportCap = Math.max(SIDEBAR_MIN_WIDTH, Math.round(window.innerWidth * 0.5))
+  const upperBound = Math.min(SIDEBAR_MAX_WIDTH, viewportCap)
+  return Math.round(Math.min(Math.max(width, SIDEBAR_MIN_WIDTH), upperBound))
+}
+
+function readStoredSidebarWidth(): number {
+  try {
+    const stored = Number(localStorage.getItem(SIDEBAR_WIDTH_STORAGE_KEY))
+    if (Number.isFinite(stored) && stored > 0) return stored
+  } catch {
+    // localStorage can be blocked; fall back to the default width
+  }
+  return SIDEBAR_DEFAULT_WIDTH
+}
+
+function persistSidebarWidth(width: number) {
+  try {
+    localStorage.setItem(SIDEBAR_WIDTH_STORAGE_KEY, String(width))
+  } catch {
+    // Width is a nicety, not worth surfacing a failure for
+  }
+}
+
+// Gives the page back the strip the sidebar occupies, so the file view is
+// narrowed rather than covered. Passing null restores the page's own padding.
+function reserveLayoutForSidebar(width: number | null) {
+  const body = document.body
+  if (!body) return
+
+  if (width === null) {
+    if (originalBodyPaddingRight !== null) {
+      body.style.paddingRight = originalBodyPaddingRight
+      originalBodyPaddingRight = null
+    }
+    return
+  }
+
+  if (originalBodyPaddingRight === null) {
+    originalBodyPaddingRight = body.style.paddingRight
+  }
+  body.style.paddingRight = `${width}px`
+}
+
+// The floating widget sits at the bottom-right on a higher layer than the
+// sidebar, so it would otherwise hover on top of the sidebar's content.
+function keepWidgetClearOfSidebar(occupiedWidth: number) {
+  const widget = document.getElementById('gitmentor-widget') as HTMLElement | null
+  if (!widget || widget.style.display === 'none') return
+
+  const rect = widget.getBoundingClientRect()
+  if (rect.width === 0) return
+
+  const limit = window.innerWidth - occupiedWidth - 12
+  if (rect.right <= limit) return
+
+  widget.style.right = 'auto'
+  widget.style.left = `${Math.max(12, limit - rect.width)}px`
+}
+
+function applySidebarLayout() {
+  const sidebar = document.getElementById('gitmentor-file-sidebar') as HTMLElement | null
+  const resizer = document.getElementById('gitmentor-file-sidebar-resize') as HTMLElement | null
+
+  if (!sidebar || sidebar.style.display === 'none') {
+    reserveLayoutForSidebar(null)
+    if (resizer) resizer.style.display = 'none'
+    return
+  }
+
+  const width = clampSidebarWidth(sidebarWidth)
+  sidebar.style.width = `${width}px`
+  if (resizer) {
+    resizer.style.display = ''
+    resizer.style.right = `${width - 3}px`
+  }
+  reserveLayoutForSidebar(window.innerWidth >= SIDEBAR_RESERVE_MIN_VIEWPORT ? width : null)
+  keepWidgetClearOfSidebar(width)
+}
+
+function createSidebarResizer(): HTMLElement {
+  const resizer = document.createElement('div')
+  resizer.id = 'gitmentor-file-sidebar-resize'
+  resizer.title = currentLanguage === 'zh' ? '拖动调整宽度' : 'Drag to resize'
+  resizer.style.cssText = `
+    position: fixed;
+    top: 0;
+    width: 6px;
+    height: 100vh;
+    z-index: 5001;
+    cursor: col-resize;
+    background: transparent;
+  `
+
+  resizer.addEventListener('mousedown', (event) => {
+    event.preventDefault()
+    const startX = event.clientX
+    const startWidth = clampSidebarWidth(sidebarWidth)
+    const previousUserSelect = document.body.style.userSelect
+    document.body.style.userSelect = 'none'
+
+    const onMove = (moveEvent: MouseEvent) => {
+      sidebarWidth = clampSidebarWidth(startWidth + (startX - moveEvent.clientX))
+      applySidebarLayout()
+    }
+    const onUp = () => {
+      document.removeEventListener('mousemove', onMove)
+      document.removeEventListener('mouseup', onUp)
+      document.body.style.userSelect = previousUserSelect
+      persistSidebarWidth(sidebarWidth)
+    }
+
+    document.addEventListener('mousemove', onMove)
+    document.addEventListener('mouseup', onUp)
+  })
+
+  return resizer
+}
+
+// The main panel covers the same screen edge as the sidebar, so only one of the
+// two is ever on screen.
+function setFileSidebarSuppressed(suppressed: boolean) {
+  fileSidebarSuppressed = suppressed
+
+  const ids = [
+    'gitmentor-file-sidebar',
+    'gitmentor-file-sidebar-resize',
+    'gitmentor-file-sidebar-collapsed',
+  ]
+  ids.forEach((id) => {
+    const element = document.getElementById(id) as HTMLElement | null
+    if (element) element.style.display = suppressed ? 'none' : ''
+  })
+
+  applySidebarLayout()
+  if (!suppressed) void injectFileSidebar()
 }
 
 function removeFileSidebarUi() {
   document.getElementById('gitmentor-file-sidebar')?.remove()
+  document.getElementById('gitmentor-file-sidebar-resize')?.remove()
   document.getElementById('gitmentor-file-sidebar-collapsed')?.remove()
-  currentFilePath = null
+  reserveLayoutForSidebar(null)
+  currentFileKey = null
 }
 
-function showFileSidebarCollapsedHandle(fileInfo: FileInfo, dismissedFileSidebarKey: string) {
-  const existing = document.getElementById('gitmentor-file-sidebar-collapsed') as HTMLElement | null
-  if (existing?.dataset.dismissedKey === dismissedFileSidebarKey) return
-  existing?.remove()
+function showFileSidebarCollapsedHandle(fileInfo: FileInfo) {
+  currentFileKey = getFileKey(fileInfo)
+  if (document.getElementById('gitmentor-file-sidebar-collapsed')) return
 
   const handle = document.createElement('button')
   handle.id = 'gitmentor-file-sidebar-collapsed'
-  handle.dataset.dismissedKey = dismissedFileSidebarKey
   handle.type = 'button'
   handle.textContent = 'GitMentor'
   handle.title = currentLanguage === 'zh' ? '重新打开文件理解侧栏' : 'Reopen file insight sidebar'
@@ -196,13 +425,12 @@ function showFileSidebarCollapsedHandle(fileInfo: FileInfo, dismissedFileSidebar
     box-shadow: -2px 0 8px rgba(0, 0, 0, 0.16);
   `)
   handle.addEventListener('click', () => {
-    sessionStorage.removeItem(dismissedFileSidebarKey)
+    sessionStorage.removeItem(DISMISSED_FILE_SIDEBAR_KEY)
     handle.remove()
-    currentFilePath = null
+    currentFileKey = null
     void injectFileSidebar()
   })
   document.body.appendChild(handle)
-  currentFilePath = fileInfo.path
 }
 
 function isCodeFile(filePath: string): boolean {
@@ -257,6 +485,10 @@ function isCodeFile(filePath: string): boolean {
 let fileSidebarInjectionInFlight = false
 
 async function injectFileSidebar() {
+  // The main panel owns the screen edge while it is open; the sidebar is
+  // restored by setFileSidebarSuppressed(false) when the panel closes
+  if (fileSidebarSuppressed) return
+
   const fileInfo = parseFileUrl()
   if (!fileInfo) {
     removeFileSidebarUi()
@@ -288,31 +520,35 @@ async function injectFileSidebarForFile(fileInfo: FileInfo) {
   // Load current language
   currentLanguage = await getLanguage()
 
-  const dismissedFileSidebarKey = getDismissedFileSidebarKey(fileInfo)
-  if (sessionStorage.getItem(dismissedFileSidebarKey) === '1') {
+  if (sessionStorage.getItem(DISMISSED_FILE_SIDEBAR_KEY) === '1') {
     document.getElementById('gitmentor-file-sidebar')?.remove()
-    showFileSidebarCollapsedHandle(fileInfo, dismissedFileSidebarKey)
+    document.getElementById('gitmentor-file-sidebar-resize')?.remove()
+    reserveLayoutForSidebar(null)
+    showFileSidebarCollapsedHandle(fileInfo)
     return
   }
   document.getElementById('gitmentor-file-sidebar-collapsed')?.remove()
   
   console.log('[GitMentor] Detected code file:', fileInfo.path)
-  
+
+  const fileKey = getFileKey(fileInfo)
+
   // Check if sidebar already exists for the same file
-  if (document.getElementById('gitmentor-file-sidebar') && currentFilePath === fileInfo.path) {
-    console.log('[GitMentor] File sidebar already exists for:', fileInfo.path)
+  if (document.getElementById('gitmentor-file-sidebar') && currentFileKey === fileKey) {
+    console.log('[GitMentor] File sidebar already exists for:', fileKey)
     return
   }
-  
+
   // If sidebar exists but file changed, remove it
-  if (document.getElementById('gitmentor-file-sidebar') && currentFilePath !== fileInfo.path) {
-    console.log('[GitMentor] File changed from', currentFilePath, 'to', fileInfo.path, ', updating sidebar')
+  if (document.getElementById('gitmentor-file-sidebar') && currentFileKey !== fileKey) {
+    console.log('[GitMentor] File changed from', currentFileKey, 'to', fileKey, ', updating sidebar')
     document.getElementById('gitmentor-file-sidebar')?.remove()
   }
+
+  currentFileKey = fileKey
   
-  // Update current file path
-  currentFilePath = fileInfo.path
-  
+  sidebarWidth = clampSidebarWidth(readStoredSidebarWidth())
+
   // Create sidebar container
   const sidebar = document.createElement('div')
   sidebar.id = 'gitmentor-file-sidebar'
@@ -320,7 +556,7 @@ async function injectFileSidebarForFile(fileInfo: FileInfo) {
     position: fixed;
     right: 0;
     top: 0;
-    width: 380px;
+    width: ${sidebarWidth}px;
     height: 100vh;
     background: white;
     border-left: 1px solid #e1e4e8;
@@ -352,10 +588,14 @@ async function injectFileSidebarForFile(fileInfo: FileInfo) {
         padding: 0;
       ">×</button>
     </div>
-    <div style="font-size: 12px; color: #666; margin-top: 8px; word-break: break-all;">
-      ${fileInfo.path}
-    </div>
   `)
+  // Decoded repo paths may contain markup characters, so never interpolate them
+  // into innerHTML
+  const headerPath = document.createElement('div')
+  headerPath.style.cssText = themedStyle(
+    'font-size: 12px; color: #666; margin-top: 8px; word-break: break-all;')
+  headerPath.textContent = fileInfo.path
+  header.appendChild(headerPath)
 
   // Content area
   const content = document.createElement('div')
@@ -370,13 +610,19 @@ async function injectFileSidebarForFile(fileInfo: FileInfo) {
   sidebar.appendChild(header)
   sidebar.appendChild(content)
   document.body.appendChild(sidebar)
-  
+
+  document.getElementById('gitmentor-file-sidebar-resize')?.remove()
+  document.body.appendChild(createSidebarResizer())
+  applySidebarLayout()
+
   // Close button
   const closeBtn = header.querySelector('#gitmentor-sidebar-close')
   closeBtn?.addEventListener('click', () => {
-    sessionStorage.setItem(dismissedFileSidebarKey, '1')
+    sessionStorage.setItem(DISMISSED_FILE_SIDEBAR_KEY, '1')
     sidebar.remove()
-    showFileSidebarCollapsedHandle(fileInfo, dismissedFileSidebarKey)
+    document.getElementById('gitmentor-file-sidebar-resize')?.remove()
+    reserveLayoutForSidebar(null)
+    showFileSidebarCollapsedHandle(fileInfo)
   })
 
   fetchAndAnalyzeFile(fileInfo, content)
@@ -397,9 +643,17 @@ function createText(text: string, style = ''): HTMLParagraphElement {
   return p
 }
 
+// Cap on what is sent to the model, not on what the sidebar reads
+const PROMPT_CONTENT_MAX_CHARS = 20000
+
 interface FileData {
   fileName: string
+  // The file exactly as fetched. Local metrics must be derived from this, never
+  // from the capped copy below, or every file over the cap reports short counts.
   fileContent: string
+  // Size-capped copy for the model
+  promptContent: string
+  promptTruncated: boolean
 }
 
 type FileInsightSymbolKind =
@@ -609,8 +863,16 @@ function buildLocalQuickQuestions(
   ]
 }
 
-function buildFileLocalInsight(filePath: string, fileContent: string, lang: 'zh' | 'en') {
+// A trailing newline terminates the last line rather than starting a new one.
+// Counting it as a line reported one more than GitHub does for almost every file.
+function splitLocalSourceLines(fileContent: string): string[] {
   const lines = fileContent.split('\n')
+  if (lines.length > 1 && lines[lines.length - 1] === '') lines.pop()
+  return lines
+}
+
+function buildFileLocalInsight(filePath: string, fileContent: string, lang: 'zh' | 'en') {
+  const lines = splitLocalSourceLines(fileContent)
   const imports = extractLocalImports(lines)
   return {
     filePath,
@@ -647,38 +909,369 @@ function renderFileLoading(container: HTMLElement) {
   `)
 }
 
-function createCard(): HTMLDivElement {
+function createCard(accent = false): HTMLDivElement {
   const card = document.createElement('div')
   card.style.cssText = themedStyle(
-    'padding:12px;background:#fff;border:1px solid #d8dee4;border-radius:8px;')
+    `padding:12px;background:#fff;border:1px solid ${accent ? '#b6e3ff' : '#d8dee4'};border-radius:8px;`)
   return card
 }
 
-function createMetric(label: string, value: string | number): HTMLDivElement {
-  const box = document.createElement('div')
-  box.style.cssText = themedStyle(
-    'min-width:86px;flex:1;padding:8px;background:#f6f8fa;border-radius:6px;border:1px solid #eaeef2;')
-  const valueEl = document.createElement('div')
-  valueEl.style.cssText = themedStyle('font-size:15px;font-weight:600;color:#24292f;line-height:1.2;')
-  valueEl.textContent = String(value)
-  const labelEl = document.createElement('div')
-  labelEl.style.cssText = themedStyle('font-size:10px;color:#57606a;margin-top:2px;')
-  labelEl.textContent = label
-  box.append(valueEl, labelEl)
-  return box
+// themedStyle remaps whole declaration strings; this pulls a single color through
+// the same table so individual style properties can use it too.
+function themedColor(color: string): string {
+  return themedStyle(`color:${color}`).slice('color:'.length)
 }
 
-function createChip(text: string, tone: 'blue' | 'gray' | 'amber' = 'gray'): HTMLSpanElement {
-  const chip = document.createElement('span')
+// A single letter costs a fraction of the width of a "function"/"interface"
+// chip, which matters at the 280px minimum sidebar width where the symbol name
+// is already being ellipsised. The full word lives in the tooltip.
+const SYMBOL_KIND_BADGES: Record<FileInsightSymbolKind, string> = {
+  function: 'F',
+  class: 'C',
+  component: 'R',
+  hook: 'H',
+  type: 'T',
+  interface: 'I',
+  constant: 'K',
+}
+
+const SYMBOL_KIND_LABELS: Record<'zh' | 'en', Record<FileInsightSymbolKind, string>> = {
+  zh: {
+    function: '函数',
+    class: '类',
+    component: '组件',
+    hook: 'Hook',
+    type: '类型',
+    interface: '接口',
+    constant: '常量',
+  },
+  en: {
+    function: 'function',
+    class: 'class',
+    component: 'component',
+    hook: 'hook',
+    type: 'type',
+    interface: 'interface',
+    constant: 'constant',
+  },
+}
+
+function createSymbolBadge(kind: FileInsightSymbolKind): HTMLSpanElement {
+  const badge = document.createElement('span')
+  badge.textContent = SYMBOL_KIND_BADGES[kind]
+  badge.title = SYMBOL_KIND_LABELS[currentLanguage][kind]
+  badge.style.cssText = themedStyle(
+    'flex-shrink:0;width:17px;height:17px;display:inline-flex;align-items:center;justify-content:center;border-radius:4px;background:#eaeef2;color:#57606a;font-family:ui-monospace,SFMono-Regular,SFMono,Consolas,monospace;font-size:10px;font-weight:600;')
+  return badge
+}
+
+// The classic blob view renders every line, so the element can just be found.
+function findFileLineElement(lineNumber: number): Element | null {
+  return (
+    document.getElementById(`LC${lineNumber}`) ||
+    document.getElementById(`L${lineNumber}`) ||
+    document.querySelector(`[data-line-number="${lineNumber}"]`)
+  )
+}
+
+interface BlobLineGeometry {
+  topDoc: number
+  lineHeight: number
+}
+
+// The current blob view virtualises the file: `.react-code-lines` is an empty
+// spacer of the file's full height and no line element exists until it scrolls
+// into range. What that gives us is an exact line height (spacer height over the
+// file's line count), which is enough to compute where any line sits without the
+// element ever existing.
+function readBlobLineGeometry(fallbackTotalLines: number): BlobLineGeometry | null {
+  const spacer = document.querySelector('.react-code-lines') as HTMLElement | null
+  const textArea = document.querySelector(
+    '#read-only-cursor-text-area',
+  ) as HTMLTextAreaElement | null
+  const surface = spacer || textArea
+  if (!surface) return null
+
+  const rect = surface.getBoundingClientRect()
+  // The page's own line count is authoritative for its geometry
+  const totalLines = textArea ? textArea.value.split('\n').length : fallbackTotalLines
+  if (!(totalLines > 0) || !(rect.height > 0)) return null
+
+  return {
+    topDoc: rect.top + window.scrollY,
+    lineHeight: rect.height / totalLines,
+  }
+}
+
+// Never assign location.hash here: GitHub reads #L<n> only during its initial
+// render, so after load it scrolls nowhere, and an anchor that matches no element
+// makes the browser jump to the top of the document instead. replaceState keeps
+// the URL shareable — and correct on reload — without navigating.
+function jumpToFileLine(lineNumber: number, totalLines: number) {
+  if (!(lineNumber > 0)) return
+
+  const scrollSmoothly = (top: number) => {
+    const distance = Math.abs(top - window.scrollY)
+    window.scrollTo({
+      top: Math.max(0, top),
+      // Animating a jump of several thousand pixels just wastes the reader's time
+      behavior: distance > window.innerHeight * 3 ? 'auto' : 'smooth',
+    })
+    history.replaceState(null, '', `#L${lineNumber}`)
+  }
+
+  const target = findFileLineElement(lineNumber)
+  if (target) {
+    const rect = target.getBoundingClientRect()
+    scrollSmoothly(rect.top + window.scrollY - window.innerHeight / 2 + rect.height / 2)
+    return
+  }
+
+  const geometry = readBlobLineGeometry(totalLines)
+  if (!geometry) return
+
+  scrollSmoothly(
+    geometry.topDoc +
+      (lineNumber - 1) * geometry.lineHeight -
+      window.innerHeight / 2 +
+      geometry.lineHeight / 2,
+  )
+}
+
+function jumpLineTitle(lineNumber: number): string {
+  return currentLanguage === 'zh'
+    ? `跳转到第 ${lineNumber} 行`
+    : `Jump to line ${lineNumber}`
+}
+
+// Only relative and alias specifiers point at files in this repo — those are the
+// ones worth offering a jump for.
+function isLocalDependency(source: string): boolean {
+  return /^[./]/.test(source) || /^[@~]\//.test(source)
+}
+
+// Inline styles cannot express :hover, so the row states are wired by hand
+function applyHoverBackground(element: HTMLElement, hoverColor: string) {
+  const base = element.style.background
+  const hovered = themedColor(hoverColor)
+  element.addEventListener('mouseenter', () => {
+    element.style.background = hovered
+  })
+  element.addEventListener('mouseleave', () => {
+    element.style.background = base
+  })
+}
+
+// interactive chips render as real buttons so they are focusable and respond to
+// Enter, not just to a mouse click on a styled span
+function createChip(
+  text: string,
+  tone: 'blue' | 'gray' | 'amber' = 'gray',
+  interactive = false,
+): HTMLElement {
+  const chip = document.createElement(interactive ? 'button' : 'span')
+  if (chip instanceof HTMLButtonElement) chip.type = 'button'
   const colors = {
     blue: 'background:#ddf4ff;color:#0969da;border-color:#b6e3ff;',
     gray: 'background:#f6f8fa;color:#57606a;border-color:#d8dee4;',
     amber: 'background:#fff8c5;color:#9a6700;border-color:#f0d98c;',
   }
   chip.style.cssText = themedStyle(
-    `display:inline-flex;align-items:center;max-width:100%;padding:3px 8px;border:1px solid;border-radius:999px;font-size:11px;line-height:1.4;word-break:break-word;${colors[tone]}`)
+    `display:inline-flex;align-items:center;max-width:100%;padding:3px 8px;border:1px solid;border-radius:999px;font-size:11px;line-height:1.4;word-break:break-word;${
+      interactive ? 'font-family:inherit;cursor:pointer;' : ''
+    }${colors[tone]}`)
   chip.textContent = text
   return chip
+}
+
+const MONO_FONT = 'ui-monospace,SFMono-Regular,SFMono,Consolas,monospace'
+
+// The popup renders Markdown with react-markdown, but the content script is
+// bundled without runtime imports, so answers used to be dumped as plain text
+// with the ** and backticks still in them. This covers what the model actually
+// emits here: fenced code, inline code, bold, italics, headings and lists.
+const MD_INLINE_PATTERN =
+  /(`[^`\n]+`|\*\*[^*\n]+\*\*|\*[^*\n]+\*|_[^_\n]+_|\[[^\]\n]+\]\([^)\s]+\))/g
+
+function createInlineMarkdownNode(token: string): Node {
+  if (token.startsWith('`')) {
+    const code = document.createElement('code')
+    code.style.cssText = themedStyle(
+      `font-family:${MONO_FONT};font-size:11px;background:#eaeef2;border-radius:4px;padding:1px 4px;`)
+    code.textContent = token.slice(1, -1)
+    return code
+  }
+
+  if (token.startsWith('**')) {
+    const strong = document.createElement('strong')
+    strong.textContent = token.slice(2, -2)
+    return strong
+  }
+
+  if (token.startsWith('*') || token.startsWith('_')) {
+    const em = document.createElement('em')
+    em.textContent = token.slice(1, -1)
+    return em
+  }
+
+  // Deliberately not an anchor: this is model output, and a live link would let
+  // it send the reader anywhere. Show the destination as text instead.
+  const closingBracket = token.indexOf('](')
+  const label = token.slice(1, closingBracket)
+  const url = token.slice(closingBracket + 2, -1)
+  return document.createTextNode(`${label} (${url})`)
+}
+
+function appendInlineMarkdown(target: HTMLElement, text: string) {
+  let lastIndex = 0
+  for (const match of text.matchAll(MD_INLINE_PATTERN)) {
+    const index = match.index ?? 0
+    if (index > lastIndex) {
+      target.appendChild(document.createTextNode(text.slice(lastIndex, index)))
+    }
+    target.appendChild(createInlineMarkdownNode(match[0]))
+    lastIndex = index + match[0].length
+  }
+  if (lastIndex < text.length) {
+    target.appendChild(document.createTextNode(text.slice(lastIndex)))
+  }
+}
+
+interface MarkdownListMarker {
+  ordered: boolean
+  text: string
+  indent: number
+}
+
+function readListMarker(line: string): MarkdownListMarker | null {
+  const match = line.match(/^(\s*)(?:(\d+)[.)]|[-*+])\s+(.*)$/)
+  if (!match) return null
+  return { ordered: Boolean(match[2]), text: match[3], indent: match[1].length }
+}
+
+// Models answer with "1. **title**" followed by indented detail lines and
+// sub-bullets. Flat line-by-line handling tore those apart, so an item also
+// swallows the indented lines and nested lists that belong to it.
+function appendMarkdownList(
+  container: HTMLElement,
+  lines: string[],
+  start: number,
+): number {
+  const first = readListMarker(lines[start])
+  if (!first) return start + 1
+
+  const list = document.createElement(first.ordered ? 'ol' : 'ul')
+  list.style.cssText = 'margin:0 0 8px 0;padding-left:18px;'
+  let index = start
+
+  while (index < lines.length) {
+    const marker = readListMarker(lines[index])
+    if (
+      !marker ||
+      marker.indent !== first.indent ||
+      marker.ordered !== first.ordered
+    ) {
+      break
+    }
+
+    const li = document.createElement('li')
+    li.style.cssText = 'margin:0 0 4px 0;'
+    appendInlineMarkdown(li, marker.text)
+    index += 1
+
+    while (index < lines.length) {
+      const raw = lines[index]
+      if (!raw.trim()) break
+
+      const nested = readListMarker(raw)
+      if (nested && nested.indent > first.indent) {
+        index = appendMarkdownList(li, lines, index)
+        continue
+      }
+      if (nested) break
+
+      const rawIndent = raw.length - raw.trimStart().length
+      if (rawIndent <= first.indent) break
+
+      const continuation = document.createElement('div')
+      continuation.style.cssText = 'margin-top:2px;'
+      appendInlineMarkdown(continuation, raw.trim())
+      li.appendChild(continuation)
+      index += 1
+    }
+
+    list.appendChild(li)
+  }
+
+  container.appendChild(list)
+  return index
+}
+
+function renderMarkdownInto(container: HTMLElement, markdown: string) {
+  const lines = markdown.replace(/\r\n/g, '\n').split('\n')
+  let index = 0
+  let paragraph: string[] = []
+
+  const flushParagraph = () => {
+    if (paragraph.length === 0) return
+    const p = document.createElement('p')
+    p.style.cssText = 'margin:0 0 8px 0;'
+    appendInlineMarkdown(p, paragraph.join(' '))
+    container.appendChild(p)
+    paragraph = []
+  }
+
+  while (index < lines.length) {
+    const line = lines[index]
+    const trimmed = line.trim()
+
+    if (trimmed.startsWith('```')) {
+      flushParagraph()
+      const body: string[] = []
+      index += 1
+      while (index < lines.length && !lines[index].trim().startsWith('```')) {
+        body.push(lines[index])
+        index += 1
+      }
+      index += 1
+
+      const pre = document.createElement('pre')
+      pre.style.cssText = themedStyle(
+        `margin:0 0 8px 0;padding:8px;background:#f6f8fa;border:1px solid #d8dee4;border-radius:6px;overflow-x:auto;font-family:${MONO_FONT};font-size:11px;line-height:1.5;white-space:pre;`)
+      pre.textContent = body.join('\n')
+      container.appendChild(pre)
+      continue
+    }
+
+    if (!trimmed) {
+      flushParagraph()
+      index += 1
+      continue
+    }
+
+    const heading = trimmed.match(/^(#{1,4})\s+(.*)$/)
+    if (heading) {
+      flushParagraph()
+      const title = document.createElement('p')
+      title.style.cssText = themedStyle(
+        'margin:10px 0 6px 0;font-size:12px;font-weight:600;color:#24292f;')
+      appendInlineMarkdown(title, heading[2])
+      container.appendChild(title)
+      index += 1
+      continue
+    }
+
+    if (readListMarker(line)) {
+      flushParagraph()
+      index = appendMarkdownList(container, lines, index)
+      continue
+    }
+
+    paragraph.push(trimmed)
+    index += 1
+  }
+
+  flushParagraph()
 }
 
 function confidenceText(confidence: DeepFileAnalysisResult['confidence']): string {
@@ -720,47 +1313,104 @@ function renderInsightError(container: HTMLElement, message: string) {
   container.appendChild(error)
 }
 
+// The sidebar answers one question at a time; the main panel's Agent is the
+// place with conversation history and cross-file retrieval, so hand off there
+// rather than growing a second, weaker chat here.
+function createContinueInAgentButton(
+  fileInfo: FileInfo,
+  fileData: FileData,
+  question: string,
+): HTMLButtonElement {
+  const button = document.createElement('button')
+  button.type = 'button'
+  button.textContent = currentLanguage === 'zh' ? '在 Agent 中继续追问 →' : 'Continue in Agent →'
+  button.style.cssText = themedStyle(
+    'margin-top:6px;padding:0;background:none;border:none;color:#0969da;font-family:inherit;font-size:11px;cursor:pointer;text-align:left;')
+  button.addEventListener('click', () => {
+    // Carry the file along, otherwise the Agent has no idea what "this" is
+    const seeded = currentLanguage === 'zh'
+      ? `关于 ${fileData.fileName}：${question}`
+      : `About ${fileData.fileName}: ${question}`
+    openPanel(fileInfo.owner, fileInfo.repo, 'agent', seeded)
+  })
+  return button
+}
+
 function renderQuestionAnswer(
   target: HTMLElement,
+  fileInfo: FileInfo,
   fileData: FileData,
   question: string,
 ) {
-  target.replaceChildren(
+  // Matches performDeepAnalysis: without this the placeholder below would be the
+  // last thing the user ever sees, because sendMessage throws synchronously once
+  // the extension has been reloaded
+  if (!isExtensionContextValid()) {
+    renderInsightError(target, 'Extension context unavailable. Please refresh the page.')
+    showReloadPrompt()
+    return
+  }
+
+  // Each exchange is appended rather than replacing the last one, and the
+  // question is echoed — otherwise a second question silently wiped the first
+  // answer and left prose with nothing to attach it to
+  const entry = document.createElement('div')
+  entry.style.cssText = themedStyle(
+    'margin-top:10px;padding-top:10px;border-top:1px solid #eaeef2;')
+
+  const asked = document.createElement('p')
+  asked.style.cssText = themedStyle(
+    'margin:0 0 6px 0;font-size:12px;font-weight:600;color:#24292f;')
+  asked.textContent = question
+
+  const body = document.createElement('div')
+  body.appendChild(
     createText(
       getText('thinking'),
       'padding:8px;background:#f6f8fa;border-radius:6px;font-size:12px;color:#57606a;margin:0;',
     ),
   )
 
-  chrome.runtime.sendMessage(
-    {
-      action: 'askQuestion',
-      fileName: fileData.fileName,
-      fileContent: fileData.fileContent,
-      question,
-    },
-    (qaResult: any) => {
-      const runtimeError = chrome.runtime.lastError
-      if (runtimeError) {
-        renderInsightError(target, runtimeError.message || getText('requestFailed'))
-        return
-      }
-      if (qaResult?.error) {
-        renderInsightError(target, qaResult.error)
-        return
-      }
-      if (typeof qaResult?.answer !== 'string' || !qaResult.answer.trim()) {
-        renderInsightError(target, getText('requestFailed'))
-        return
-      }
+  entry.append(asked, body)
+  target.appendChild(entry)
 
-      const answer = document.createElement('div')
-      answer.style.cssText = themedStyle(
-        'padding:10px;background:#f6f8fa;border:1px solid #d8dee4;border-radius:8px;font-size:12px;line-height:1.6;color:#24292f;white-space:pre-wrap;word-break:break-word;')
-      answer.textContent = qaResult.answer
-      target.replaceChildren(answer)
-    },
-  )
+  try {
+    chrome.runtime.sendMessage(
+      {
+        action: 'askQuestion',
+        fileName: fileData.fileName,
+        fileContent: fileData.promptContent,
+        question,
+      },
+      (qaResult: any) => {
+        const runtimeError = chrome.runtime.lastError
+        if (runtimeError) {
+          renderInsightError(body, runtimeError.message || getText('requestFailed'))
+          return
+        }
+        if (qaResult?.error) {
+          renderInsightError(body, qaResult.error)
+          return
+        }
+        if (typeof qaResult?.answer !== 'string' || !qaResult.answer.trim()) {
+          renderInsightError(body, getText('requestFailed'))
+          return
+        }
+
+        const answer = document.createElement('div')
+        answer.style.cssText = themedStyle(
+          'padding:10px;background:#f6f8fa;border:1px solid #d8dee4;border-radius:8px;font-size:12px;line-height:1.6;color:#24292f;word-break:break-word;')
+        renderMarkdownInto(answer, qaResult.answer)
+        body.replaceChildren(answer, createContinueInAgentButton(fileInfo, fileData, question))
+      },
+    )
+  } catch (error) {
+    // The context can be invalidated between the check above and this call
+    renderInsightError(
+      body,
+      error instanceof Error ? error.message : getText('requestFailed'),
+    )
+  }
 }
 
 function renderFileInsight(
@@ -775,134 +1425,156 @@ function renderFileInsight(
   const wrapper = document.createElement('div')
   wrapper.style.cssText = 'display:flex;flex-direction:column;gap:12px;'
 
-  const overview = createCard()
-  overview.appendChild(createSectionTitle(getText('fileUnderstanding')))
-  overview.appendChild(
-    createText(
+  // Vitals only — the sticky header already carries the full path, and repeating
+  // it here meant both were on screen at once
+  const vitals = document.createElement('div')
+  vitals.style.cssText = 'display:flex;flex-wrap:wrap;gap:6px;'
+  vitals.append(
+    createChip(insight.languageLabel, 'blue'),
+    createChip(
       currentLanguage === 'zh'
-        ? `先基于当前文件内容做本地解析。AI 分析会在你点击按钮后再调用模型。`
-        : 'Local file context is available now. AI analysis only runs after you click the button.',
-      'font-size:12px;color:#57606a;line-height:1.55;margin:0 0 10px 0;',
+        ? `${insight.totalLines} 行 · ${insight.loc} 有效`
+        : `${insight.totalLines} lines · ${insight.loc} LOC`,
     ),
   )
-  const path = document.createElement('div')
-  path.style.cssText = themedStyle(
-    'font-family:ui-monospace,SFMono-Regular,SFMono,Consolas,monospace;font-size:12px;color:#24292f;background:#f6f8fa;border-radius:6px;padding:8px;word-break:break-all;')
-  path.textContent = insight.filePath
-  overview.appendChild(path)
-  const overviewChips = document.createElement('div')
-  overviewChips.style.cssText = 'display:flex;flex-wrap:wrap;gap:6px;margin-top:10px;'
-  overviewChips.append(
-    createChip(insight.languageLabel, 'blue'),
-    createChip(`${getText('lines')}: ${insight.totalLines}`),
-    createChip(`${getText('loc')}: ${insight.loc}`),
-  )
   if (insight.todos > 0) {
-    overviewChips.appendChild(createChip(`${getText('todos')}: ${insight.todos}`, 'amber'))
+    vitals.appendChild(createChip(`${getText('todos')}: ${insight.todos}`, 'amber'))
   }
-  overview.appendChild(overviewChips)
-  wrapper.appendChild(overview)
+  // The counts above cover the whole file, so say plainly that the model does not
+  if (fileData.promptTruncated) {
+    vitals.appendChild(createChip(getText('promptTruncated'), 'amber'))
+  }
+  wrapper.appendChild(vitals)
 
-  const metrics = createCard()
-  metrics.appendChild(createSectionTitle(getText('metrics')))
-  const metricRow = document.createElement('div')
-  metricRow.style.cssText = 'display:flex;gap:8px;flex-wrap:wrap;'
-  metricRow.append(
-    createMetric(getText('lines'), insight.totalLines),
-    createMetric(getText('loc'), insight.loc),
-    createMetric(getText('imports'), insight.imports.length),
-  )
-  metrics.appendChild(metricRow)
-  wrapper.appendChild(metrics)
+  if (insight.symbols.length > 0 || insight.imports.length > 0) {
+    const structure = createCard()
 
-  const symbols = createCard()
-  symbols.appendChild(createSectionTitle(getText('keySymbols')))
-  if (insight.symbols.length === 0) {
-    symbols.appendChild(createText(getText('noSymbols'), 'font-size:12px;color:#57606a;margin:0;'))
+    if (insight.symbols.length > 0) {
+      structure.appendChild(
+        createSectionTitle(`${getText('keySymbols')} · ${insight.symbols.length}`),
+      )
+      const list = document.createElement('div')
+      list.style.cssText = 'display:flex;flex-direction:column;'
+      insight.symbols.slice(0, 10).forEach((symbol, index, shown) => {
+        const row = document.createElement('button')
+        row.type = 'button'
+        row.title = jumpLineTitle(symbol.lineStart)
+        row.style.cssText = themedStyle(
+          `display:flex;width:100%;align-items:center;gap:7px;padding:6px 4px;min-width:0;text-align:left;background:transparent;border:none;${
+            index === shown.length - 1 ? '' : 'border-bottom:1px solid #eaeef2;'
+          }cursor:pointer;`)
+        applyHoverBackground(row, '#f6f8fa')
+
+        const name = document.createElement('span')
+        name.style.cssText = themedStyle(
+          'flex:1;min-width:0;font-family:ui-monospace,SFMono-Regular,SFMono,Consolas,monospace;font-size:12px;color:#0969da;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;')
+        name.textContent = symbol.name
+
+        const line = document.createElement('span')
+        line.style.cssText = themedStyle(
+          'flex-shrink:0;font-family:ui-monospace,SFMono-Regular,SFMono,Consolas,monospace;font-size:11px;color:#8c959f;')
+        line.textContent = String(symbol.lineStart)
+
+        row.append(createSymbolBadge(symbol.kind), name, line)
+        row.addEventListener('click', () =>
+          jumpToFileLine(symbol.lineStart, insight.totalLines))
+        list.appendChild(row)
+      })
+      structure.appendChild(list)
+    }
+
+    if (insight.imports.length > 0) {
+      const depTitle = createSectionTitle(
+        `${getText('dependencies')} · ${insight.imports.length}`,
+      )
+      if (insight.symbols.length > 0) depTitle.style.marginTop = '14px'
+      structure.appendChild(depTitle)
+
+      const depTags = document.createElement('div')
+      depTags.style.cssText = 'display:flex;flex-wrap:wrap;gap:6px;'
+      insight.imports.slice(0, 12).forEach((item) => {
+        // Only repo-local imports are somewhere the reader can actually go next,
+        // so external packages stay flat and unclickable
+        if (!isLocalDependency(item.source)) {
+          depTags.appendChild(createChip(item.source, 'gray'))
+          return
+        }
+        const tag = createChip(item.source, 'blue', true)
+        tag.title = jumpLineTitle(item.lineStart)
+        tag.addEventListener('click', () =>
+          jumpToFileLine(item.lineStart, insight.totalLines))
+        depTags.appendChild(tag)
+      })
+      structure.appendChild(depTags)
+    }
+
+    wrapper.appendChild(structure)
   } else {
-    const list = document.createElement('div')
-    list.style.cssText = 'display:flex;flex-direction:column;gap:6px;'
-    insight.symbols.slice(0, 10).forEach((symbol) => {
-      const row = document.createElement('div')
-      row.style.cssText = themedStyle(
-        'display:flex;align-items:center;gap:6px;padding:7px 8px;background:#f6f8fa;border-radius:6px;min-width:0;')
-      const name = document.createElement('span')
-      name.style.cssText = themedStyle(
-        'flex:1;min-width:0;font-family:ui-monospace,SFMono-Regular,SFMono,Consolas,monospace;font-size:12px;color:#0969da;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;')
-      name.textContent = symbol.name
-      row.append(name, createChip(symbol.kind, 'gray'), createChip(`L${symbol.lineStart}`, 'blue'))
-      list.appendChild(row)
-    })
-    symbols.appendChild(list)
+    wrapper.appendChild(
+      createText(getText('noSymbols'), 'font-size:12px;color:#57606a;margin:0;'),
+    )
   }
-  wrapper.appendChild(symbols)
 
-  const dependencies = createCard()
-  dependencies.appendChild(createSectionTitle(getText('dependencies')))
-  const depTags = document.createElement('div')
-  depTags.style.cssText = 'display:flex;flex-wrap:wrap;gap:6px;'
-  if (insight.imports.length === 0) {
-    dependencies.appendChild(createText(getText('noDependencies'), 'font-size:12px;color:#57606a;margin:0;'))
-  } else {
-    insight.imports.slice(0, 12).forEach((item) => {
-      depTags.appendChild(createChip(item.source, 'blue'))
-    })
-    dependencies.appendChild(depTags)
-  }
-  wrapper.appendChild(dependencies)
+  // The one emphasised block on the panel: it is the only thing here that costs
+  // the user a model call
+  const aiCard = createCard(true)
 
-  const aiCard = createCard()
-  aiCard.appendChild(createSectionTitle(currentLanguage === 'zh' ? 'AI 增强' : 'AI Assist'))
-  const aiButton = createPrimaryButton(
-    llmConfigured ? getText('aiAnalysis') : getText('configureLLM'),
-    !llmConfigured,
-  )
   if (llmConfigured) {
-    aiButton.addEventListener('click', () => performDeepAnalysis(container, fileData))
-  }
-  aiCard.appendChild(aiButton)
-  if (!llmConfigured) {
+    const aiButton = createPrimaryButton(getText('aiAnalysis'))
+    aiButton.addEventListener('click', () =>
+      performDeepAnalysis(container, fileInfo, fileData))
+    aiCard.appendChild(aiButton)
+    aiCard.appendChild(
+      createText(
+        currentLanguage === 'zh'
+          ? '点击后才会调用模型'
+          : 'Nothing is sent to the model until you click.',
+        'font-size:11px;color:#8c959f;text-align:center;margin:8px 0 0 0;',
+      ),
+    )
+
+    const response = document.createElement('div')
+    response.style.cssText = 'margin-top:10px;'
+    const questionList = document.createElement('div')
+    questionList.style.cssText = themedStyle(
+      'display:flex;flex-direction:column;gap:6px;margin-top:12px;padding-top:12px;border-top:1px solid #eaeef2;')
+
+    insight.quickQuestions.forEach((question) => {
+      const button = document.createElement('button')
+      button.textContent = question
+      button.style.cssText = themedStyle(`
+        width:100%;
+        text-align:left;
+        padding:8px 10px;
+        border:1px solid #d8dee4;
+        border-radius:6px;
+        background:#f6f8fa;
+        color:#24292f;
+        font-size:12px;
+        line-height:1.4;
+        cursor:pointer;
+      `)
+      button.addEventListener('click', () =>
+        renderQuestionAnswer(response, fileInfo, fileData, question))
+      questionList.appendChild(button)
+    })
+    aiCard.append(questionList, response)
+  } else {
+    // One control and one sentence: the old layout said the same thing three
+    // times, in a disabled button, a caption, and a second button
     aiCard.appendChild(
       createText(
         getText('configureLLM'),
-        'font-size:11px;color:#8c959f;text-align:center;margin:8px 0 8px 0;',
+        'font-size:12px;color:#57606a;line-height:1.5;margin:0 0 10px 0;',
       ),
     )
     const settingsButton = createPrimaryButton(getText('openSettings'))
-    settingsButton.addEventListener('click', () => openPanel(fileInfo.owner, fileInfo.repo, 'settings'))
+    settingsButton.addEventListener('click', () =>
+      openPanel(fileInfo.owner, fileInfo.repo, 'settings'))
     aiCard.appendChild(settingsButton)
   }
-  wrapper.appendChild(aiCard)
 
-  const questions = createCard()
-  questions.appendChild(createSectionTitle(getText('quickQuestions')))
-  const response = document.createElement('div')
-  response.style.cssText = 'margin-top:10px;'
-  const questionList = document.createElement('div')
-  questionList.style.cssText = 'display:flex;flex-direction:column;gap:6px;'
-  insight.quickQuestions.forEach((question) => {
-    const button = document.createElement('button')
-    button.textContent = question
-    button.disabled = !llmConfigured
-    button.style.cssText = themedStyle(`
-      width:100%;
-      text-align:left;
-      padding:8px 10px;
-      border:1px solid #d8dee4;
-      border-radius:6px;
-      background:#f6f8fa;
-      color:${llmConfigured ? '#24292f' : '#8c959f'};
-      font-size:12px;
-      line-height:1.4;
-      cursor:${llmConfigured ? 'pointer' : 'not-allowed'};
-    `)
-    if (llmConfigured) {
-      button.addEventListener('click', () => renderQuestionAnswer(response, fileData, question))
-    }
-    questionList.appendChild(button)
-  })
-  questions.append(questionList, response)
-  wrapper.appendChild(questions)
+  wrapper.appendChild(aiCard)
 
   container.appendChild(wrapper)
 }
@@ -910,6 +1582,7 @@ function renderFileInsight(
 function renderDeepAnalysis(
   container: HTMLElement,
   analysis: DeepFileAnalysisResult,
+  fileInfo: FileInfo,
   fileData: FileData,
 ) {
   container.replaceChildren()
@@ -1093,7 +1766,7 @@ function renderDeepAnalysis(
   const handleAsk = () => {
     const question = input.value.trim()
     if (!question) return
-    renderQuestionAnswer(qaResponse, fileData, question)
+    renderQuestionAnswer(qaResponse, fileInfo, fileData, question)
   }
 
   askBtn.addEventListener('click', handleAsk)
@@ -1104,7 +1777,11 @@ function renderDeepAnalysis(
   container.appendChild(wrapper)
 }
 
-async function performDeepAnalysis(contentDiv: HTMLElement, fileData: any) {
+async function performDeepAnalysis(
+  contentDiv: HTMLElement,
+  fileInfo: FileInfo,
+  fileData: FileData,
+) {
   console.log('[GitMentor] Requesting deep analysis...')
   
   // Load current language
@@ -1129,7 +1806,7 @@ async function performDeepAnalysis(contentDiv: HTMLElement, fileData: any) {
   chrome.runtime.sendMessage({
     action: 'analyzeFileDeep',
     fileName: fileData.fileName,
-    fileContent: fileData.fileContent,
+    fileContent: fileData.promptContent,
     language: currentLanguage,
   }, (response: any) => {
     const runtimeError = chrome.runtime.lastError
@@ -1138,7 +1815,7 @@ async function performDeepAnalysis(contentDiv: HTMLElement, fileData: any) {
       return
     }
     if (response?.data) {
-      renderDeepAnalysis(contentDiv, response.data as DeepFileAnalysisResult, fileData)
+      renderDeepAnalysis(contentDiv, response.data as DeepFileAnalysisResult, fileInfo, fileData)
       return
     }
     renderInsightError(
@@ -1184,19 +1861,19 @@ async function fetchAndAnalyzeFile(fileInfo: FileInfo, contentDiv: HTMLElement) 
     // Load current language
     currentLanguage = await getLanguage()
     const fileContent = await fetchGithubFileContent(fileInfo)
-    
-    // Limit file size for API
-    const maxSize = 20000 // 20KB limit
-    const truncatedContent = fileContent.length > maxSize 
-      ? fileContent.substring(0, maxSize) + '\n... (file truncated)'
-      : fileContent
-    
-    // Store file info for deep analysis
-    const fileData = {
+
+    // Only what the model sees is capped. The full text stays on fileData so the
+    // local metrics describe the actual file rather than the first 20KB of it.
+    const promptTruncated = fileContent.length > PROMPT_CONTENT_MAX_CHARS
+    const fileData: FileData = {
       fileName: fileInfo.path,
-      fileContent: truncatedContent,
+      fileContent,
+      promptContent: promptTruncated
+        ? `${fileContent.substring(0, PROMPT_CONTENT_MAX_CHARS)}\n... (file truncated)`
+        : fileContent,
+      promptTruncated,
     }
-    
+
     // Check extension context before sending message
     if (!isExtensionContextValid()) {
       renderInsightError(contentDiv, 'Extension context unavailable. Please refresh the page.')
@@ -1293,6 +1970,10 @@ function injectWidget() {
 
   widget.appendChild(button)
   document.body.appendChild(widget)
+
+  // The widget can be (re)created while the sidebar is already open, so settle
+  // it clear of the sidebar right away instead of waiting for the next layout pass
+  applySidebarLayout()
 
   // Make widget draggable
   makeDraggable(widget)
@@ -1406,7 +2087,12 @@ function showReloadPrompt() {
   })
 }
 
-function openPanel(owner: string, repo: string, initialTab?: 'settings') {
+function openPanel(
+  owner: string,
+  repo: string,
+  initialTab?: 'settings' | 'agent',
+  initialQuestion?: string,
+) {
   console.log(`[GitMentor] openPanel called with ${owner}/${repo}`)
   
   try {
@@ -1432,7 +2118,12 @@ function openPanel(owner: string, repo: string, initialTab?: 'settings') {
     }
     
     const extensionId = chrome.runtime.id
-    const popupUrl = `chrome-extension://${extensionId}/src/popup/index.html?owner=${encodeURIComponent(owner)}&repo=${encodeURIComponent(repo)}${initialTab ? `&tab=${encodeURIComponent(initialTab)}` : ''}`
+    // The question is prefilled, never auto-sent: spending a model call is the
+    // reader's decision
+    const questionParam = initialQuestion
+      ? `&q=${encodeURIComponent(initialQuestion.slice(0, 500))}`
+      : ''
+    const popupUrl = `chrome-extension://${extensionId}/src/popup/index.html?owner=${encodeURIComponent(owner)}&repo=${encodeURIComponent(repo)}${initialTab ? `&tab=${encodeURIComponent(initialTab)}` : ''}${questionParam}`
     console.log('[GitMentor] Panel URL:', popupUrl)
     
     // Create floating panel
@@ -1504,9 +2195,17 @@ function openPanel(owner: string, repo: string, initialTab?: 'settings') {
     if (widget) {
       widget.style.display = 'none'
     }
+    // The panel and the file sidebar both live on the right edge, so the
+    // sidebar steps aside for as long as the panel is open
+    setFileSidebarSuppressed(true)
     const panelObserver = new MutationObserver(() => {
       if (!document.body.contains(panel)) {
         showWidget()
+        // Reopening with a different tab removes and recreates the panel, so
+        // only hand the edge back once no panel is left
+        if (!document.getElementById('gitmentor-panel')) {
+          setFileSidebarSuppressed(false)
+        }
         document.removeEventListener('keydown', escapeHandler)
         panelObserver.disconnect()
       }
@@ -1678,6 +2377,17 @@ observer.observe(document.body, {
 window.addEventListener('popstate', () => {
   console.log('[GitMentor] URL changed via popstate')
   scheduleInjection(80)
+})
+
+// The sidebar width is capped against the viewport and only reserves page space
+// on wide screens, so both have to be re-evaluated when the window changes
+let resizeTimer: ReturnType<typeof setTimeout> | null = null
+window.addEventListener('resize', () => {
+  if (resizeTimer) clearTimeout(resizeTimer)
+  resizeTimer = setTimeout(() => {
+    resizeTimer = null
+    applySidebarLayout()
+  }, 100)
 })
 
 // Note: GitHub's pushState/replaceState calls happen in the page's main world and
