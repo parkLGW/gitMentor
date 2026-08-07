@@ -20,6 +20,13 @@ import {
 } from '@/services/llm-stream'
 import { parseLooseJson } from '@/services/llm-json'
 import { normalizeDeepFileAnalysisResult } from '@/services/deep-file-analysis-normalizer'
+import {
+  classifyUnparseableResponse,
+  compactRetryInstruction,
+  describeReasoningOnlyResponse,
+  describeUnparseableResponse,
+  looksLikeDeepAnalysis,
+} from '@/services/deep-analysis-response'
 import { normalizeAgentJsonFields } from '@/services/agent-response-parser'
 import {
   AGENT_CODE_FETCH_TIMEOUT_MS,
@@ -948,13 +955,62 @@ function resolveStreamMode(config: StoredLLMConfig): StreamMode {
   return null
 }
 
+function extractOpenAIMessageText(message: any): string {
+  if (!message) return ''
+
+  if (typeof message.content === 'string' && message.content.trim()) {
+    return message.content
+  }
+
+  // Several gateways return the multimodal array form even for plain text
+  if (Array.isArray(message.content)) {
+    const joined = message.content
+      .map((part: any) => (typeof part === 'string' ? part : part?.text || ''))
+      .join('')
+    if (joined.trim()) return joined
+  }
+
+  return ''
+}
+
+// Reasoning models keep the chain of thought separate from the answer. Thought
+// text is never a usable answer — returning it just disguises "the model never
+// got to the answer" as malformed output.
+function hasReasoningText(message: any): boolean {
+  return ['reasoning_content', 'reasoning'].some(
+    (key) => typeof message?.[key] === 'string' && message[key].trim().length > 0,
+  )
+}
+
 function parseLLMResponseText(config: StoredLLMConfig, data: any): string {
   const normalized = migrateLegacyLLMConfig(config)
 
   if (normalized.protocol === 'claude') {
-    return data.content?.[0]?.text || ''
+    // With extended thinking the first block is the thinking block, so taking
+    // content[0].text alone yields nothing
+    const blocks = Array.isArray(data?.content) ? data.content : []
+    return blocks
+      .map((block: any) => (typeof block?.text === 'string' ? block.text : ''))
+      .join('')
   }
-  return data.choices?.[0]?.message?.content || ''
+
+  const choice = data?.choices?.[0]
+  const text = extractOpenAIMessageText(choice?.message)
+
+  if (!text) {
+    // `|| ''` used to swallow every unexpected payload shape without a trace
+    console.warn('[GitMentor SW] LLM returned no text', {
+      finishReason: choice?.finish_reason,
+      messageKeys: choice?.message ? Object.keys(choice.message) : null,
+      topLevelKeys: data ? Object.keys(data) : null,
+      usage: data?.usage,
+    })
+    if (hasReasoningText(choice?.message)) {
+      throw new Error(REASONING_ONLY_ERROR)
+    }
+  }
+
+  return text
 }
 
 async function readStreamingLLMResponse(
@@ -1306,6 +1362,35 @@ function quickAnalyzeFile(fileName: string, fileContent: string, lang: Language 
   return html
 }
 
+// This asks for the largest JSON object in the codebase — role, summary,
+// workflow, components, designNotes, dependencies, evidence and suggestions.
+// It used to run on callLLM's 420-token fallback, so the answer was routinely
+// cut off mid-object and every truncation surfaced as an opaque parse failure.
+// A floor, not a ceiling: callLLM treats an explicit maxTokens as an override, so
+// passing a constant would cap a config that asked for more. 4000 stays under the
+// 4096 output limit that older models still enforce.
+const DEEP_ANALYSIS_MIN_TOKENS = 4000
+const DEEP_ANALYSIS_TIMEOUT_MS = 60000
+
+// max_tokens is a ceiling that is only billed as it is generated, so a reasoning
+// model that burned the whole budget thinking costs nothing extra to re-ask with
+// real room. Thinking is also slow, hence the longer timeout.
+const DEEP_ANALYSIS_REASONING_TOKENS = 16000
+const DEEP_ANALYSIS_REASONING_TIMEOUT_MS = 180000
+
+const REASONING_ONLY_ERROR = 'LLM_REASONING_ONLY'
+
+function isReasoningOnlyError(error: unknown): boolean {
+  return error instanceof Error && error.message === REASONING_ONLY_ERROR
+}
+
+function resolveDeepAnalysisTokens(config: StoredLLMConfig): number {
+  const configured = migrateLegacyLLMConfig(config).maxTokens
+  return typeof configured === 'number' && configured > DEEP_ANALYSIS_MIN_TOKENS
+    ? Math.floor(configured)
+    : DEEP_ANALYSIS_MIN_TOKENS
+}
+
 // Deep file analysis with LLM
 async function deepAnalyzeFile(
   config: StoredLLMConfig,
@@ -1350,13 +1435,71 @@ Evidence rules:
 - Prefer function definitions, key assignments, return statements, or class definitions.
 - Do not use import lines as evidence unless the file has no better implementation line.
 
+Size limits (the reader only ever sees this much, and a longer answer risks being
+cut off by the output limit):
+- workflow: at most 6 steps
+- components: at most 8 entries
+- designNotes: at most 4 entries
+- dependencies: at most 10 entries
+- evidence: at most 2 entries, each snippet a single line
+- suggestions: at most 5 entries
+
 Important: Return ONLY the JSON object, no markdown code blocks or extra text.`
 
-  const response = await callLLM(config, prompt)
-  const analysis = safeParseJSON(response)
-  
-  if (!analysis) {
-    throw new Error('Failed to parse AI response')
+  const maxTokens = resolveDeepAnalysisTokens(config)
+  const requestAnalysis = async (
+    text: string,
+    tokens = maxTokens,
+    timeoutMs = DEEP_ANALYSIS_TIMEOUT_MS,
+  ) =>
+    await callLLM(config, text, { maxTokens: tokens, timeoutMs, label: 'deep-file-analysis' })
+
+  const usable = (parsed: unknown) => Boolean(parsed) && looksLikeDeepAnalysis(parsed)
+
+  let response: string
+  try {
+    response = await requestAnalysis(prompt)
+  } catch (error) {
+    if (!isReasoningOnlyError(error)) throw error
+    // Everything went to the chain of thought and no answer was emitted
+    console.info('[GitMentor SW] Deep analysis produced only reasoning, retrying larger', {
+      maxTokens,
+      retryTokens: DEEP_ANALYSIS_REASONING_TOKENS,
+    })
+    try {
+      response = await requestAnalysis(
+        prompt,
+        DEEP_ANALYSIS_REASONING_TOKENS,
+        DEEP_ANALYSIS_REASONING_TIMEOUT_MS,
+      )
+    } catch (retryError) {
+      if (!isReasoningOnlyError(retryError)) throw retryError
+      throw new Error(describeReasoningOnlyResponse(lang))
+    }
+  }
+
+  let analysis = safeParseJSON(response)
+
+  // No token budget covers every file, so a reply cut short earns one compact
+  // retry rather than an error the reader can do nothing about
+  if (!usable(analysis) && classifyUnparseableResponse(response) === 'truncated') {
+    console.info('[GitMentor SW] Deep analysis truncated, retrying compactly', {
+      maxTokens,
+      responseChars: response.length,
+    })
+    response = await requestAnalysis(`${prompt}${compactRetryInstruction(lang)}`)
+    analysis = safeParseJSON(response)
+  }
+
+  if (!usable(analysis)) {
+    console.warn('[GitMentor SW] Deep analysis JSON parse failed', {
+      maxTokens,
+      responseChars: response.length,
+      parsedSomething: Boolean(analysis),
+      kind: classifyUnparseableResponse(response),
+      tail: response.slice(-200),
+    })
+    throw new Error(describeUnparseableResponse(response, lang))
   }
 
   return normalizeDeepFileAnalysisResult(analysis, {
@@ -1428,8 +1571,10 @@ chrome.runtime.onMessage.addListener((message: any, _sender: any, sendResponse: 
         sendResponse({ data })
       } catch (error) {
         console.error('[GitMentor SW] Deep analysis error:', error)
-        sendResponse({ 
-          error: `AI Analysis Failed: ${error instanceof Error ? error.message : 'Unknown error'}` 
+        // The sidebar already prefixes this with "Deep analysis failed", so a
+        // second prefix here just stacked three labels on one sentence
+        sendResponse({
+          error: error instanceof Error ? error.message : 'Unknown error',
         })
       }
     })()
