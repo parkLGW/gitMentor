@@ -51,7 +51,22 @@ if (missingBundles.length > 0) {
   console.error(`✗ 构建产物缺失: ${missingBundles.join(', ')}`);
   process.exit(1);
 }
-console.log('✓ 扩展入口产物齐全');
+
+// vite copies public/ into dist on every build, so a file there with the same
+// name as a bundle silently replaces it. A stale public/service-worker.js did
+// exactly that, shipping an extension whose message handlers were months old.
+const shadowed = requiredBundles.filter((name) =>
+  fs.existsSync(path.join(__dirname, 'public', name)),
+);
+
+if (shadowed.length > 0) {
+  console.error(
+    `✗ public/ 中的文件会覆盖构建产物: ${shadowed.join(', ')}\n` +
+      '  请删除它们 —— 这些入口由 src/ 构建生成。',
+  );
+  process.exit(1);
+}
+console.log('✓ 扩展入口产物齐全且未被 public/ 覆盖');
 
 // 3. 修复 popup HTML 中的脚本路径
 const popupHtmlPath = path.join(__dirname, 'dist', 'src', 'popup', 'index.html');

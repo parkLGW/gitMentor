@@ -14,6 +14,10 @@ export default {
       '@': path.resolve('./src'),
     },
   },
+  // The main build already copied public/ into dist. Copying it a second time
+  // would write those files over the first build's output — which is exactly
+  // what a stale public/service-worker.js did to the real bundle.
+  publicDir: false,
   build: {
     outDir: 'dist',
     // The main build runs first and owns clearing dist
