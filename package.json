@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build && node fix-manifest.js",
+    "build": "vite build && vite build --config vite.content.config.js && node fix-manifest.js",
     "preview": "vite preview",
     "lint": "eslint src --ext ts,tsx",
     "test": "node --import tsx --test \"src/__tests__/**/*.test.ts\"",

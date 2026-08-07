@@ -130,8 +130,13 @@ test("content script decodes the blob path and resolves branches containing slas
   // The old naive regex sent percent-encoded paths downstream, where
   // buildRawGithubUrl encoded them a second time and every non-ASCII file 404ed
   assert.doesNotMatch(source, /blob\\\/\(\[\^\\\/\]\+\)/);
-  assert.match(source, /decodeURIComponent/);
+  assert.match(source, /parseGithubBlobPath\(pathname, hints\)/);
   assert.match(source, /collectBranchHints/);
+  // The decoding itself lives in the shared parser, which is unit tested above
+  assert.match(
+    readFileSync("src/services/github-url.ts", "utf8"),
+    /decodeURIComponent/,
+  );
 });
 
 test("content script keys the file sidebar by repo and branch, not by path alone", () => {
@@ -201,13 +206,25 @@ test("file sidebar computes the line position instead of relying on GitHub's anc
   assert.match(source, /rect\.height \/ totalLines/);
 });
 
-test("content script line counting matches the canonical file-insights rule", () => {
+test("content script shares the canonical file-insights code rather than copying it", () => {
   const source = readFileSync("src/content/content-script.ts", "utf8");
   const canonical = readFileSync("src/services/file-insights.ts", "utf8");
 
-  const rule = /lines\.length > 1 && lines\[lines\.length - 1\] === ["']["']\) lines\.pop\(\)/;
-  assert.match(source, rule);
-  assert.match(canonical, rule);
+  assert.match(
+    canonical,
+    /lines\.length > 1 && lines\[lines\.length - 1\] === ["']["']\) lines\.pop\(\)/,
+  );
+  assert.match(source, /import \{ buildFileLocalInsight \} from '@\/services\/file-insights'/);
+  // These were the local copies, which had to be fixed twice for one bug
+  for (const copied of [
+    "function extractLocalImports",
+    "function extractLocalSymbols",
+    "function splitLocalSourceLines",
+    "function buildFileLocalInsight",
+    "function parseBlobPathname",
+  ]) {
+    assert.ok(!source.includes(copied), `${copied} should no longer be duplicated`);
+  }
 });
 
 test("file sidebar renders answers as Markdown instead of raw text", () => {

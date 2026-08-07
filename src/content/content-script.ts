@@ -1,5 +1,8 @@
 // Content script for injecting GitMentor floating widget on GitHub pages
 import type { DeepFileAnalysisResult } from '@/types/learning'
+import { buildFileLocalInsight } from '@/services/file-insights'
+import type { FileInsightSymbolKind } from '@/services/file-insights'
+import { parseGithubBlobPath } from '@/services/github-url'
 
 const STORAGE_KEYS = {
   language: 'gitmentor_language',
@@ -132,14 +135,6 @@ interface FileInfo {
   path: string
 }
 
-function decodePathSegment(segment: string): string {
-  try {
-    return decodeURIComponent(segment)
-  } catch {
-    return segment
-  }
-}
-
 // /owner/repo/blob/<ref>/<path> is ambiguous because <ref> may itself contain
 // slashes, so the page has to tell us where the ref ends. A hint that does not
 // match the URL is simply ignored, which keeps a stale or malformed one harmless.
@@ -171,41 +166,6 @@ function collectBranchHints(): string[] {
   return hints
 }
 
-// Port of parseGithubBlobPath() in src/services/github-url.ts. The content script
-// is bundled without runtime imports (see content-script-runtime.test.ts), so the
-// canonical implementation cannot be reused here — keep the two in sync.
-function parseBlobPathname(pathname: string, branchHints: string[]): FileInfo | null {
-  const parts = pathname.replace(/^\/+/, '').split('/').filter(Boolean)
-  if (parts.length < 5 || parts[2] !== 'blob') {
-    return null
-  }
-
-  const owner = decodePathSegment(parts[0])
-  const repo = decodePathSegment(parts[1])
-  const rest = parts.slice(3)
-  const decodedRest = rest.map(decodePathSegment).join('/')
-
-  const sortedHints = Array.from(
-    new Set(branchHints.map((hint) => hint.trim().replace(/^\/+|\/+$/g, '')).filter(Boolean)),
-  ).sort((a, b) => b.length - a.length)
-
-  for (const branch of sortedHints) {
-    if (decodedRest === branch || decodedRest.startsWith(`${branch}/`)) {
-      const path = decodedRest.slice(branch.length).replace(/^\/+/, '')
-      if (!path) return null
-      return { owner, repo, branch, path }
-    }
-  }
-
-  const branch = decodePathSegment(rest[0])
-  const path = rest.slice(1).map(decodePathSegment).join('/')
-  if (!branch || !path) {
-    return null
-  }
-
-  return { owner, repo, branch, path }
-}
-
 let cachedBlobParse: { pathname: string; fileInfo: FileInfo } | null = null
 
 function parseFileUrl(): FileInfo | null {
@@ -214,11 +174,11 @@ function parseFileUrl(): FileInfo | null {
 
   // Cheap shape check first — this runs on every debounced mutation, and on a
   // non-blob page it must not reach the DOM scan below
-  const fallback = parseBlobPathname(pathname, [])
+  const fallback = parseGithubBlobPath(pathname, [])
   if (!fallback) return null
 
   const hints = collectBranchHints()
-  const fileInfo = hints.length > 0 ? parseBlobPathname(pathname, hints) : fallback
+  const fileInfo = hints.length > 0 ? parseGithubBlobPath(pathname, hints) : fallback
   // Only memoize a parse the page confirmed. A hintless parse can split a ref
   // containing slashes in the wrong place, and on SPA navigation the page
   // publishes its ref slightly after the URL changes — so keep re-reading until
@@ -654,238 +614,6 @@ interface FileData {
   // Size-capped copy for the model
   promptContent: string
   promptTruncated: boolean
-}
-
-type FileInsightSymbolKind =
-  | 'function'
-  | 'class'
-  | 'component'
-  | 'hook'
-  | 'type'
-  | 'interface'
-  | 'constant'
-
-interface FileInsightImport {
-  source: string
-  lineStart: number
-}
-
-interface FileInsightSymbol {
-  name: string
-  kind: FileInsightSymbolKind
-  lineStart: number
-}
-
-const FILE_LANGUAGE_LABELS: Record<string, string> = {
-  js: 'JavaScript',
-  jsx: 'JSX',
-  ts: 'TypeScript',
-  tsx: 'TSX',
-  py: 'Python',
-  go: 'Go',
-  rs: 'Rust',
-  java: 'Java',
-  rb: 'Ruby',
-  php: 'PHP',
-  css: 'CSS',
-  scss: 'SCSS',
-  html: 'HTML',
-  json: 'JSON',
-  yml: 'YAML',
-  yaml: 'YAML',
-  toml: 'TOML',
-  sh: 'Shell',
-}
-
-function fileBasename(filePath: string): string {
-  return filePath.split('/').pop() || filePath
-}
-
-function fileExtension(filePath: string): string {
-  const match = fileBasename(filePath).match(/\.([^.]+)$/)
-  return match?.[1]?.toLowerCase() || ''
-}
-
-function fileLanguageLabel(filePath: string): string {
-  const ext = fileExtension(filePath)
-  return FILE_LANGUAGE_LABELS[ext] || (ext ? ext.toUpperCase() : 'File')
-}
-
-function countSourceLoc(lines: string[]): number {
-  return lines.filter((line) => {
-    const trimmed = line.trim()
-    return trimmed.length > 0 &&
-      !trimmed.startsWith('//') &&
-      !trimmed.startsWith('#') &&
-      !trimmed.startsWith('*')
-  }).length
-}
-
-function pushUniqueLocalImport(
-  imports: FileInsightImport[],
-  source: string,
-  lineStart: number,
-) {
-  const normalized = source.trim()
-  if (!normalized || imports.some((item) => item.source === normalized)) return
-  imports.push({ source: normalized, lineStart })
-}
-
-function extractLocalImports(lines: string[]): FileInsightImport[] {
-  const imports: FileInsightImport[] = []
-
-  lines.forEach((line, index) => {
-    const lineStart = index + 1
-    const trimmed = line.trim()
-    const pythonFrom = trimmed.match(/^from\s+([A-Za-z0-9_.]+)\s+import\s+/)
-    if (pythonFrom) {
-      pushUniqueLocalImport(imports, pythonFrom[1], lineStart)
-      return
-    }
-
-    const jsFrom = trimmed.match(/^import\s+.+?\s+from\s+["']([^"']+)["']/)
-    if (jsFrom) {
-      pushUniqueLocalImport(imports, jsFrom[1], lineStart)
-      return
-    }
-
-    const jsSideEffect = trimmed.match(/^import\s*["']([^"']+)["']/)
-    if (jsSideEffect) {
-      pushUniqueLocalImport(imports, jsSideEffect[1], lineStart)
-      return
-    }
-
-    const pythonImport = trimmed.match(/^import\s+(.+)/)
-    if (pythonImport && !trimmed.startsWith('import(')) {
-      pythonImport[1]
-        .split(',')
-        .map((item) => item.trim().split(/\s+as\s+/)[0])
-        .forEach((source) => pushUniqueLocalImport(imports, source, lineStart))
-      return
-    }
-
-    const requireMatch = trimmed.match(/require\(["']([^"']+)["']\)/)
-    if (requireMatch) {
-      pushUniqueLocalImport(imports, requireMatch[1], lineStart)
-    }
-  })
-
-  return imports.slice(0, 12)
-}
-
-function symbolKindForLocalName(name: string, fallback: FileInsightSymbolKind): FileInsightSymbolKind {
-  if (/^use[A-Z0-9]/.test(name)) return 'hook'
-  if (/^[A-Z]/.test(name) && (fallback === 'function' || fallback === 'constant')) {
-    return 'component'
-  }
-  return fallback
-}
-
-function extractLocalSymbols(lines: string[]): FileInsightSymbol[] {
-  const symbols: FileInsightSymbol[] = []
-
-  lines.forEach((line, index) => {
-    const lineStart = index + 1
-    const trimmed = line.trim()
-
-    const pythonFunction = trimmed.match(/^(?:async\s+)?def\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(/)
-    if (pythonFunction) {
-      symbols.push({ name: pythonFunction[1], kind: 'function', lineStart })
-      return
-    }
-
-    const classMatch = trimmed.match(/^(?:export\s+)?class\s+([A-Za-z_][A-Za-z0-9_]*)/)
-    if (classMatch) {
-      symbols.push({ name: classMatch[1], kind: 'class', lineStart })
-      return
-    }
-
-    const interfaceMatch = trimmed.match(/^(?:export\s+)?interface\s+([A-Za-z_][A-Za-z0-9_]*)/)
-    if (interfaceMatch) {
-      symbols.push({ name: interfaceMatch[1], kind: 'interface', lineStart })
-      return
-    }
-
-    const typeMatch = trimmed.match(/^(?:export\s+)?type\s+([A-Za-z_][A-Za-z0-9_]*)/)
-    if (typeMatch) {
-      symbols.push({ name: typeMatch[1], kind: 'type', lineStart })
-      return
-    }
-
-    const functionMatch = trimmed.match(/^(?:export\s+)?(?:async\s+)?function\s+([A-Za-z_][A-Za-z0-9_]*)\s*\(/)
-    if (functionMatch) {
-      symbols.push({
-        name: functionMatch[1],
-        kind: symbolKindForLocalName(functionMatch[1], 'function'),
-        lineStart,
-      })
-      return
-    }
-
-    const constFunction = trimmed.match(/^(?:export\s+)?const\s+([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(?:async\s*)?(?:\([^)]*\)|[A-Za-z_][A-Za-z0-9_]*)\s*=>/)
-    if (constFunction) {
-      symbols.push({
-        name: constFunction[1],
-        kind: symbolKindForLocalName(constFunction[1], 'constant'),
-        lineStart,
-      })
-    }
-  })
-
-  return symbols.slice(0, 16)
-}
-
-function localModuleName(filePath: string): string {
-  const segments = filePath.split('/').filter(Boolean)
-  if (segments.length <= 1) return 'root'
-  const parent = segments[segments.length - 2]
-  return parent === 'src' && segments.length > 2 ? segments[segments.length - 3] : parent
-}
-
-function buildLocalQuickQuestions(
-  filePath: string,
-  imports: FileInsightImport[],
-  lang: 'zh' | 'en',
-): string[] {
-  const moduleLabel = localModuleName(filePath)
-  if (lang === 'zh') {
-    return [
-      '解释这个文件的实现原理',
-      `这个文件在 ${moduleLabel} 模块中负责什么？`,
-      imports.length > 0 ? '接下来应该看哪些依赖文件？' : '接下来应该看哪个相关文件？',
-    ]
-  }
-
-  return [
-    "Explain this file's implementation",
-    `What role does this file play in the ${moduleLabel} module?`,
-    imports.length > 0 ? 'Which related files should I read next?' : 'Which nearby file should I read next?',
-  ]
-}
-
-// A trailing newline terminates the last line rather than starting a new one.
-// Counting it as a line reported one more than GitHub does for almost every file.
-function splitLocalSourceLines(fileContent: string): string[] {
-  const lines = fileContent.split('\n')
-  if (lines.length > 1 && lines[lines.length - 1] === '') lines.pop()
-  return lines
-}
-
-function buildFileLocalInsight(filePath: string, fileContent: string, lang: 'zh' | 'en') {
-  const lines = splitLocalSourceLines(fileContent)
-  const imports = extractLocalImports(lines)
-  return {
-    filePath,
-    fileName: fileBasename(filePath),
-    extension: fileExtension(filePath),
-    languageLabel: fileLanguageLabel(filePath),
-    totalLines: lines.length,
-    loc: countSourceLoc(lines),
-    imports,
-    symbols: extractLocalSymbols(lines),
-    todos: lines.filter((line) => /TODO|FIXME|HACK|XXX/i.test(line)).length,
-    quickQuestions: buildLocalQuickQuestions(filePath, imports, lang),
-  }
 }
 
 async function isLLMConfigured(): Promise<boolean> {

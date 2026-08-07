@@ -22,7 +22,7 @@ export default {
     rollupOptions: {
       input: {
         popup: path.resolve('./src/popup/index.html'),
-        'content-script': path.resolve('./src/content/content-script.ts'),
+        // content-script is built by vite.content.config.js as an IIFE
         'service-worker': path.resolve('./src/background/service-worker.ts'),
       },
       output: {
