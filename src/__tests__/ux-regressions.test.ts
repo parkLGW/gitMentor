@@ -276,6 +276,18 @@ test("sidebar hands a question to the Agent rather than growing a second chat", 
   assert.match(agent, /useState\(initialQuestion \?\? ""\)/);
 });
 
+test("an orphaned content script says what to do instead of leaking the error", () => {
+  const source = readFileSync("src/content/content-script.ts", "utf8");
+
+  // A reloaded extension surfaces here as a fetch failure first, and the raw
+  // "Extension context unavailable" told the reader nothing actionable
+  assert.doesNotMatch(source, /'Extension context unavailable\. Please refresh/);
+  assert.doesNotMatch(source, /`Failed to fetch file: \$\{/);
+  assert.match(source, /extensionReloaded: 'GitMentor 已更新或重新加载/);
+  assert.equal(source.match(/getText\('extensionReloaded'\)/g)?.length, 4);
+  assert.match(source, /showReloadPrompt\(\)/);
+});
+
 test("file sidebar states each fact once", () => {
   const source = readFileSync("src/content/content-script.ts", "utf8");
 

@@ -46,6 +46,8 @@ const uiTranslations = {
     thinking: '思考中...',
     todos: '待办',
     promptTruncated: 'AI 仅读取前 20KB',
+    extensionReloaded: 'GitMentor 已更新或重新加载，请刷新页面后继续',
+    fetchFileFailed: '读取文件内容失败',
   },
   en: {
     readingFile: 'Reading current file...',
@@ -62,6 +64,8 @@ const uiTranslations = {
     thinking: 'Thinking...',
     todos: 'TODOs',
     promptTruncated: 'AI reads first 20KB only',
+    extensionReloaded: 'GitMentor was updated or reloaded. Refresh the page to continue.',
+    fetchFileFailed: 'Could not read the file',
   },
 }
 
@@ -1074,7 +1078,7 @@ function renderQuestionAnswer(
   // last thing the user ever sees, because sendMessage throws synchronously once
   // the extension has been reloaded
   if (!isExtensionContextValid()) {
-    renderInsightError(target, 'Extension context unavailable. Please refresh the page.')
+    renderInsightError(target, getText('extensionReloaded'))
     showReloadPrompt()
     return
   }
@@ -1577,7 +1581,7 @@ async function performDeepAnalysis(
 
   // Check extension context
   if (!isExtensionContextValid()) {
-    renderInsightError(contentDiv, 'Extension context unavailable. Please refresh the page.')
+    renderInsightError(contentDiv, getText('extensionReloaded'))
     showReloadPrompt()
     return
   }
@@ -1687,7 +1691,7 @@ async function fetchAndAnalyzeFile(fileInfo: FileInfo, contentDiv: HTMLElement) 
 
     // Check extension context before sending message
     if (!isExtensionContextValid()) {
-      renderInsightError(contentDiv, 'Extension context unavailable. Please refresh the page.')
+      renderInsightError(contentDiv, getText('extensionReloaded'))
       showReloadPrompt()
       return
     }
@@ -1695,9 +1699,17 @@ async function fetchAndAnalyzeFile(fileInfo: FileInfo, contentDiv: HTMLElement) 
     const llmConfigured = await isLLMConfigured()
     renderFileInsight(contentDiv, fileInfo, fileData, llmConfigured)
   } catch (error) {
+    // An orphaned content script surfaces here first, as a fetch failure. It is
+    // the most common failure in this path and the one with a real remedy, so
+    // say that rather than passing the raw message through.
+    if (!isExtensionContextValid()) {
+      renderInsightError(contentDiv, getText('extensionReloaded'))
+      showReloadPrompt()
+      return
+    }
     renderInsightError(
       contentDiv,
-      `Failed to fetch file: ${error instanceof Error ? error.message : 'Unknown error'}`,
+      `${getText('fetchFileFailed')}: ${error instanceof Error ? error.message : 'Unknown error'}`,
     )
   }
 }
