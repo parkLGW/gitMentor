@@ -39,28 +39,19 @@ if (fs.existsSync(iconsSrc)) {
 fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
 console.log('✓ manifest.json 已修复');
 
-// 2. 复制扩展脚本文件（如果不存在）
-const serviceWorkerSrc = path.join(__dirname, 'src', 'background', 'service-worker.ts');
-const serviceWorkerDst = path.join(__dirname, 'dist', 'service-worker.js');
-const contentScriptSrc = path.join(__dirname, 'src', 'content-script', 'inject.ts');
-const contentScriptDst = path.join(__dirname, 'dist', 'content-script.js');
+// 2. 校验 vite 是否产出了扩展入口
+// 这里以前是「产物缺失就从 src 复制」的兜底：它把 TypeScript 原样当成 JS 写出去，
+// 得到的是一个装得上、却完全不工作的扩展。构建失败就应该失败。
+const requiredBundles = ['content-script.js', 'service-worker.js'];
+const missingBundles = requiredBundles.filter(
+  (name) => !fs.existsSync(path.join(__dirname, 'dist', name)),
+);
 
-// 读取源文件并转换为JS
-if (fs.existsSync(serviceWorkerSrc) && !fs.existsSync(serviceWorkerDst)) {
-  let content = fs.readFileSync(serviceWorkerSrc, 'utf8');
-  // 移除TypeScript注释
-  content = content.replace(/\/\/ .*/g, '');
-  fs.writeFileSync(serviceWorkerDst, content);
-  console.log('✓ service-worker.js 已复制');
+if (missingBundles.length > 0) {
+  console.error(`✗ 构建产物缺失: ${missingBundles.join(', ')}`);
+  process.exit(1);
 }
-
-if (fs.existsSync(contentScriptSrc) && !fs.existsSync(contentScriptDst)) {
-  let content = fs.readFileSync(contentScriptSrc, 'utf8');
-  // 移除TypeScript注释
-  content = content.replace(/\/\/ .*/g, '');
-  fs.writeFileSync(contentScriptDst, content);
-  console.log('✓ content-script.js 已复制');
-}
+console.log('✓ 扩展入口产物齐全');
 
 // 3. 修复 popup HTML 中的脚本路径
 const popupHtmlPath = path.join(__dirname, 'dist', 'src', 'popup', 'index.html');
