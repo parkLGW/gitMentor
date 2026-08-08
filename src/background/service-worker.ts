@@ -19,6 +19,15 @@ import {
   readOpenAICompatibleStream,
 } from '@/services/llm-stream'
 import { parseLooseJson } from '@/services/llm-json'
+import {
+  isBlankCompletion,
+  isOutputBudgetRejection,
+  reasoningRetryBudget,
+  reducedOutputBudget,
+  rememberBlankCompletion,
+  rememberBudgetCeiling,
+  startingOutputBudget,
+} from '@/services/llm-output-budget'
 import { normalizeDeepFileAnalysisResult } from '@/services/deep-file-analysis-normalizer'
 import {
   classifyUnparseableResponse,
@@ -1048,6 +1057,7 @@ async function callLLM(
   let body: any
   const normalized = migrateLegacyLLMConfig(config)
   const llmLabel = options?.label || 'llm'
+  const llmModelKey = `${normalized.preset}:${normalized.model || getPresetSettings(normalized.preset).defaultModel}`
   const streamMode = options?.stream ? resolveStreamMode(config) : null
   const requestedMaxTokens =
     typeof options?.maxTokens === 'number' && options.maxTokens > 0
@@ -1206,50 +1216,90 @@ async function callLLM(
     const startedAt = Date.now()
     return await withKeepAlive(
       async () => {
-        const runRequest = async (stream: boolean): Promise<Response> =>
+        const runRequest = async (stream: boolean, maxTokens: number): Promise<Response> =>
           await fetch(apiUrl, {
             method: 'POST',
             headers,
             body: JSON.stringify({
               ...body,
+              max_tokens: maxTokens,
               ...(streamMode && stream ? { stream: true } : {}),
             }),
             signal: controller.signal,
           })
 
         const useStreaming = Boolean(streamMode)
-        let response = await runRequest(useStreaming)
 
-        if (
-          !response.ok &&
-          useStreaming &&
-          normalized.preset === 'custom-openai' &&
-          shouldFallbackCustomStreaming(response.status)
-        ) {
-          response = await runRequest(false)
-        }
+        const runOnce = async (maxTokens: number): Promise<string> => {
+          let response = await runRequest(useStreaming, maxTokens)
 
-        if (!response.ok) {
-          const errorText = await response.text()
-          throw new Error(`API error ${response.status}: ${errorText}`)
-        }
+          if (
+            !response.ok &&
+            useStreaming &&
+            normalized.preset === 'custom-openai' &&
+            shouldFallbackCustomStreaming(response.status)
+          ) {
+            response = await runRequest(false, maxTokens)
+          }
 
-        if (!useStreaming) {
-          const data = await response.json()
-          const text = parseLLMResponseText(config, data)
-          console.info(`[GitMentor SW] LLM request done: ${llmLabel}`, {
+          if (!response.ok) {
+            const errorText = await response.text()
+            throw new Error(`API error ${response.status}: ${errorText}`)
+          }
+
+          if (!useStreaming) {
+            const data = await response.json()
+            const text = parseLLMResponseText(config, data)
+            console.info(`[GitMentor SW] LLM request done: ${llmLabel}`, {
+              elapsedMs: Date.now() - startedAt,
+              responseChars: text.length,
+              maxTokens,
+            })
+            return text
+          }
+
+          const text = await readStreamingLLMResponse(config, response)
+          console.info(`[GitMentor SW] LLM stream done: ${llmLabel}`, {
             elapsedMs: Date.now() - startedAt,
             responseChars: text.length,
+            maxTokens,
           })
           return text
         }
 
-        const text = await readStreamingLLMResponse(config, response)
-        console.info(`[GitMentor SW] LLM stream done: ${llmLabel}`, {
-          elapsedMs: Date.now() - startedAt,
-          responseChars: text.length,
+        // A budget past the model's output limit is stepped back down toward
+        // the configured one, which the provider already accepts.
+        const configured: number = body.max_tokens
+        const runWithinOutputLimit = async (budget: number): Promise<string> => {
+          let attempt = budget
+          while (true) {
+            try {
+              return await runOnce(attempt)
+            } catch (error) {
+              if (!isOutputBudgetRejection(error)) throw error
+              const reduced = reducedOutputBudget(attempt, configured)
+              if (reduced === null) throw error
+              rememberBudgetCeiling(llmModelKey, reduced)
+              attempt = reduced
+            }
+          }
+        }
+
+        // A reasoning model spends this budget on hidden thinking and answers
+        // with nothing, so a blank answer is retried once with room for both.
+        const budget = startingOutputBudget(llmModelKey, configured)
+        const text = await runWithinOutputLimit(budget)
+        if (!isBlankCompletion(text)) return text
+
+        rememberBlankCompletion(llmModelKey)
+        const retryBudget = reasoningRetryBudget(budget)
+        if (!retryBudget) return text
+
+        console.warn(`[GitMentor SW] Blank LLM answer, retrying with a larger output budget: ${llmLabel}`, {
+          budget,
+          retryBudget,
         })
-        return text
+        return await runWithinOutputLimit(retryBudget)
       },
       pingServiceWorkerKeepAlive,
       SERVICE_WORKER_KEEPALIVE_INTERVAL_MS,

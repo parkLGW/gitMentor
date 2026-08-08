@@ -3,6 +3,29 @@
 import { llmManager } from './llm'
 import { usageTracker } from './usage-tracker'
 import { parseLooseJson } from './llm-json'
+import { isBlankCompletion } from './llm-output-budget'
+import type { LLMResponse } from '@/types/llm'
+
+// A blank answer is never a JSON problem: reporting it as one hides the real
+// cause, which is almost always a reasoning model spending its whole output
+// budget on hidden thinking.
+function ensureAnswerPresent(response: LLMResponse, language: 'zh' | 'en'): string {
+  if (!isBlankCompletion(response.content)) return response.content
+
+  if (response.finishReason === 'length') {
+    throw new Error(
+      language === 'zh'
+        ? 'AI 没有返回正文：输出长度上限被模型的思考过程耗尽。请提高最大输出长度，或改用非推理模型。'
+        : 'The model returned no answer: its reasoning consumed the entire output limit. Increase the maximum output length or use a non-reasoning model.',
+    )
+  }
+
+  throw new Error(
+    language === 'zh'
+      ? 'AI 返回了空响应，请稍后重试或更换模型。'
+      : 'The model returned an empty response. Retry later or switch models.',
+  )
+}
 
 // Helper function to extract JSON from markdown code block
 function extractJSONFromMarkdown(text: string): string | null {
@@ -659,8 +682,8 @@ export class AIAnalysisService {
     
     // Track usage
     usageTracker.track('projectAnalysis', prompt, response.content, response.model || 'unknown')
-    
-    return safeParseJSON<ProjectAnalysis>(response.content)
+
+    return safeParseJSON<ProjectAnalysis>(ensureAnswerPresent(response, language))
   }
 
   /**
@@ -694,7 +717,7 @@ export class AIAnalysisService {
       }
     }
 
-    return parseQuickStartGuide(response.content)
+    return parseQuickStartGuide(ensureAnswerPresent(response, language))
   }
 
   /**
@@ -718,8 +741,8 @@ export class AIAnalysisService {
     
     // Track usage
     usageTracker.track('sourceMap', prompt, response.content, response.model || 'unknown')
-    
-    return safeParseJSON<SourceCodeMap>(response.content)
+
+    return safeParseJSON<SourceCodeMap>(ensureAnswerPresent(response, language))
   }
 
   /**
@@ -742,8 +765,8 @@ export class AIAnalysisService {
     
     // Track usage
     usageTracker.track('fileAnalysis', prompt, response.content, response.model || 'unknown')
-    
-    return safeParseJSON<FileAnalysis>(response.content)
+
+    return safeParseJSON<FileAnalysis>(ensureAnswerPresent(response, language))
   }
 
   /**

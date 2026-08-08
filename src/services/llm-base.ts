@@ -9,9 +9,70 @@ import {
 } from '@/services/llm-provider-config'
 import { resolveClaudeCompatibleMessagesUrl } from '@/services/claude-compatible-utils'
 import { shouldFallbackCustomStreaming } from '@/services/custom-openai-utils'
+import {
+  DEFAULT_OUTPUT_BUDGET,
+  isBlankCompletion,
+  isOutputBudgetRejection,
+  reasoningRetryBudget,
+  reducedOutputBudget,
+  rememberBlankCompletion,
+  rememberBudgetCeiling,
+  startingOutputBudget,
+} from '@/services/llm-output-budget'
 
 function resolveModel(normalized: NormalizedLLMConfig): string {
   return normalized.model || getPresetSettings(normalized.preset).defaultModel
+}
+
+function modelKey(normalized: NormalizedLLMConfig): string {
+  return `${normalized.preset}:${resolveModel(normalized)}`
+}
+
+// A budget the model's output limit rejects is stepped back down toward the
+// configured one, which the provider already accepts, and the ceiling is
+// remembered so the rest of the session skips the rejected step.
+async function requestWithinOutputLimit(
+  key: string,
+  budget: number,
+  configured: number,
+  request: (maxTokens: number) => Promise<LLMResponse>,
+): Promise<LLMResponse> {
+  let attempt = budget
+
+  while (true) {
+    try {
+      return await request(attempt)
+    } catch (error) {
+      if (!isOutputBudgetRejection(error)) throw error
+
+      const reduced = reducedOutputBudget(attempt, configured)
+      if (reduced === null) throw error
+
+      rememberBudgetCeiling(key, reduced)
+      attempt = reduced
+    }
+  }
+}
+
+// Reasoning models spend the whole max_tokens budget on hidden thinking and
+// return an empty message, so a blank completion is retried once with room for
+// both the thinking and the answer.
+async function completeWithReasoningBudget(
+  normalized: NormalizedLLMConfig,
+  request: (maxTokens: number) => Promise<LLMResponse>,
+): Promise<LLMResponse> {
+  const key = modelKey(normalized)
+  const configured = normalized.maxTokens || DEFAULT_OUTPUT_BUDGET
+  const budget = startingOutputBudget(key, configured)
+
+  const response = await requestWithinOutputLimit(key, budget, configured, request)
+  if (!isBlankCompletion(response.content)) return response
+
+  rememberBlankCompletion(key)
+  const retryBudget = reasoningRetryBudget(budget)
+  if (!retryBudget) return response
+
+  return await requestWithinOutputLimit(key, retryBudget, configured, request)
 }
 
 function normalizeOpenAIFinishReason(
@@ -144,38 +205,40 @@ export class OpenAICompatibleProvider extends BaseLLMProvider {
     const apiUrl = this.resolveApiUrl(config)
 
     try {
-      const response = await fetch(apiUrl, {
-        method: 'POST',
-        headers: this.buildHeaders(config),
-        body: JSON.stringify({
-          model: resolveModel(normalized),
-          max_tokens: normalized.maxTokens || 2000,
-          temperature: normalized.temperature ?? 0.7,
-          messages: [
-            { role: 'system', content: this.createSystemPrompt(systemPrompt) },
-            { role: 'user', content: prompt },
-          ],
-        }),
-        signal,
+      return await completeWithReasoningBudget(normalized, async (maxTokens) => {
+        const response = await fetch(apiUrl, {
+          method: 'POST',
+          headers: this.buildHeaders(config),
+          body: JSON.stringify({
+            model: resolveModel(normalized),
+            max_tokens: maxTokens,
+            temperature: normalized.temperature ?? 0.7,
+            messages: [
+              { role: 'system', content: this.createSystemPrompt(systemPrompt) },
+              { role: 'user', content: prompt },
+            ],
+          }),
+          signal,
+        })
+
+        if (!response.ok) {
+          const errorData = await response.json().catch(() => ({}))
+          const message = errorData.error?.message || response.statusText || `HTTP ${response.status}`
+          throw new Error(message)
+        }
+
+        const data = await response.json()
+        return {
+          content: data.choices?.[0]?.message?.content || '',
+          finishReason: normalizeOpenAIFinishReason(data.choices?.[0]?.finish_reason),
+          model: data.model || normalized.model,
+          tokensUsed: {
+            prompt: data.usage?.prompt_tokens || 0,
+            completion: data.usage?.completion_tokens || 0,
+            total: data.usage?.total_tokens || 0,
+          },
+        }
       })
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}))
-        const message = errorData.error?.message || response.statusText || `HTTP ${response.status}`
-        throw new Error(message)
-      }
-
-      const data = await response.json()
-      return {
-        content: data.choices?.[0]?.message?.content || '',
-        finishReason: normalizeOpenAIFinishReason(data.choices?.[0]?.finish_reason),
-        model: data.model || normalized.model,
-        tokensUsed: {
-          prompt: data.usage?.prompt_tokens || 0,
-          completion: data.usage?.completion_tokens || 0,
-          total: data.usage?.total_tokens || 0,
-        },
-      }
     } catch (error) {
       if (error instanceof Error && error.name === 'AbortError') {
         throw error
@@ -320,35 +383,37 @@ export class ClaudeCompatibleProvider extends BaseLLMProvider {
     const apiUrl = this.resolveApiUrl(config)
 
     try {
-      const response = await fetch(apiUrl, {
-        method: 'POST',
-        headers: this.buildHeaders(config),
-        body: JSON.stringify({
-          model: resolveModel(normalized),
-          max_tokens: normalized.maxTokens || 2000,
-          system: this.createSystemPrompt(systemPrompt),
-          messages: [{ role: 'user', content: prompt }],
-        }),
-        signal,
+      return await completeWithReasoningBudget(normalized, async (maxTokens) => {
+        const response = await fetch(apiUrl, {
+          method: 'POST',
+          headers: this.buildHeaders(config),
+          body: JSON.stringify({
+            model: resolveModel(normalized),
+            max_tokens: maxTokens,
+            system: this.createSystemPrompt(systemPrompt),
+            messages: [{ role: 'user', content: prompt }],
+          }),
+          signal,
+        })
+
+        if (!response.ok) {
+          const errorData = await response.json().catch(() => ({}))
+          const message = errorData.error?.message || response.statusText || `HTTP ${response.status}`
+          throw new Error(message)
+        }
+
+        const data = await response.json()
+        return {
+          content: data.content?.[0]?.text || '',
+          finishReason: normalizeClaudeStopReason(data.stop_reason),
+          model: data.model || normalized.model,
+          tokensUsed: {
+            prompt: data.usage?.input_tokens || 0,
+            completion: data.usage?.output_tokens || 0,
+            total: (data.usage?.input_tokens || 0) + (data.usage?.output_tokens || 0),
+          },
+        }
       })
-
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({}))
-        const message = errorData.error?.message || response.statusText || `HTTP ${response.status}`
-        throw new Error(message)
-      }
-
-      const data = await response.json()
-      return {
-        content: data.content?.[0]?.text || '',
-        finishReason: normalizeClaudeStopReason(data.stop_reason),
-        model: data.model || normalized.model,
-        tokensUsed: {
-          prompt: data.usage?.input_tokens || 0,
-          completion: data.usage?.output_tokens || 0,
-          total: (data.usage?.input_tokens || 0) + (data.usage?.output_tokens || 0),
-        },
-      }
     } catch (error) {
       if (error instanceof Error && error.name === 'AbortError') {
         throw error

@@ -103,7 +103,14 @@ function OverviewTab({ repo, language }: OverviewTabProps) {
     setAiError(null)
 
     try {
-      const readme = overview ? '' : await getReadme(repo.owner, repo.name)
+      // The README is what the analysis is actually about, so fetch it even
+      // when a parsed overview is already on screen.
+      let readme = ''
+      try {
+        readme = await getReadme(repo.owner, repo.name)
+      } catch (readmeErr) {
+        console.warn('Failed to fetch README for manual analysis', readmeErr)
+      }
       const projectInfo = `${repoInfo.name} (${repoInfo.language})`
       const analysis = await AIAnalysisService.analyzeProject(
         projectInfo,
