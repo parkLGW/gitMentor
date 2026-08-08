@@ -258,7 +258,7 @@ export class OpenAICompatibleProvider extends BaseLLMProvider {
         headers: this.buildHeaders(config),
         body: JSON.stringify({
           model: resolveModel(normalized),
-          max_tokens: normalized.maxTokens || 2000,
+          max_tokens: normalized.maxTokens || DEFAULT_OUTPUT_BUDGET,
           temperature: normalized.temperature ?? 0.7,
           stream: true,
           messages: [
@@ -433,7 +433,7 @@ export class ClaudeCompatibleProvider extends BaseLLMProvider {
         headers: this.buildHeaders(config),
         body: JSON.stringify({
           model: resolveModel(normalized),
-          max_tokens: normalized.maxTokens || 2000,
+          max_tokens: normalized.maxTokens || DEFAULT_OUTPUT_BUDGET,
           system: this.createSystemPrompt(systemPrompt),
           messages: [{ role: 'user', content: prompt }],
           stream: true,

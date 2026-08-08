@@ -70,7 +70,7 @@ test("a reasoning model that spends the whole budget on thinking is retried with
     const response = await openAIProvider().complete("prompt");
     assert.equal(response.content, "{\"coreValue\":\"real\"}");
     assert.equal(response.finishReason, "stop");
-    assert.deepEqual(recorded.map((r) => r.maxTokens), [2000, 32000]);
+    assert.deepEqual(recorded.map((r) => r.maxTokens), [8000, 32000]);
   } finally {
     restore();
     clearReasoningBudgetMemory();
@@ -90,7 +90,7 @@ test("the next call for a model known to blank out starts at the larger budget",
     const provider = openAIProvider();
     await provider.complete("prompt");
     await provider.complete("prompt");
-    assert.deepEqual(recorded.map((r) => r.maxTokens), [2000, 32000, 32000]);
+    assert.deepEqual(recorded.map((r) => r.maxTokens), [8000, 32000, 32000]);
   } finally {
     restore();
     clearReasoningBudgetMemory();
@@ -109,7 +109,7 @@ test("a model that rejects the larger budget steps down instead of failing", asy
   try {
     const response = await openAIProvider().complete("prompt");
     assert.equal(response.content, "{\"ok\":true}");
-    assert.deepEqual(recorded.map((r) => r.maxTokens), [2000, 32000, 8000]);
+    assert.deepEqual(recorded.map((r) => r.maxTokens), [8000, 32000, 8000]);
   } finally {
     restore();
     clearReasoningBudgetMemory();
@@ -130,7 +130,7 @@ test("a rejected budget is not offered to the same model again", async () => {
     const provider = openAIProvider();
     await provider.complete("prompt");
     await provider.complete("prompt");
-    assert.deepEqual(recorded.map((r) => r.maxTokens), [2000, 32000, 8000, 8000]);
+    assert.deepEqual(recorded.map((r) => r.maxTokens), [8000, 32000, 8000, 8000]);
   } finally {
     restore();
     clearReasoningBudgetMemory();
@@ -183,7 +183,7 @@ test("an answer cut off mid-JSON is retried with a larger budget, not handed to 
   try {
     const response = await openAIProvider().complete("prompt");
     assert.equal(response.content, "{\"coreValue\":\"whole\"}");
-    assert.deepEqual(recorded.map((r) => r.maxTokens), [2000, 32000]);
+    assert.deepEqual(recorded.map((r) => r.maxTokens), [8000, 32000]);
   } finally {
     restore();
     clearReasoningBudgetMemory();
@@ -201,7 +201,7 @@ test("a truncation that survives the retry is returned so the caller can say so"
   try {
     const response = await openAIProvider().complete("prompt");
     assert.equal(response.finishReason, "length");
-    assert.deepEqual(recorded.map((r) => r.maxTokens), [2000, 32000]);
+    assert.deepEqual(recorded.map((r) => r.maxTokens), [8000, 32000]);
   } finally {
     restore();
     clearReasoningBudgetMemory();
@@ -221,7 +221,7 @@ test("a model that truncates is remembered like one that answers with nothing", 
     const provider = openAIProvider();
     await provider.complete("prompt");
     await provider.complete("prompt");
-    assert.deepEqual(recorded.map((r) => r.maxTokens), [2000, 32000, 32000]);
+    assert.deepEqual(recorded.map((r) => r.maxTokens), [8000, 32000, 32000]);
   } finally {
     restore();
     clearReasoningBudgetMemory();
@@ -247,7 +247,7 @@ test("Claude-compatible completions get the same one-shot retry", async () => {
 
     const response = await provider.complete("prompt");
     assert.equal(response.content, "{\"ok\":true}");
-    assert.deepEqual(recorded.map((r) => r.maxTokens), [2000, 32000]);
+    assert.deepEqual(recorded.map((r) => r.maxTokens), [8000, 32000]);
   } finally {
     restore();
     clearReasoningBudgetMemory();

@@ -13,7 +13,13 @@
 // few thousand. So the retry aims high and steps back down when the provider
 // says no, remembering the ceiling for the rest of the session.
 
-export const DEFAULT_OUTPUT_BUDGET = 2000;
+// max_tokens is a ceiling, not a reservation: a request that allows 8000 and
+// answers in 1500 is billed for 1500. So a small default buys nothing, and it
+// costs a wasted round-trip every time a reasoning model needs more room than
+// it allows. 8000 sits under the output limit of every provider worth naming,
+// including the small models behind Ollama and LM Studio, so it escalates
+// rather than getting rejected.
+export const DEFAULT_OUTPUT_BUDGET = 8000;
 const REASONING_MIN_BUDGET = 32000;
 const REASONING_MAX_BUDGET = 64000;
 
