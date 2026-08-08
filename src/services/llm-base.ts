@@ -11,11 +11,11 @@ import { resolveClaudeCompatibleMessagesUrl } from '@/services/claude-compatible
 import { shouldFallbackCustomStreaming } from '@/services/custom-openai-utils'
 import {
   DEFAULT_OUTPUT_BUDGET,
-  isBlankCompletion,
   isOutputBudgetRejection,
+  isUnusableCompletion,
   reasoningRetryBudget,
   reducedOutputBudget,
-  rememberBlankCompletion,
+  rememberBudgetExhausted,
   rememberBudgetCeiling,
   startingOutputBudget,
 } from '@/services/llm-output-budget'
@@ -54,9 +54,9 @@ async function requestWithinOutputLimit(
   }
 }
 
-// Reasoning models spend the whole max_tokens budget on hidden thinking and
-// return an empty message, so a blank completion is retried once with room for
-// both the thinking and the answer.
+// Reasoning models spend the max_tokens budget on hidden thinking and answer
+// with whatever room is left: nothing, or a sentence that stops mid-word. Both
+// are retried once with room for the thinking and the answer together.
 async function completeWithReasoningBudget(
   normalized: NormalizedLLMConfig,
   request: (maxTokens: number) => Promise<LLMResponse>,
@@ -66,9 +66,9 @@ async function completeWithReasoningBudget(
   const budget = startingOutputBudget(key, configured)
 
   const response = await requestWithinOutputLimit(key, budget, configured, request)
-  if (!isBlankCompletion(response.content)) return response
+  if (!isUnusableCompletion(response.content, response.finishReason)) return response
 
-  rememberBlankCompletion(key)
+  rememberBudgetExhausted(key)
   const retryBudget = reasoningRetryBudget(budget)
   if (!retryBudget) return response
 

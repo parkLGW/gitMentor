@@ -1,10 +1,11 @@
 // Output budget rules for reasoning models.
 //
 // A reasoning model bills its hidden thinking against the same max_tokens
-// budget as the visible answer. A budget sized for the answer alone comes back
-// as an empty message with finish_reason "length": every token went to
-// reasoning the caller never sees. A blank completion is unusable whatever the
-// finish reason, so the same one-shot retry with a larger budget applies.
+// budget as the visible answer. A budget sized for the answer alone runs out
+// during the thinking, and what comes back depends only on how far it got:
+// nothing at all, or an answer cut off mid-sentence. Both are the same failure
+// and neither is usable, so both earn the same one-shot retry with a larger
+// budget.
 //
 // The constraint on how large that retry can be is the model's *output* limit,
 // not its context window: current hosted models allow 64K-128K output tokens,
@@ -18,6 +19,16 @@ const REASONING_MAX_BUDGET = 64000;
 
 export function isBlankCompletion(content: string | undefined | null): boolean {
   return !content || content.trim().length === 0;
+}
+
+// Half a JSON object never parses, so a truncated answer is no more usable than
+// an empty one. Handing it to the parser anyway turns a budget problem into a
+// syntax error and blames the wrong component.
+export function isUnusableCompletion(
+  content: string | undefined | null,
+  finishReason: string | undefined | null,
+): boolean {
+  return isBlankCompletion(content) || finishReason === "length";
 }
 
 // Returns null when the budget could not grow, so no identical call is wasted.
@@ -42,14 +53,14 @@ export function reducedOutputBudget(attempted: number, floor: number): number | 
   return Math.max(Math.floor(attempted / 4), floor);
 }
 
-// Per-model state for this session: models that returned a blank completion
-// (retrying every call from the small budget would waste one request per
-// analysis) and the largest budget each model actually accepted.
-const blankCompletionModels = new Set<string>();
+// Per-model state for this session: models that already ran out of output
+// budget once (retrying every call from the small budget would waste one
+// request per analysis) and the largest budget each model actually accepted.
+const budgetExhaustedModels = new Set<string>();
 const budgetCeilings = new Map<string, number>();
 
-export function rememberBlankCompletion(modelKey: string): void {
-  blankCompletionModels.add(modelKey);
+export function rememberBudgetExhausted(modelKey: string): void {
+  budgetExhaustedModels.add(modelKey);
 }
 
 export function rememberBudgetCeiling(modelKey: string, ceiling: number): void {
@@ -60,7 +71,7 @@ export function rememberBudgetCeiling(modelKey: string, ceiling: number): void {
 }
 
 export function startingOutputBudget(modelKey: string, configured: number): number {
-  const wanted = blankCompletionModels.has(modelKey)
+  const wanted = budgetExhaustedModels.has(modelKey)
     ? Math.max(configured, reasoningRetryBudget(configured) ?? configured)
     : configured;
 
@@ -70,6 +81,6 @@ export function startingOutputBudget(modelKey: string, configured: number): numb
 }
 
 export function clearReasoningBudgetMemory(): void {
-  blankCompletionModels.clear();
+  budgetExhaustedModels.clear();
   budgetCeilings.clear();
 }

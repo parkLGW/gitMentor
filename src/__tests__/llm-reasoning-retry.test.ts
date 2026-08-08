@@ -172,15 +172,56 @@ test("a usable answer is never retried", async () => {
   }
 });
 
-test("a truncated but non-empty answer keeps its length finish reason for the compact retry", async () => {
+test("an answer cut off mid-JSON is retried with a larger budget, not handed to the parser", async () => {
   clearReasoningBudgetMemory();
   const recorded: RecordedRequest[] = [];
-  const restore = installFetch([openAIResponse("{\"partial\":true", "length")], recorded);
+  const restore = installFetch([
+    openAIResponse("```json\n{\"coreValue\":\"half a sen", "length"),
+    openAIResponse("{\"coreValue\":\"whole\"}", "stop"),
+  ], recorded);
+
+  try {
+    const response = await openAIProvider().complete("prompt");
+    assert.equal(response.content, "{\"coreValue\":\"whole\"}");
+    assert.deepEqual(recorded.map((r) => r.maxTokens), [2000, 32000]);
+  } finally {
+    restore();
+    clearReasoningBudgetMemory();
+  }
+});
+
+test("a truncation that survives the retry is returned so the caller can say so", async () => {
+  clearReasoningBudgetMemory();
+  const recorded: RecordedRequest[] = [];
+  const restore = installFetch([
+    openAIResponse("{\"partial\":true", "length"),
+    openAIResponse("{\"still partial\":true", "length"),
+  ], recorded);
 
   try {
     const response = await openAIProvider().complete("prompt");
     assert.equal(response.finishReason, "length");
-    assert.equal(recorded.length, 1);
+    assert.deepEqual(recorded.map((r) => r.maxTokens), [2000, 32000]);
+  } finally {
+    restore();
+    clearReasoningBudgetMemory();
+  }
+});
+
+test("a model that truncates is remembered like one that answers with nothing", async () => {
+  clearReasoningBudgetMemory();
+  const recorded: RecordedRequest[] = [];
+  const restore = installFetch([
+    openAIResponse("{\"partial\":true", "length"),
+    openAIResponse("{\"ok\":true}", "stop"),
+    openAIResponse("{\"ok\":true}", "stop"),
+  ], recorded);
+
+  try {
+    const provider = openAIProvider();
+    await provider.complete("prompt");
+    await provider.complete("prompt");
+    assert.deepEqual(recorded.map((r) => r.maxTokens), [2000, 32000, 32000]);
   } finally {
     restore();
     clearReasoningBudgetMemory();

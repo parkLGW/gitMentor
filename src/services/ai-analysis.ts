@@ -6,13 +6,26 @@ import { parseLooseJson } from './llm-json'
 import { isBlankCompletion } from './llm-output-budget'
 import type { LLMResponse } from '@/types/llm'
 
-// A blank answer is never a JSON problem: reporting it as one hides the real
-// cause, which is almost always a reasoning model spending its whole output
-// budget on hidden thinking.
+// An answer the model never finished is not a JSON problem, whether it stopped
+// before writing anything or halfway through. The parser sees an unterminated
+// code fence and unbalanced braces and reports a syntax error, which sends the
+// reader looking at the wrong thing entirely: by the time this runs the
+// provider has already retried on a budget large enough for the model's
+// thinking, so what is left to say is that the answer itself does not fit.
 function ensureAnswerPresent(response: LLMResponse, language: 'zh' | 'en'): string {
-  if (!isBlankCompletion(response.content)) return response.content
+  const truncated = response.finishReason === 'length'
 
-  if (response.finishReason === 'length') {
+  if (!isBlankCompletion(response.content)) {
+    if (!truncated) return response.content
+
+    throw new Error(
+      language === 'zh'
+        ? 'AI 的回答被截断了，即使已经放大输出长度上限。请缩小分析范围，或改用非推理模型。'
+        : 'The model ran out of room mid-answer, even after the output limit was raised. Narrow the analysis or use a non-reasoning model.',
+    )
+  }
+
+  if (truncated) {
     throw new Error(
       language === 'zh'
         ? 'AI 没有返回正文：输出长度上限被模型的思考过程耗尽。请提高最大输出长度，或改用非推理模型。'

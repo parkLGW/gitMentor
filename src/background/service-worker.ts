@@ -24,7 +24,7 @@ import {
   isOutputBudgetRejection,
   reasoningRetryBudget,
   reducedOutputBudget,
-  rememberBlankCompletion,
+  rememberBudgetExhausted,
   rememberBudgetCeiling,
   startingOutputBudget,
 } from '@/services/llm-output-budget'
@@ -1291,7 +1291,7 @@ async function callLLM(
         const text = await runWithinOutputLimit(budget)
         if (!isBlankCompletion(text)) return text
 
-        rememberBlankCompletion(llmModelKey)
+        rememberBudgetExhausted(llmModelKey)
         const retryBudget = reasoningRetryBudget(budget)
         if (!retryBudget) return text
 

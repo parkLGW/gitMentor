@@ -60,6 +60,35 @@ test("source map and file analysis surface the same blank-output error", async (
   );
 });
 
+test("project analysis reports a cut-off answer instead of blaming the JSON parser", async () => {
+  // The exact shape that reached safeParseJSON in the field: an opening fence,
+  // real content, and nothing closing either the fence or the braces.
+  installProvider({
+    content: "```json\n{\n  \"coreValue\": \"一个视频分镜工具\",\n  \"useCases\": [\"把长视频切成",
+    finishReason: "length",
+    model: "deepseek-v4-flash",
+  });
+
+  await assert.rejects(
+    AIAnalysisService.analyzeProject("project", "readme", "en"),
+    (error: Error) =>
+      /out of room|truncat/i.test(error.message) && !/Invalid JSON format/.test(error.message),
+  );
+});
+
+test("a cut-off answer is reported in Chinese too", async () => {
+  installProvider({
+    content: "```json\n{\"coreValue\": \"半截",
+    finishReason: "length",
+    model: "deepseek-v4-flash",
+  });
+
+  await assert.rejects(
+    AIAnalysisService.analyzeProject("project", "readme", "zh"),
+    (error: Error) => /截断/.test(error.message) && !/Invalid JSON format/.test(error.message),
+  );
+});
+
 test("quick start still reports truncation of a partial answer, not a blank one", async () => {
   installProvider({ content: "{\"prerequisites\":[", finishReason: "length", model: "fixture" });
 
